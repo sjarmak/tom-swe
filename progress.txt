@@ -27,6 +27,7 @@
 - Session ID: CLAUDE_SESSION_ID env var or fallback to `pid-${process.pid}`
 - SessionModel fields map to categories: codingPreferences→'codingPreferences', interactionPatterns→'interactionStyle', satisfactionSignals→'emotionalSignals'
 - Stop hook pattern: shell script backgrounds Node process, TypeScript helper runs full pipeline (read Tier 1 → extract Tier 2 → aggregate Tier 3 → rebuild BM25 → log usage)
+- Skills live in tom/skills/ — TypeScript modules exporting getX/formatX/main pattern, entry point via `if (require.main === module)`
 - BM25 index cached at ~/.claude/tom/bm25-index.json after rebuild
 - Usage log at ~/.claude/tom/usage.log — JSON lines format, one entry per operation
 - Centralized config: tom/config.ts exports readTomConfig() (full validated config) and isTomEnabled() (boolean guard) — reads from tom key in ~/.claude/settings.json
@@ -246,4 +247,23 @@
   - Fenced code blocks must be replaced before inline code blocks to avoid partial matches
   - URL redaction only targets URLs with query params (?key=val) — plain URLs are kept since they don't leak secrets
   - redactToolInput has same shape-extraction behavior as extractParameterShape in capture-interaction.ts
+---
+
+## 2026-02-02 - US-015
+- Implemented tom/skills/tom-status.ts with /tom status skill
+- getStatus: reads merged user model, ToM config, and storage stats (Tier 1/2/3 file counts and sizes)
+- formatStatus: renders human-readable markdown output with config, storage, top preferences, and style summaries
+- Shows "No user model found" message when no Tier 3 model exists
+- Top preferences sorted by confidence, limited to 10, displayed with percentage and session count
+- formatBytes helper for human-readable file sizes (B, KB, MB)
+- CLI entry point via main() writing to stdout
+- 18 tests passing covering getStatus, formatStatus, main, byte formatting, edge cases
+- 294 total tests passing
+- Files changed: tom/skills/tom-status.ts (new), tom/skills/tom-status.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - Skills live in tom/skills/ directory — TypeScript modules with CLI entry points
+  - When HOME and cwd point to same dir in tests, global and project paths overlap — use separate projectDir to avoid double-counting
+  - countJsonFiles pattern: readdirSync + filter for .json extension, wrapped in try/catch for missing dirs
+  - StatusOutput interface provides typed contract between getStatus (data) and formatStatus (presentation)
+  - process.stdout.write can be intercepted in tests for CLI output verification
 ---
