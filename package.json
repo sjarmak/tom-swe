@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "description": "Theory of Mind agent for Claude Code — learns your coding preferences across sessions",
   "scripts": {
-    "build": "tsc",
+    "build": "node esbuild.config.mjs",
+    "build:tsc": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepublishOnly": "npm run build"
@@ -12,12 +13,11 @@
   "author": "sjarmak",
   "license": "MIT",
   "type": "commonjs",
-  "dependencies": {
-    "@types/node": "^25.2.0",
-    "typescript": "^5.9.3",
-    "zod": "^4.3.6"
-  },
   "devDependencies": {
-    "vitest": "^4.0.18"
+    "@types/node": "^25.2.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18",
+    "zod": "^4.3.6"
   }
 }
