@@ -230,4 +230,20 @@
   - fs.unlinkSync in try/catch for graceful handling of missing files (session models may not exist for every session)
   - BM25 index save pattern: write to {tomDir}/bm25-index.json — same pattern as stop-analyze.ts
   - pruneOldSessions is designed to be called from the Stop hook after session analysis completes
+- Secret patterns duplicated in capture-interaction.ts and redaction.ts — consider consolidating to a shared module (tom/secrets.ts) in future refactor
+
+## 2026-02-02 - US-014
+- Implemented tom/redaction.ts with privacy redaction layer
+- redactToolInput: takes tool input object, returns new object with secret values replaced by '[REDACTED]'
+- redactUserMessage: strips inline code blocks, fenced code blocks, and URLs with query parameters
+- 16 secret patterns matching: sk-*, ghp_*, gho_*, ghs_*, github_pat_*, Bearer, Basic, token, xox*, AKIA*, JWT, password=, npm_*, pypi-*, ENV_VAR=secret, API_KEY=value
+- Values longer than 200 chars treated as file contents and redacted
+- 31 tests passing covering all secret patterns, edge cases, user message redaction
+- 276 total tests passing
+- Files changed: tom/redaction.ts (new), tom/redaction.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - Secret patterns in redaction.ts mirror those in capture-interaction.ts — could be consolidated into shared module in future
+  - Fenced code blocks must be replaced before inline code blocks to avoid partial matches
+  - URL redaction only targets URLs with query params (?key=val) — plain URLs are kept since they don't leak secrets
+  - redactToolInput has same shape-extraction behavior as extractParameterShape in capture-interaction.ts
 ---
