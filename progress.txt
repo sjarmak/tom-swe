@@ -21,6 +21,9 @@
 - isTomEnabled() reads tom.enabled from ~/.claude/settings.json — used as guard in all hooks
 - Session ID: CLAUDE_SESSION_ID env var or fallback to `pid-${process.pid}`
 - SessionModel fields map to categories: codingPreferences→'codingPreferences', interactionPatterns→'interactionStyle', satisfactionSignals→'emotionalSignals'
+- Stop hook pattern: shell script backgrounds Node process, TypeScript helper runs full pipeline (read Tier 1 → extract Tier 2 → aggregate Tier 3 → rebuild BM25 → log usage)
+- BM25 index cached at ~/.claude/tom/bm25-index.json after rebuild
+- Usage log at ~/.claude/tom/usage.log — JSON lines format, one entry per operation
 ---
 
 ## 2026-02-02 - US-002
@@ -116,4 +119,23 @@
   - buildMemoryIndex reads all files from sessions/, session-models/, and user-model.json into BM25 documents
   - initializeUserProfile and giveSuggestions do NOT count as memory operations (always allowed)
   - MEMORY_OPERATION_TOOLS is a Set containing only search_memory, read_memory_file, analyze_session
+---
+
+## 2026-02-02 - US-008
+- Implemented session analysis Stop hook with shell script and TypeScript helper
+- tom/hooks/stop-analyze.sh: backgrounds the TypeScript helper so it does not block session exit
+- tom/hooks/stop-analyze.ts: full analysis pipeline — reads Tier 1, extracts Tier 2, aggregates Tier 3, rebuilds BM25 index, logs to usage.log
+- Pipeline: readRawSessionLog → extractSessionModel → writeSessionModel → aggregateSessionIntoModel → writeUserModel → buildMemoryIndex → save index → logUsage
+- Reuses buildMemoryIndex from agent/tools.ts for BM25 index rebuilding
+- extractSessionModel mirrors the heuristic extraction logic from agent/tools.ts (same algorithm)
+- 31 new tests covering: isTomEnabled, getSessionId, readRawSessionLog, extractSessionModel, logUsage, analyzeCompletedSession, main entry point
+- 146 total tests passing
+- Files changed: tom/hooks/stop-analyze.sh (new), tom/hooks/stop-analyze.ts (new), tom/hooks/stop-analyze.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - Stop hooks run after the session ends — background the Node process so exit is not blocked
+  - analyzeCompletedSession handles missing user model gracefully by creating empty model as base for aggregation
+  - logUsage uses fs.appendFileSync for JSON lines — one JSON object per line, easy to parse
+  - BM25 index is saved to bm25-index.json after rebuild for future cache reads
+  - Error handling in main() catches and logs to usage.log with 'session-analysis-error' operation type, writes to stderr, never throws
+  - Tests use fs.mkdtempSync for temp dirs and process.env override for HOME — same pattern as capture-interaction tests
 ---
