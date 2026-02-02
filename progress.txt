@@ -29,6 +29,7 @@
 - Stop hook pattern: shell script backgrounds Node process, TypeScript helper runs full pipeline (read Tier 1 → extract Tier 2 → aggregate Tier 3 → rebuild BM25 → log usage)
 - BM25 index cached at ~/.claude/tom/bm25-index.json after rebuild
 - Usage log at ~/.claude/tom/usage.log — JSON lines format, one entry per operation
+- Centralized config: tom/config.ts exports readTomConfig() (full validated config) and isTomEnabled() (boolean guard) — reads from tom key in ~/.claude/settings.json
 - Model routing: tom/routing.ts provides getModelForOperation(type) and centralized logUsage — reads from tom.models.{memoryUpdate,consultation} in settings.json
 - profileInit shares the 'consultation' config key (both default to 'sonnet')
 ---
@@ -197,4 +198,19 @@
   - Settings structure: tom.models.memoryUpdate and tom.models.consultation are the two config keys
   - profileInit reuses the consultation model since both need higher reasoning capability
   - noUnusedLocals catches unused `vi` import from vitest and unused type-only imports
+---
+
+## 2026-02-02 - US-012
+- Implemented tom/config.ts with Zod-validated ToM configuration schema and opt-in system
+- TomConfigSchema: enabled (boolean, default false), consultThreshold (low|medium|high, default medium), models.memoryUpdate (string, default haiku), models.consultation (string, default sonnet), preferenceDecayDays (number, default 30), maxSessionsRetained (number, default 100)
+- readTomConfig: reads tom key from ~/.claude/settings.json, validates with Zod, returns fully-defaulted config
+- isTomEnabled: simple boolean guard for use in all hooks
+- 18 new tests covering schema validation, config reading, defaults, error cases, isTomEnabled guard
+- 232 total tests passing
+- Files changed: tom/config.ts (new), tom/config.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - Zod z.strictObject with .default() on each field allows partial input with automatic defaults
+  - Nested z.strictObject (models) also needs .default() on the outer field to handle when the entire key is missing
+  - safeParse returns { success, data } on success — use to gracefully fall back to defaults on validation failure
+  - This module centralizes config reading — existing isTomEnabled() in capture-interaction.ts and readTomSettings() in pre-tool-use.ts could be refactored to use this in a future iteration
 ---
