@@ -19,6 +19,9 @@
 - Aggregation pipeline: decay existing → extract observations → reinforce → resolve conflicts
 - Ambiguity detection is pure heuristic (no I/O, no model calls) — 4 heuristics scored and summed, clamped to 0-1
 - AmbiguityThreshold maps to numeric cutoffs: low=0.3, medium=0.5, high=0.7
+- PreToolUse hook runs synchronously (not backgrounded) because output goes to stdout for context injection
+- BM25Index structure: { documentCount, avgDocLength, docs: IndexedDoc[], idf: Record<string, number> } — IndexedDoc has id, tier, length, termFreqs
+- consultToM pipeline: detect ambiguity → search BM25 index (if cached) → fallback to user model → generate ToMSuggestion → log usage
 - Hook scripts live in tom/hooks/ — shell scripts delegate to TypeScript helpers for logic
 - isTomEnabled() reads tom.enabled from ~/.claude/settings.json — used as guard in all hooks
 - Session ID: CLAUDE_SESSION_ID env var or fallback to `pid-${process.pid}`
@@ -158,4 +161,23 @@
   - FILE_PATH_PATTERN regex detects paths like /src/foo.ts in user messages to reduce false positives
   - Score contributions are additive — multiple heuristics firing makes ambiguity more certain
   - noUnusedParameters catches unused function params — remove or prefix with underscore
+---
+
+## 2026-02-02 - US-010
+- Implemented tom/hooks/pre-tool-use.sh and tom/hooks/pre-tool-use.ts for in-session consultation
+- Shell script runs TypeScript helper synchronously (not backgrounded) — output goes to stdout for Claude Code context injection
+- pre-tool-use.ts: reads tom settings, runs ambiguity detection, searches BM25 index or user model, generates ToMSuggestion
+- Consultation pipeline: detectAmbiguity → loadCachedIndex → search/fallback to user model → buildSuggestion → logUsage
+- If ambiguity below threshold, script exits immediately with no output (no-op)
+- readTomSettings reads both tom.enabled and tom.consultThreshold from settings.json
+- 27 tests passing covering settings, ambiguity detection, BM25 search, user model fallback, main entry point
+- 200 total tests passing
+- Files changed: tom/hooks/pre-tool-use.sh (new), tom/hooks/pre-tool-use.ts (new), tom/hooks/pre-tool-use.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - PreToolUse hook must run synchronously (not backgrounded) because its stdout is injected as context
+  - BM25Index JSON structure uses `docs` (array of IndexedDoc with id/tier/length/termFreqs) and `idf` (not `idfValues`)
+  - When mocking BM25 index in tests, must match the exact BM25Index interface structure
+  - consultToM tries BM25 search first, then falls back to reading user model directly if no index or no results
+  - ToMSuggestion type field: 'style' for style/preference reasons, 'disambiguation' for general ambiguity, 'preference' for direct user model reads
+  - process.stdout.write can be intercepted in tests by replacing it — remember to restore in afterEach
 ---
