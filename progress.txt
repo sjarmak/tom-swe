@@ -7,6 +7,8 @@
 - Schemas and inferred types exported from tom/schemas.ts
 - Memory paths: global = ~/.claude/tom/, project = .claude/tom/
 - Scope pattern: functions accept 'global' | 'project' scope parameter, readUserModel also accepts 'merged'
+- BM25 index is JSON-serializable — use buildIndex to create, search to query, JSON.parse to restore from cache
+- noUncheckedIndexedAccess: always use `?? defaultValue` when accessing Record fields
 ---
 
 ## 2026-02-02 - US-002
@@ -23,4 +25,19 @@
   - Zod v4 safeParse returns { success, data } or { success, error } — use result.success guard
   - Tests override HOME and cwd via process.env and process.cwd for isolation
   - tsconfig has noUnusedLocals — don't declare unused variables in test files
+---
+
+## 2026-02-02 - US-003
+- Implemented tom/bm25.ts with zero-dependency BM25 search index and query engine
+- buildIndex: tokenizes documents, computes term frequencies and IDF values
+- search: scores documents using Okapi BM25 formula with tier weighting (Tier 3 = 3x, Tier 2 = 2x, Tier 1 = 1x)
+- Index is fully JSON-serializable (plain objects, no class instances)
+- 12 tests passing including performance test (100 queries over 100 docs in <200ms)
+- Files changed: tom/bm25.ts (new), tom/bm25.test.ts (new)
+- **Learnings for future iterations:**
+  - BM25 parameters K1=1.2 and B=0.75 are standard Okapi BM25 defaults
+  - Tier weighting is applied as a multiplier on the final BM25 score, not on individual term scores
+  - Index stores pre-computed IDF values so search only needs to compute per-document TF scores
+  - Tokenization is simple whitespace/non-word split + lowercase — sufficient for preference matching
+  - noUncheckedIndexedAccess requires `?? 0` for all record lookups
 ---
