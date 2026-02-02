@@ -1,5 +1,9 @@
 ## Codebase Patterns
 - Zod v4 is used (import from 'zod', use z.strictObject for strict mode)
+- Agent tools use immutable state pattern: functions accept AgentInvocationState and return { result, state } tuples
+- Agent definition is a markdown file (tom/agent/tom-agent.md) with config in TypeScript (tom/agent/config.ts)
+- Tool implementations live in tom/agent/tools.ts — 5 tools: search_memory, read_memory_file, analyze_session, initialize_user_profile, give_suggestions
+- Memory operation limit enforced via MEMORY_OPERATION_TOOLS set and isMemoryOperationAllowed guard
 - TypeScript with strict mode, noUncheckedIndexedAccess, noUnusedLocals/Parameters
 - tsconfig includes only tom/**/*.ts
 - Use vitest for testing (npm test runs vitest run)
@@ -94,4 +98,22 @@
   - Settings file is at ~/.claude/settings.json — read tom.enabled from there
   - Secret patterns cover: sk-*, ghp_*, gho_*, ghs_*, github_pat_*, Bearer, Basic, xox[bposa]-, AKIA*, eyJ* (JWT), password=, npm_*, pypi-*
   - Values > 200 chars are treated as file contents and redacted
+---
+
+## 2026-02-02 - US-007
+- Implemented ToM sub-agent definition with system prompt and 5 tool implementations
+- Agent definition: tom/agent/tom-agent.md (markdown system prompt with core principles, tool docs, reasoning framework)
+- Agent config: tom/agent/config.ts (name, model=haiku, temperature=0.1, maxMemoryOperations=3)
+- Tool implementations: tom/agent/tools.ts with immutable state tracking for operation limits
+- 5 tools: search_memory (BM25), read_memory_file (tier 1/2/3), analyze_session (heuristic extraction), initialize_user_profile (bootstrap from sessions), give_suggestions (validated ToMSuggestion output)
+- analyzeSession performs heuristic extraction: intent from tool usage patterns, frustration from error outcomes, urgency from interaction count
+- buildMemoryIndex aggregates all 3 tiers into a single BM25 index for search_memory
+- 33 new tests (25 tools + 8 config) all passing, 115 total tests passing
+- Files changed: tom/agent/tom-agent.md (new), tom/agent/config.ts (new), tom/agent/tools.ts (new), tom/agent/tools.test.ts (new), tom/agent/config.test.ts (new)
+- **Learnings for future iterations:**
+  - Agent tools use { result, state } tuple return pattern to enforce operation limits immutably
+  - analyzeSession extracts SessionModel heuristically: tool frequency for intent, error keywords for frustration, interaction count for urgency
+  - buildMemoryIndex reads all files from sessions/, session-models/, and user-model.json into BM25 documents
+  - initializeUserProfile and giveSuggestions do NOT count as memory operations (always allowed)
+  - MEMORY_OPERATION_TOOLS is a Set containing only search_memory, read_memory_file, analyze_session
 ---
