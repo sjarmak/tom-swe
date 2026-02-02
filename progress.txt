@@ -267,3 +267,22 @@
   - StatusOutput interface provides typed contract between getStatus (data) and formatStatus (presentation)
   - process.stdout.write can be intercepted in tests for CLI output verification
 ---
+
+## 2026-02-02 - US-016
+- Implemented tom/skills/tom-reset.ts with /tom reset skill
+- performReset: recursively collects and deletes all files in ~/.claude/tom/ and .claude/tom/
+- formatConfirmationPrompt: displays what will be deleted and asks for confirmation
+- formatResetResult: shows summary of deleted data (file count, total size, per-scope breakdown)
+- Handles overlapping global/project paths (when HOME equals cwd, project deletion is skipped)
+- Does NOT delete settings.json (config preserved)
+- CLI entry point: --confirm flag bypasses prompt and performs reset
+- 21 tests passing covering empty state, global-only, project-only, both scopes, overlapping paths, settings preservation, formatting, CLI
+- 315 total tests passing
+- Files changed: tom/skills/tom-reset.ts (new), tom/skills/tom-reset.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - collectFiles recursive helper is useful for counting files before deletion
+  - fs.rmSync with { recursive: true, force: true } handles non-existent directories gracefully
+  - When global and project tom dirs resolve to the same path, skip project deletion to avoid double-counting
+  - Skill CLI pattern: --confirm flag for destructive operations, default shows confirmation prompt
+  - process.argv must be saved/restored in tests just like process.stdout.write and process.cwd
+---
