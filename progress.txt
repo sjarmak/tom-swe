@@ -1,0 +1,26 @@
+## Codebase Patterns
+- Zod v4 is used (import from 'zod', use z.strictObject for strict mode)
+- TypeScript with strict mode, noUncheckedIndexedAccess, noUnusedLocals/Parameters
+- tsconfig includes only tom/**/*.ts
+- Use vitest for testing (npm test runs vitest run)
+- Module system: commonjs with Node16 module resolution
+- Schemas and inferred types exported from tom/schemas.ts
+- Memory paths: global = ~/.claude/tom/, project = .claude/tom/
+- Scope pattern: functions accept 'global' | 'project' scope parameter, readUserModel also accepts 'merged'
+---
+
+## 2026-02-02 - US-002
+- Implemented tom/memory-io.ts with file I/O utilities for all 3 memory tiers
+- Functions: readSessionLog, writeSessionLog, readSessionModel, writeSessionModel, readUserModel, writeUserModel
+- Path helpers exported for use by other modules (globalTomDir, projectTomDir, etc.)
+- readUserModel('merged') merges global and project models with project-level overriding global-level preferences
+- All read functions validate against Zod schemas, return null on missing/invalid files
+- All write functions validate before writing, create directories on first write
+- Files changed: tom/memory-io.ts (new), tom/memory-io.test.ts (new), package.json (added vitest, test script)
+- **Learnings for future iterations:**
+  - os.homedir() gives the HOME path on all platforms — used for global ~/.claude/tom/ path
+  - process.cwd() used for project-level .claude/tom/ path
+  - Zod v4 safeParse returns { success, data } or { success, error } — use result.success guard
+  - Tests override HOME and cwd via process.env and process.cwd for isolation
+  - tsconfig has noUnusedLocals — don't declare unused variables in test files
+---
