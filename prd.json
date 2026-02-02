@@ -105,7 +105,7 @@
         "Typecheck passes (for any TypeScript helpers called by the script)"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

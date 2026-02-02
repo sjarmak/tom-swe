@@ -13,6 +13,9 @@
 - PreferenceCategory type: 'interactionStyle' | 'codingPreferences' | 'emotionalSignals'
 - Exponential decay formula: confidence * 2^(-daysSinceUpdate / halfLifeDays)
 - Aggregation pipeline: decay existing → extract observations → reinforce → resolve conflicts
+- Hook scripts live in tom/hooks/ — shell scripts delegate to TypeScript helpers for logic
+- isTomEnabled() reads tom.enabled from ~/.claude/settings.json — used as guard in all hooks
+- Session ID: CLAUDE_SESSION_ID env var or fallback to `pid-${process.pid}`
 - SessionModel fields map to categories: codingPreferences→'codingPreferences', interactionPatterns→'interactionStyle', satisfactionSignals→'emotionalSignals'
 ---
 
@@ -73,4 +76,22 @@
   - resolveConflicts is called after reinforcement to deduplicate same category+key entries
   - Default decay half-life is 30 days, configurable via parameter
   - noUnusedLocals catches unused imports like `vi` from vitest — only import what you use
+---
+
+## 2026-02-02 - US-006
+- Implemented tom/hooks/post-tool-use.sh and tom/hooks/capture-interaction.ts for session capture
+- Shell script runs the TypeScript helper in the background for <10ms completion
+- capture-interaction.ts: sanitizes secrets (15 patterns), extracts parameter shapes, truncates long values
+- Session files stored at ~/.claude/tom/sessions/{session-id}.json with CLAUDE_SESSION_ID or PID fallback
+- Uses async fs.writeFile for fire-and-forget persistence (no validation on write path)
+- isTomEnabled guard reads tom.enabled from ~/.claude/settings.json
+- 26 tests passing covering sanitization, capture, session management, main entry point
+- Files changed: tom/hooks/post-tool-use.sh (new), tom/hooks/capture-interaction.ts (new), tom/hooks/capture-interaction.test.ts (new)
+- **Learnings for future iterations:**
+  - Claude Code hooks receive env vars: TOOL_NAME, TOOL_INPUT, TOOL_OUTPUT
+  - Shell hooks should background Node processes for speed: `node script.js &`
+  - fs.writeFile (async) with no-op callback for fire-and-forget writes
+  - Settings file is at ~/.claude/settings.json — read tom.enabled from there
+  - Secret patterns cover: sk-*, ghp_*, gho_*, ghs_*, github_pat_*, Bearer, Basic, xox[bposa]-, AKIA*, eyJ* (JWT), password=, npm_*, pypi-*
+  - Values > 200 chars are treated as file contents and redacted
 ---
