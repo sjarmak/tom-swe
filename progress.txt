@@ -31,6 +31,7 @@
 - BM25 index cached at ~/.claude/tom/bm25-index.json after rebuild
 - Usage log at ~/.claude/tom/usage.log — JSON lines format, one entry per operation
 - Centralized config: tom/config.ts exports readTomConfig() (full validated config) and isTomEnabled() (boolean guard) — reads from tom key in ~/.claude/settings.json
+- Hook registration: tom/hooks/register-hooks.ts merges hook entries into settings.json idempotently — hook format is { type: 'command', command: 'bash "/path/to/script.sh"' }
 - Model routing: tom/routing.ts provides getModelForOperation(type) and centralized logUsage — reads from tom.models.{memoryUpdate,consultation} in settings.json
 - profileInit shares the 'consultation' config key (both default to 'sonnet')
 ---
@@ -340,4 +341,23 @@
   - Check if file ends with newline before appending to avoid concatenating on the last line
   - line.trim() comparison handles whitespace variations in .gitignore entries
   - Partial match detection: `.claude/tom/extra` should NOT match `.claude/tom/` — use exact trim comparison
+---
+
+## 2026-02-02 - US-020
+- Implemented tom/hooks/register-hooks.ts with hook registration for ~/.claude/settings.json
+- registerHooks: reads existing settings, merges ToM hook entries alongside existing hooks (never overwrites)
+- Three hooks registered: PostToolUse (post-tool-use.sh), PreToolUse (pre-tool-use.sh), Stop (stop-analyze.sh)
+- formatResult: human-readable output showing what was added vs already present
+- getExampleSnippet: returns complete example settings.json with tom config and hooks
+- Created tom/hooks/README.md with example settings.json snippet and usage instructions
+- CLI entry point via main() for running registration
+- 19 tests passing covering: creation, preservation of existing hooks, idempotency, partial overlap, formatting, example snippet, CLI
+- 394 total tests passing
+- Files changed: tom/hooks/register-hooks.ts (new), tom/hooks/register-hooks.test.ts (new), tom/hooks/README.md (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - Hook entries use { type: 'command', command: 'bash "/path/to/script.sh"' } format in settings.json
+  - Idempotency is key: check existing hooks by command string match before adding
+  - Spread of Record<string, T | undefined> into Record<string, T> causes TS error — filter out undefined entries explicitly
+  - Settings.json hooks section has keys: PostToolUse, PreToolUse, Stop — each maps to an array of hook entries
+  - README.md in hooks directory provides the example settings.json snippet as required by acceptance criteria
 ---
