@@ -29,6 +29,8 @@
 - Stop hook pattern: shell script backgrounds Node process, TypeScript helper runs full pipeline (read Tier 1 → extract Tier 2 → aggregate Tier 3 → rebuild BM25 → log usage)
 - BM25 index cached at ~/.claude/tom/bm25-index.json after rebuild
 - Usage log at ~/.claude/tom/usage.log — JSON lines format, one entry per operation
+- Model routing: tom/routing.ts provides getModelForOperation(type) and centralized logUsage — reads from tom.models.{memoryUpdate,consultation} in settings.json
+- profileInit shares the 'consultation' config key (both default to 'sonnet')
 ---
 
 ## 2026-02-02 - US-002
@@ -180,4 +182,19 @@
   - consultToM tries BM25 search first, then falls back to reading user model directly if no index or no results
   - ToMSuggestion type field: 'style' for style/preference reasons, 'disambiguation' for general ambiguity, 'preference' for direct user model reads
   - process.stdout.write can be intercepted in tests by replacing it — remember to restore in afterEach
+---
+
+## 2026-02-02 - US-011
+- Implemented tom/routing.ts with smart model routing configuration and centralized usage logging
+- getModelForOperation: reads tom.models.{memoryUpdate,consultation} from ~/.claude/settings.json, returns configured model or defaults (haiku for memoryUpdate, sonnet for consultation/profileInit)
+- logUsage: appends { timestamp, operation, model, tokenCount } as JSON lines to ~/.claude/tom/usage.log
+- profileInit maps to 'consultation' config key (shares the same setting)
+- 14 tests covering all operation types, config reading, fallbacks, invalid JSON, missing files, log creation, multi-entry append
+- 214 total tests passing
+- Files changed: tom/routing.ts (new), tom/routing.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - logUsage exists in stop-analyze.ts and pre-tool-use.ts already — future refactor could consolidate them to use routing.ts version
+  - Settings structure: tom.models.memoryUpdate and tom.models.consultation are the two config keys
+  - profileInit reuses the consultation model since both need higher reasoning capability
+  - noUnusedLocals catches unused `vi` import from vitest and unused type-only imports
 ---
