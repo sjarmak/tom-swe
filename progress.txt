@@ -214,3 +214,20 @@
   - safeParse returns { success, data } on success — use to gracefully fall back to defaults on validation failure
   - This module centralizes config reading — existing isTomEnabled() in capture-interaction.ts and readTomSettings() in pre-tool-use.ts could be refactored to use this in a future iteration
 ---
+
+## 2026-02-02 - US-013
+- Implemented tom/pruning.ts with session pruning for Tier 1
+- pruneOldSessions: reads all Tier 1 session files, sorts by startedAt, deletes oldest when count exceeds maxSessionsRetained
+- Also deletes corresponding Tier 2 session models for pruned sessions
+- Rebuilds BM25 index after pruning using buildMemoryIndex from agent/tools.ts
+- Returns PruneResult with prunedSessionIds, before/after counts, and indexRebuilt flag
+- 13 tests passing covering: no sessions, under limit, at limit, over limit, multiple pruning, missing models, edge cases
+- 245 total tests passing
+- Files changed: tom/pruning.ts (new), tom/pruning.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - listJsonFiles helper with try/catch is a common pattern — exists in agent/tools.ts and now pruning.ts (could be shared utility)
+  - Session timestamps sorted by ISO string comparison work correctly since ISO 8601 is lexicographically sortable
+  - fs.unlinkSync in try/catch for graceful handling of missing files (session models may not exist for every session)
+  - BM25 index save pattern: write to {tomDir}/bm25-index.json — same pattern as stop-analyze.ts
+  - pruneOldSessions is designed to be called from the Stop hook after session analysis completes
+---
