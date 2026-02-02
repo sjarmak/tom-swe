@@ -19,5 +19,5 @@
     "noUnusedParameters": true
   },
   "include": ["tom/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "tom/**/*.test.ts"]
 }

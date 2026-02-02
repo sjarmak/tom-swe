@@ -34,12 +34,11 @@ interface TomSettings {
 
 export function readTomSettings(): TomSettings {
   try {
-    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
-    const content = fs.readFileSync(settingsPath, 'utf-8')
-    const settings = JSON.parse(content) as Record<string, unknown>
-    const tom = settings['tom'] as Record<string, unknown> | undefined
-    const enabled = tom?.['enabled'] === true
-    const threshold = tom?.['consultThreshold']
+    const configPath = path.join(os.homedir(), '.claude', 'tom', 'config.json')
+    const content = fs.readFileSync(configPath, 'utf-8')
+    const config = JSON.parse(content) as Record<string, unknown>
+    const enabled = config['enabled'] === true
+    const threshold = config['consultThreshold']
     const validThresholds: readonly AmbiguityThreshold[] = ['low', 'medium', 'high']
     const consultThreshold = typeof threshold === 'string' && validThresholds.includes(threshold as AmbiguityThreshold)
       ? threshold as AmbiguityThreshold

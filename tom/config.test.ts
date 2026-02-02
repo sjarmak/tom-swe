@@ -22,11 +22,11 @@ function teardownTempHome(): void {
 }
 
 function writeSettings(tom: unknown): void {
-  const claudeDir = path.join(tempDir, '.claude')
-  fs.mkdirSync(claudeDir, { recursive: true })
+  const tomDir = path.join(tempDir, '.claude', 'tom')
+  fs.mkdirSync(tomDir, { recursive: true })
   fs.writeFileSync(
-    path.join(claudeDir, 'settings.json'),
-    JSON.stringify({ tom }),
+    path.join(tomDir, 'config.json'),
+    JSON.stringify(tom),
     'utf-8'
   )
 }
@@ -117,11 +117,11 @@ describe('readTomConfig', () => {
     expect(config.maxSessionsRetained).toBe(100)
   })
 
-  it('should return defaults when settings file has no tom key', () => {
-    const claudeDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(claudeDir, { recursive: true })
+  it('should return defaults when config file has no recognized keys', () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(claudeDir, 'settings.json'),
+      path.join(tomDir, 'config.json'),
       JSON.stringify({ otherKey: true }),
       'utf-8'
     )
@@ -129,11 +129,11 @@ describe('readTomConfig', () => {
     expect(config.enabled).toBe(false)
   })
 
-  it('should return defaults when settings file has invalid JSON', () => {
-    const claudeDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(claudeDir, { recursive: true })
+  it('should return defaults when config file has invalid JSON', () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(claudeDir, 'settings.json'),
+      path.join(tomDir, 'config.json'),
       'not json!!!',
       'utf-8'
     )
@@ -141,7 +141,7 @@ describe('readTomConfig', () => {
     expect(config.enabled).toBe(false)
   })
 
-  it('should read full config from settings.json', () => {
+  it('should read full config from config.json', () => {
     writeSettings({
       enabled: true,
       consultThreshold: 'high',

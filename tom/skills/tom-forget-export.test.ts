@@ -42,11 +42,11 @@ afterEach(() => {
 // --- Helpers ---
 
 function createSettings(tomConfig: Record<string, unknown>): void {
-  const settingsDir = path.join(tempDir, '.claude')
-  fs.mkdirSync(settingsDir, { recursive: true })
+  const tomDir = path.join(tempDir, '.claude', 'tom')
+  fs.mkdirSync(tomDir, { recursive: true })
   fs.writeFileSync(
-    path.join(settingsDir, 'settings.json'),
-    JSON.stringify({ tom: tomConfig }),
+    path.join(tomDir, 'config.json'),
+    JSON.stringify(tomConfig),
     'utf-8'
   )
 }

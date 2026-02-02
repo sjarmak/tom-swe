@@ -49,11 +49,10 @@ export function getModelForOperation(operation: OperationType): string {
   const configKey = OPERATION_CONFIG_KEY[operation]
 
   try {
-    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
-    const content = fs.readFileSync(settingsPath, 'utf-8')
-    const settings = JSON.parse(content) as Record<string, unknown>
-    const tom = settings['tom'] as Record<string, unknown> | undefined
-    const models = tom?.['models'] as Record<string, unknown> | undefined
+    const configPath = path.join(os.homedir(), '.claude', 'tom', 'config.json')
+    const content = fs.readFileSync(configPath, 'utf-8')
+    const config = JSON.parse(content) as Record<string, unknown>
+    const models = config['models'] as Record<string, unknown> | undefined
     const configuredModel = models?.[configKey]
 
     if (typeof configuredModel === 'string' && configuredModel.length > 0) {

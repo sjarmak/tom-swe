@@ -60,32 +60,32 @@ describe('isTomEnabled', () => {
   })
 
   it('returns false when tom.enabled is false', () => {
-    const settingsDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(settingsDir, { recursive: true })
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(settingsDir, 'settings.json'),
-      JSON.stringify({ tom: { enabled: false } }),
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: false }),
       'utf-8'
     )
     expect(isTomEnabled()).toBe(false)
   })
 
   it('returns true when tom.enabled is true', () => {
-    const settingsDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(settingsDir, { recursive: true })
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(settingsDir, 'settings.json'),
-      JSON.stringify({ tom: { enabled: true } }),
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true }),
       'utf-8'
     )
     expect(isTomEnabled()).toBe(true)
   })
 
-  it('returns false when settings JSON is invalid', () => {
-    const settingsDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(settingsDir, { recursive: true })
+  it('returns false when config JSON is invalid', () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(settingsDir, 'settings.json'),
+      path.join(tomDir, 'config.json'),
       'not json',
       'utf-8'
     )
@@ -558,11 +558,11 @@ describe('main', () => {
 
   it('runs analysis when tom is enabled and session exists', () => {
     // Enable tom
-    const settingsDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(settingsDir, { recursive: true })
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(settingsDir, 'settings.json'),
-      JSON.stringify({ tom: { enabled: true } }),
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true }),
       'utf-8'
     )
 
@@ -597,11 +597,11 @@ describe('main', () => {
 
   it('logs error to usage.log when session does not exist but tom is enabled', () => {
     // Enable tom
-    const settingsDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(settingsDir, { recursive: true })
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(settingsDir, 'settings.json'),
-      JSON.stringify({ tom: { enabled: true } }),
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true }),
       'utf-8'
     )
 

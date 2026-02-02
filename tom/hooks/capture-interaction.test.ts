@@ -268,12 +268,12 @@ describe('main', () => {
   })
 
   it('captures interaction when tom.enabled is true', async () => {
-    // Create settings with tom.enabled = true
-    const settingsDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(settingsDir, { recursive: true })
+    // Create config with enabled = true
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(settingsDir, 'settings.json'),
-      JSON.stringify({ tom: { enabled: true } })
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true })
     )
 
     process.env['TOOL_NAME'] = 'Read'
@@ -290,11 +290,11 @@ describe('main', () => {
   })
 
   it('is a no-op when TOOL_NAME is empty', async () => {
-    const settingsDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(settingsDir, { recursive: true })
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
-      path.join(settingsDir, 'settings.json'),
-      JSON.stringify({ tom: { enabled: true } })
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true })
     )
 
     process.env['TOOL_NAME'] = ''

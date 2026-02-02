@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/tom/hooks/capture-interaction.js",
+            "async": true,
+            "statusMessage": "ToM: capturing interaction"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/tom/hooks/pre-tool-use.js",
+            "statusMessage": "ToM: checking preferences"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/tom/hooks/stop-analyze.js",
+            "async": true,
+            "statusMessage": "ToM: analyzing session"
+          }
+        ]
+      }
+    ]
+  }
+}

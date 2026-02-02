@@ -162,11 +162,10 @@ export function captureInteraction(
 
 function isTomEnabled(): boolean {
   try {
-    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
-    const content = fs.readFileSync(settingsPath, 'utf-8')
-    const settings = JSON.parse(content) as Record<string, unknown>
-    const tom = settings['tom'] as Record<string, unknown> | undefined
-    return tom?.['enabled'] === true
+    const configPath = path.join(os.homedir(), '.claude', 'tom', 'config.json')
+    const content = fs.readFileSync(configPath, 'utf-8')
+    const config = JSON.parse(content) as Record<string, unknown>
+    return config['enabled'] === true
   } catch {
     return false
   }

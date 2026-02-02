@@ -36,12 +36,12 @@ describe('routing', () => {
       expect(result).toBe('sonnet')
     })
 
-    it('reads memoryUpdate model from settings.json', () => {
-      const settingsDir = path.join(tmpDir, '.claude')
-      fs.mkdirSync(settingsDir, { recursive: true })
+    it('reads memoryUpdate model from config.json', () => {
+      const tomDir = path.join(tmpDir, '.claude', 'tom')
+      fs.mkdirSync(tomDir, { recursive: true })
       fs.writeFileSync(
-        path.join(settingsDir, 'settings.json'),
-        JSON.stringify({ tom: { models: { memoryUpdate: 'opus' } } }),
+        path.join(tomDir, 'config.json'),
+        JSON.stringify({ models: { memoryUpdate: 'opus' } }),
         'utf-8'
       )
 
@@ -49,12 +49,12 @@ describe('routing', () => {
       expect(result).toBe('opus')
     })
 
-    it('reads consultation model from settings.json', () => {
-      const settingsDir = path.join(tmpDir, '.claude')
-      fs.mkdirSync(settingsDir, { recursive: true })
+    it('reads consultation model from config.json', () => {
+      const tomDir = path.join(tmpDir, '.claude', 'tom')
+      fs.mkdirSync(tomDir, { recursive: true })
       fs.writeFileSync(
-        path.join(settingsDir, 'settings.json'),
-        JSON.stringify({ tom: { models: { consultation: 'opus' } } }),
+        path.join(tomDir, 'config.json'),
+        JSON.stringify({ models: { consultation: 'opus' } }),
         'utf-8'
       )
 
@@ -63,11 +63,11 @@ describe('routing', () => {
     })
 
     it('reads profileInit from consultation config (shares config key)', () => {
-      const settingsDir = path.join(tmpDir, '.claude')
-      fs.mkdirSync(settingsDir, { recursive: true })
+      const tomDir = path.join(tmpDir, '.claude', 'tom')
+      fs.mkdirSync(tomDir, { recursive: true })
       fs.writeFileSync(
-        path.join(settingsDir, 'settings.json'),
-        JSON.stringify({ tom: { models: { consultation: 'opus' } } }),
+        path.join(tomDir, 'config.json'),
+        JSON.stringify({ models: { consultation: 'opus' } }),
         'utf-8'
       )
 
@@ -75,12 +75,12 @@ describe('routing', () => {
       expect(result).toBe('opus')
     })
 
-    it('returns default when settings has tom but no models key', () => {
-      const settingsDir = path.join(tmpDir, '.claude')
-      fs.mkdirSync(settingsDir, { recursive: true })
+    it('returns default when config has no models key', () => {
+      const tomDir = path.join(tmpDir, '.claude', 'tom')
+      fs.mkdirSync(tomDir, { recursive: true })
       fs.writeFileSync(
-        path.join(settingsDir, 'settings.json'),
-        JSON.stringify({ tom: { enabled: true } }),
+        path.join(tomDir, 'config.json'),
+        JSON.stringify({ enabled: true }),
         'utf-8'
       )
 
@@ -89,11 +89,11 @@ describe('routing', () => {
     })
 
     it('returns default when model value is not a string', () => {
-      const settingsDir = path.join(tmpDir, '.claude')
-      fs.mkdirSync(settingsDir, { recursive: true })
+      const tomDir = path.join(tmpDir, '.claude', 'tom')
+      fs.mkdirSync(tomDir, { recursive: true })
       fs.writeFileSync(
-        path.join(settingsDir, 'settings.json'),
-        JSON.stringify({ tom: { models: { memoryUpdate: 123 } } }),
+        path.join(tomDir, 'config.json'),
+        JSON.stringify({ models: { memoryUpdate: 123 } }),
         'utf-8'
       )
 
@@ -101,11 +101,11 @@ describe('routing', () => {
       expect(result).toBe('haiku')
     })
 
-    it('returns default when settings file is invalid JSON', () => {
-      const settingsDir = path.join(tmpDir, '.claude')
-      fs.mkdirSync(settingsDir, { recursive: true })
+    it('returns default when config file is invalid JSON', () => {
+      const tomDir = path.join(tmpDir, '.claude', 'tom')
+      fs.mkdirSync(tomDir, { recursive: true })
       fs.writeFileSync(
-        path.join(settingsDir, 'settings.json'),
+        path.join(tomDir, 'config.json'),
         'not json',
         'utf-8'
       )

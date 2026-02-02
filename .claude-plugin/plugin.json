@@ -1,0 +1,20 @@
+{
+  "name": "tom-swe",
+  "version": "0.1.0",
+  "description": "Theory of Mind agent for Claude Code — learns your coding preferences, interaction style, and project patterns across sessions",
+  "author": {
+    "name": "sjarmak"
+  },
+  "repository": "https://github.com/sjarmak/tom-swe",
+  "license": "MIT",
+  "keywords": [
+    "theory-of-mind",
+    "personalization",
+    "memory",
+    "preferences",
+    "user-modeling"
+  ],
+  "agents": "./agents/",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}

@@ -2,7 +2,7 @@
  * ToM configuration schema and opt-in system.
  *
  * Provides a Zod-validated configuration schema for the ToM system,
- * read from ~/.claude/settings.json under the "tom" key.
+ * read from ~/.claude/tom/config.json.
  * All hooks use isTomEnabled() as a guard before executing.
  */
 
@@ -38,16 +38,11 @@ export type TomConfig = z.infer<typeof TomConfigSchema>
  */
 export function readTomConfig(): TomConfig {
   try {
-    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
-    const content = fs.readFileSync(settingsPath, 'utf-8')
-    const settings = JSON.parse(content) as Record<string, unknown>
-    const tomRaw = settings['tom']
+    const configPath = path.join(os.homedir(), '.claude', 'tom', 'config.json')
+    const content = fs.readFileSync(configPath, 'utf-8')
+    const raw = JSON.parse(content) as unknown
 
-    if (tomRaw === undefined || tomRaw === null) {
-      return TomConfigSchema.parse({})
-    }
-
-    const result = TomConfigSchema.safeParse(tomRaw)
+    const result = TomConfigSchema.safeParse(raw)
     if (result.success) {
       return result.data
     }

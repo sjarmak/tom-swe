@@ -1,3 +1,6 @@
 node_modules/
-dist/
 .claude/tom/
+*.tsbuildinfo
+progress.txt
+prd.json
+archive/
