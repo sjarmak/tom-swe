@@ -323,3 +323,21 @@
   - Usage log is read as raw lines (not parsed JSON) since export preserves the original format
   - Timestamp in export filename uses replace(/[:.]/g, '-') for filesystem-safe names
 ---
+
+## 2026-02-02 - US-019
+- Implemented tom/gitignore.ts with .gitignore entry management for ToM data
+- ensureGitignoreEntry: checks if .gitignore exists, appends `.claude/tom/` if not already present
+- Does not create .gitignore if it doesn't exist (respects non-git projects)
+- Append-only: never modifies existing entries
+- Handles edge cases: empty file, no trailing newline, whitespace-trimmed matching, partial matches
+- formatResult: human-readable output for all three outcomes (added, already_present, no_gitignore)
+- CLI entry point via main() using process.cwd() as project root
+- 15 tests passing covering all acceptance criteria and edge cases
+- 375 total tests passing
+- Files changed: tom/gitignore.ts (new), tom/gitignore.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - fs.appendFileSync is ideal for append-only operations on existing files
+  - Check if file ends with newline before appending to avoid concatenating on the last line
+  - line.trim() comparison handles whitespace variations in .gitignore entries
+  - Partial match detection: `.claude/tom/extra` should NOT match `.claude/tom/` — use exact trim comparison
+---
