@@ -9,6 +9,9 @@
 - Scope pattern: functions accept 'global' | 'project' scope parameter, readUserModel also accepts 'merged'
 - BM25 index is JSON-serializable — use buildIndex to create, search to query, JSON.parse to restore from cache
 - noUncheckedIndexedAccess: always use `?? defaultValue` when accessing Record fields
+- Preference functions are pure and immutable — reinforcePreference, decayPreferences, resolveConflicts all return new arrays
+- PreferenceCategory type: 'interactionStyle' | 'codingPreferences' | 'emotionalSignals'
+- Exponential decay formula: confidence * 2^(-daysSinceUpdate / halfLifeDays)
 ---
 
 ## 2026-02-02 - US-002
@@ -40,4 +43,18 @@
   - Index stores pre-computed IDF values so search only needs to compute per-document TF scores
   - Tokenization is simple whitespace/non-word split + lowercase — sufficient for preference matching
   - noUncheckedIndexedAccess requires `?? 0` for all record lookups
+---
+
+## 2026-02-02 - US-004
+- Implemented tom/preferences.ts with preference tracking, confidence scoring, and decay
+- reinforcePreference: increases confidence by 0.1 per match (capped at 1.0), adds new prefs at 0.1
+- decayPreferences: exponential decay using half-life formula, removes prefs below 0.01 threshold
+- resolveConflicts: recency-weighted voting — most recently updated value wins for same category+key
+- 16 tests passing covering reinforcement, decay, conflict resolution, immutability, all 3 categories
+- Files changed: tom/preferences.ts (new), tom/preferences.test.ts (new)
+- **Learnings for future iterations:**
+  - When same category+key has different values, both are kept until resolveConflicts is called
+  - Decay removes preferences below 0.01 threshold to prevent zombie preferences
+  - Optional chaining with comparison operators causes TS2532 under noUncheckedIndexedAccess — extract to variable with `?? ''` first
+  - PreferenceObservation is the input type for reinforcement (category, key, value only — no confidence/timestamps)
 ---
