@@ -286,3 +286,21 @@
   - Skill CLI pattern: --confirm flag for destructive operations, default shows confirmation prompt
   - process.argv must be saved/restored in tests just like process.stdout.write and process.cwd
 ---
+
+## 2026-02-02 - US-017
+- Implemented tom/skills/tom-inspect.ts with /tom inspect skill
+- getInspectData: reads all Tier 1 session files from global and project scopes, deduplicates by sessionId, looks up Tier 2 intent
+- Prune highlighting: calculates how many sessions would be pruned on next analysis and marks oldest sessions with willBePruned flag
+- formatInspect: renders human-readable markdown with session list, prune warnings, and full Tier 3 user model
+- User model rendered with preferences grouped by category, sorted by confidence, including interaction/coding style summaries and project overrides
+- Sessions sorted by startedAt, showing "(no analysis)" for sessions without Tier 2 models
+- 20 tests passing covering: empty state, session listing, sorting, intent lookup, deduplication, prune calculation, formatting, project overrides, CLI entry point
+- 335 total tests passing
+- Files changed: tom/skills/tom-inspect.ts (new), tom/skills/tom-inspect.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - listSessionFiles reads raw JSON (not using Zod schema) for speed — only needs sessionId and startedAt fields
+  - Prune count formula: totalCount >= maxRetained ? totalCount - maxRetained + 1 : 0 (accounts for the next session being added)
+  - formatDate converts ISO to "YYYY-MM-DD HH:MM:SS UTC" for readability
+  - Deduplication: global sessions take precedence over project sessions with same sessionId
+  - Use separate projectDir in tests to avoid global/project path overlap (same pattern as tom-status tests)
+---
