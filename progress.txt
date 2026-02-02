@@ -17,6 +17,8 @@
 - PreferenceCategory type: 'interactionStyle' | 'codingPreferences' | 'emotionalSignals'
 - Exponential decay formula: confidence * 2^(-daysSinceUpdate / halfLifeDays)
 - Aggregation pipeline: decay existing → extract observations → reinforce → resolve conflicts
+- Ambiguity detection is pure heuristic (no I/O, no model calls) — 4 heuristics scored and summed, clamped to 0-1
+- AmbiguityThreshold maps to numeric cutoffs: low=0.3, medium=0.5, high=0.7
 - Hook scripts live in tom/hooks/ — shell scripts delegate to TypeScript helpers for logic
 - isTomEnabled() reads tom.enabled from ~/.claude/settings.json — used as guard in all hooks
 - Session ID: CLAUDE_SESSION_ID env var or fallback to `pid-${process.pid}`
@@ -138,4 +140,22 @@
   - BM25 index is saved to bm25-index.json after rebuild for future cache reads
   - Error handling in main() catches and logs to usage.log with 'session-analysis-error' operation type, writes to stderr, never throws
   - Tests use fs.mkdtempSync for temp dirs and process.env override for HOME — same pattern as capture-interaction tests
+---
+
+## 2026-02-02 - US-009
+- Implemented tom/ambiguity.ts with lightweight ambiguity detection heuristics
+- detectAmbiguity function: takes tool name, parameters, recent messages, threshold, and hasUserModel flag
+- 4 heuristics scored independently and summed: short/vague instructions (0-0.35), multiple file targets (0-0.3), preference-sensitive decisions (0-0.35), no user model (0-0.25)
+- Score clamped to 0-1, compared against configurable threshold (low=0.3, medium=0.5, high=0.7)
+- Pure functions, no I/O, <50ms execution (verified with 1000-iteration perf test)
+- 27 tests passing covering all heuristics, thresholds, combined scenarios, and performance
+- 173 total tests passing
+- Files changed: tom/ambiguity.ts (new), tom/ambiguity.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - Vague keyword detection uses a fixed list: fix, improve, update, change, make, do, handle, better, clean, nice
+  - Preference keywords: style, pattern, architecture, library, framework, convention, approach, design, structure, organize, refactor, naming, format
+  - Style-sensitive tools: Write, Edit, NotebookEdit — get extra ambiguity score
+  - FILE_PATH_PATTERN regex detects paths like /src/foo.ts in user messages to reduce false positives
+  - Score contributions are additive — multiple heuristics firing makes ambiguity more certain
+  - noUnusedParameters catches unused function params — remove or prefix with underscore
 ---
