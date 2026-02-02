@@ -1,0 +1,338 @@
+{
+  "project": "ToM-SWE Agent for Claude Code",
+  "branchName": "ralph/tom-swe-agent",
+  "description": "Implement the ToM-SWE framework as a Claude Code extension — a Theory of Mind sub-agent that models user preferences, coding style, and interaction patterns across sessions using a 3-tier hierarchical memory system, triggered automatically via hooks.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define Zod schemas for all ToM data structures",
+      "description": "As a developer, I need validated data structures for session logs, session models, user models, and ToM suggestions so all downstream code has type-safe contracts.",
+      "acceptanceCriteria": [
+        "Create tom/schemas.ts exporting all schemas",
+        "SessionLog schema: sessionId (string), startedAt (ISO timestamp), endedAt (ISO timestamp), interactions array of { toolName, parameterShape (no values), outcomeSummary, timestamp }",
+        "SessionModel schema: sessionId, intent (string), interactionPatterns (string array), codingPreferences (string array), satisfactionSignals ({ frustration: boolean, satisfaction: boolean, urgency: 'low'|'medium'|'high' })",
+        "UserModel schema: preferencesClusters (array of { category, key, value, confidence 0-1, lastUpdated ISO, sessionCount number }), interactionStyleSummary (string), codingStyleSummary (string), projectOverrides (record of project path to partial preferences)",
+        "ToMSuggestion schema: type ('preference'|'disambiguation'|'style'), content (string), confidence (0-1), sourceSessions (string array)",
+        "All schemas use Zod with strict mode",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Create memory directory structure and file I/O utilities",
+      "description": "As a developer, I need utility functions to read/write ToM memory files at both global and project scopes so other components have a clean persistence API.",
+      "acceptanceCriteria": [
+        "Create tom/memory-io.ts with functions: readSessionLog, writeSessionLog, readSessionModel, writeSessionModel, readUserModel, writeUserModel",
+        "All read functions validate against Zod schemas and return parsed data or null if file missing",
+        "All write functions validate before writing and produce new objects (no mutation of inputs)",
+        "Global path: ~/.claude/tom/{sessions,session-models}/*.json and ~/.claude/tom/user-model.json",
+        "Project path: .claude/tom/{sessions,session-models}/*.json and .claude/tom/user-model.json",
+        "Directories created on first write if they do not exist",
+        "readUserModel merges global and project models with project-level overriding global-level preferences",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Implement BM25 search index and query engine",
+      "description": "As the ToM sub-agent, I need keyword-based search across memory tiers to find relevant past sessions and preferences.",
+      "acceptanceCriteria": [
+        "Create tom/bm25.ts with zero external dependencies",
+        "buildIndex function accepts array of documents with id, content string, and tier (1|2|3) fields",
+        "search function accepts query string and returns top-k results (default k=3) ranked by BM25 score",
+        "Tier weighting: Tier 3 results get 3x boost, Tier 2 get 2x, Tier 1 get 1x",
+        "Index is serializable to JSON for caching (rebuilt on session analysis, not every query)",
+        "Sub-200ms query latency verified with 100 mock documents in unit test",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Implement preference tracking with confidence scoring and decay",
+      "description": "As a system, I need to track user preferences with confidence scores that increase on reinforcement and decay over time.",
+      "acceptanceCriteria": [
+        "Create tom/preferences.ts",
+        "Three preference categories tracked: interactionStyle (verbosity, questionTiming, responseLength), codingPreferences (language, libraries, testingApproach, architecturePatterns, namingConventions), emotionalSignals (frustration, satisfaction, urgency, mode)",
+        "reinforcePreference function: takes existing preferences array and new observation, returns new array with updated confidence (immutable)",
+        "Confidence increases by 0.1 per reinforcement, capped at 1.0",
+        "decayPreferences function: takes preferences array and decayDays config, returns new array with decayed confidence scores using exponential decay (half-life = decayDays)",
+        "Conflicting preferences resolved by recency-weighted voting (most recent session wins ties)",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Implement cross-session preference aggregation",
+      "description": "As a system, I need to merge per-session observations into a stable overall user model after each session analysis.",
+      "acceptanceCriteria": [
+        "Create tom/aggregation.ts",
+        "aggregateSessionIntoModel function: takes current UserModel and new SessionModel, returns new UserModel (immutable)",
+        "New preferences from session added with initial confidence 0.1",
+        "Existing preferences reinforced per reinforcePreference logic from US-004",
+        "Preference clusters auto-identified by grouping preferences with same category and similar keys",
+        "Each preference in output includes lastUpdated timestamp and sessionCount",
+        "Decay applied to all existing preferences before merge",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Implement session capture hook script (PostToolUse)",
+      "description": "As a system, I need a PostToolUse hook shell script that captures session interaction metadata after each tool execution.",
+      "acceptanceCriteria": [
+        "Create tom/hooks/post-tool-use.sh shell script",
+        "Script reads hook environment variables ($TOOL_NAME, $TOOL_INPUT, $TOOL_OUTPUT available via Claude Code hook system)",
+        "Sanitizes input: strips any values that look like secrets (API keys, tokens, passwords) and file contents — keeps only parameter shape/keys",
+        "Appends interaction entry as JSON line to current session file in tom/sessions/{session-id}.json",
+        "Session ID derived from process PID or CLAUDE_SESSION_ID env var",
+        "Script completes in <10ms (async append, no validation on write path)",
+        "Script is a no-op if tom.enabled is not true in settings",
+        "Typecheck passes (for any TypeScript helpers called by the script)"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Create ToM sub-agent definition and system prompt",
+      "description": "As a developer, I need the ToM sub-agent configured as a Claude Code agent with the paper's 5 core actions and constrained behavior.",
+      "acceptanceCriteria": [
+        "Create ~/.claude/agents/tom-agent/ directory with agent definition",
+        "System prompt instructs agent to reason about user mental states: goals, preferences, constraints",
+        "Agent has access to 5 tools: search_memory (calls BM25), read_memory_file (reads specific tier file), analyze_session (extracts intent/preferences from raw session), initialize_user_profile (creates Tier 3 from scratch), give_suggestions (outputs structured ToMSuggestion)",
+        "Agent limited to maximum 3 memory operations per invocation (enforced in prompt)",
+        "Temperature set to 0.1 in agent config",
+        "Agent prompt includes instruction to never modify code, only reason about user state",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Implement session analysis Stop hook",
+      "description": "As a system, I need a Stop hook that spawns the ToM sub-agent to analyze the completed session and update memory.",
+      "acceptanceCriteria": [
+        "Create tom/hooks/stop-analyze.sh shell script",
+        "Script spawns ToM sub-agent with model haiku in background (does not block session exit)",
+        "Sub-agent reads current session's Tier 1 log and produces Tier 2 session model",
+        "Sub-agent calls aggregation logic to merge new session model into Tier 3 user model",
+        "Sub-agent rebuilds BM25 search index after analysis",
+        "Script is a no-op if tom.enabled is not true in settings",
+        "Script logs completion status to tom/usage.log with model name and token count",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Implement ambiguity detection heuristics",
+      "description": "As a system, I need lightweight local heuristics that detect when user instructions are ambiguous enough to warrant ToM consultation.",
+      "acceptanceCriteria": [
+        "Create tom/ambiguity.ts",
+        "detectAmbiguity function: takes tool name, tool parameters, and recent user messages, returns { isAmbiguous: boolean, score: number 0-1, reason: string }",
+        "Heuristics include: short/vague user instruction (<10 words with no specific file paths), multiple valid file targets for an edit, user-preference-sensitive decisions (code style, architecture, library choice), first interaction in a new project with no user model",
+        "Threshold configurable: 'low' (score > 0.3), 'medium' (score > 0.5), 'high' (score > 0.7)",
+        "Function executes in <50ms (no I/O, no model calls — pure heuristics)",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Implement in-session consultation PreToolUse hook",
+      "description": "As a system, I need a PreToolUse hook that consults the ToM agent when ambiguity is detected, injecting suggestions into the main agent's context.",
+      "acceptanceCriteria": [
+        "Create tom/hooks/pre-tool-use.sh shell script",
+        "Script runs ambiguity detection from US-009 against current tool call context",
+        "If ambiguity exceeds threshold, spawns ToM sub-agent with model sonnet",
+        "ToM agent searches memory for relevant preferences and produces ToMSuggestion",
+        "Suggestion output written to stdout so Claude Code hook system can inject it as context",
+        "If ambiguity below threshold, script exits immediately with no output",
+        "Script is a no-op if tom.enabled is not true in settings",
+        "Logs consultation to tom/usage.log with model name and token count",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Implement smart model routing configuration",
+      "description": "As a system operator, I need model selection to be configurable and logged for cost tracking.",
+      "acceptanceCriteria": [
+        "Create tom/routing.ts",
+        "getModelForOperation function: takes operation type ('memoryUpdate'|'consultation'|'profileInit') and returns model name from config",
+        "Defaults: memoryUpdate='haiku', consultation='sonnet', profileInit='sonnet'",
+        "Reads from tom.models.memoryUpdate and tom.models.consultation in ~/.claude/settings.json",
+        "logUsage function: appends { timestamp, operation, model, tokenCount } to tom/usage.log as JSON lines",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Implement ToM configuration schema and opt-in system",
+      "description": "As a user, I want to enable/disable ToM and configure its behavior via settings.",
+      "acceptanceCriteria": [
+        "Create tom/config.ts",
+        "Zod schema for ToM config: enabled (boolean, default false), consultThreshold ('low'|'medium'|'high', default 'medium'), models.memoryUpdate (string, default 'haiku'), models.consultation (string, default 'sonnet'), preferenceDecayDays (number, default 30), maxSessionsRetained (number, default 100)",
+        "readTomConfig function: reads tom key from ~/.claude/settings.json, validates, returns config with defaults applied",
+        "isTomEnabled function: returns boolean, used as guard in all hooks",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Implement session pruning for Tier 1",
+      "description": "As a system, I need to prune old sessions when maxSessionsRetained is exceeded to prevent unbounded storage growth.",
+      "acceptanceCriteria": [
+        "Create tom/pruning.ts",
+        "pruneOldSessions function: reads all Tier 1 session files, if count exceeds maxSessionsRetained, deletes oldest sessions (by startedAt timestamp)",
+        "Also deletes corresponding Tier 2 session models for pruned sessions",
+        "Rebuilds BM25 index after pruning",
+        "Returns list of pruned session IDs",
+        "Function called during Stop hook after session analysis completes",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Implement privacy redaction layer",
+      "description": "As a user, I need a redaction layer that strips secrets and sensitive data from session capture before it is persisted.",
+      "acceptanceCriteria": [
+        "Create tom/redaction.ts",
+        "redactToolInput function: takes tool input object, returns new object with values redacted if they match secret patterns (API keys, tokens, passwords, env vars, file contents longer than 200 chars)",
+        "Keeps parameter keys/shape but replaces values with '[REDACTED]'",
+        "Pattern matching for common secret formats: sk-*, ghp_*, Bearer *, password=*, etc.",
+        "redactUserMessage function: strips inline code blocks and URLs with query params from user message summaries",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Implement /tom status skill",
+      "description": "As a user, I want to see the current state of my ToM model, session count, and preference summary.",
+      "acceptanceCriteria": [
+        "Create skill definition for /tom status",
+        "Reads Tier 3 user model (global and project-merged) and displays: total sessions analyzed, top preferences by confidence, interaction style summary, coding style summary",
+        "Shows ToM config: enabled status, model routing, threshold",
+        "Shows storage usage: count of Tier 1 sessions, Tier 2 models, Tier 3 model size",
+        "If no model exists yet, shows 'No user model found. ToM will begin learning after your first session.'",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Implement /tom reset skill",
+      "description": "As a user, I want to clear all ToM memory with a confirmation step.",
+      "acceptanceCriteria": [
+        "Create skill definition for /tom reset",
+        "Prompts user for confirmation before proceeding",
+        "On confirm: deletes all files in ~/.claude/tom/ and .claude/tom/ (sessions, session-models, user-model.json, usage.log, BM25 index)",
+        "Displays summary of what was deleted (file count, total size)",
+        "Does not delete config from settings.json (only memory data)",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Implement /tom inspect skill",
+      "description": "As a user, I want to see exactly what data the ToM system has stored about me.",
+      "acceptanceCriteria": [
+        "Create skill definition for /tom inspect",
+        "Lists all stored sessions with: session ID, date, intent summary (from Tier 2 if available)",
+        "Shows full Tier 3 user model in human-readable format (not raw JSON)",
+        "Highlights any data that will be pruned on next session (if near maxSessionsRetained limit)",
+        "Typecheck passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Implement /tom forget and /tom export skills",
+      "description": "As a user, I want to remove specific sessions and export all ToM data.",
+      "acceptanceCriteria": [
+        "/tom forget [session-id]: deletes Tier 1 and Tier 2 files for that session, re-runs aggregation to rebuild Tier 3 without that session's data, confirms deletion",
+        "/tom export: writes all ToM data (Tier 1, 2, 3, config, usage log) to a single JSON file at tom-export-{timestamp}.json in current directory",
+        "Export file is self-contained and could be imported in a future version",
+        "Typecheck passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Add .gitignore entry for ToM data",
+      "description": "As a developer, I need .claude/tom/ excluded from version control by default.",
+      "acceptanceCriteria": [
+        "If .gitignore exists in project root, append .claude/tom/ if not already present",
+        "If no .gitignore exists, do not create one (user may not be using git)",
+        "Append only — do not modify existing entries",
+        "Typecheck passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "Register all hooks in settings.json",
+      "description": "As a system, I need the three ToM hooks (PostToolUse, PreToolUse, Stop) registered in the Claude Code hooks configuration.",
+      "acceptanceCriteria": [
+        "Add PostToolUse hook entry pointing to tom/hooks/post-tool-use.sh",
+        "Add PreToolUse hook entry pointing to tom/hooks/pre-tool-use.sh",
+        "Add Stop hook entry pointing to tom/hooks/stop-analyze.sh",
+        "Hooks are added alongside existing hooks (do not overwrite)",
+        "All hooks check tom.enabled before executing",
+        "Provide example settings.json snippet in a README comment within the hooks directory",
+        "Typecheck passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

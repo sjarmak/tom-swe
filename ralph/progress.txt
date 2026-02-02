@@ -1,0 +1,23 @@
+# Ralph Progress Log
+Started: Mon Feb  2 13:33:30 EST 2026
+---
+
+## Codebase Patterns
+- Use `z.strictObject` for all Zod schemas (enforces no extra keys) - Zod v4 API
+- All schemas are in `tom/schemas.ts`, export both schemas and inferred types
+- Project uses TypeScript strict mode with `noUncheckedIndexedAccess`
+- Zod v4.x is installed (not v3) - import from 'zod' directly
+- Use `z.string().datetime()` for ISO timestamp validation
+- Typecheck via `npm run typecheck` (runs `tsc --noEmit`)
+
+## 2026-02-02 - US-001
+- Implemented all Zod schemas for ToM data structures in `tom/schemas.ts`
+- Files changed: `tom/schemas.ts` (new), `tsconfig.json` (new), `package.json` (new/updated)
+- **Learnings for future iterations:**
+  - Zod v4 uses `z.strictObject()` instead of `z.object().strict()` for strict mode
+  - `z.string().datetime()` validates ISO 8601 timestamps
+  - Schemas defined: SessionLog, SessionModel, UserModel, ToMSuggestion
+  - All types exported alongside schemas using `z.infer<typeof Schema>`
+  - `parameterShape` in Interaction uses `z.record(z.string(), z.string())` to store key names without values
+  - `projectOverrides` in UserModel maps project path to partial preference arrays
+---
