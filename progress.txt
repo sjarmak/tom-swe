@@ -304,3 +304,22 @@
   - Deduplication: global sessions take precedence over project sessions with same sessionId
   - Use separate projectDir in tests to avoid global/project path overlap (same pattern as tom-status tests)
 ---
+
+## 2026-02-02 - US-018
+- Implemented tom/skills/tom-forget-export.ts with /tom forget and /tom export skills
+- forgetSession: deletes Tier 1 and Tier 2 files for a session from both scopes, rebuilds Tier 3 user model from remaining sessions, rebuilds BM25 index
+- collectExportData: gathers all Tier 1/2/3 data, config, and usage log into a self-contained ExportData structure
+- exportToFile: writes ExportData as JSON to tom-export-{timestamp}.json in current directory
+- deduplicateById helper prevents double-counting sessions that exist in both global and project scopes
+- rebuildUserModel aggregates all remaining Tier 2 session models into a fresh Tier 3 user model
+- CLI entry point: `forget <session-id>` and `export` subcommands
+- 25 tests passing covering: forget not-found, Tier 1/2 deletion, Tier 3 rebuild, both scopes, BM25 rebuild, export empty/populated, deduplication, formatting, CLI
+- 360 total tests passing
+- Files changed: tom/skills/tom-forget-export.ts (new), tom/skills/tom-forget-export.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - rebuildUserModel iterates Tier 2 session model files in sorted order (by filename) for deterministic aggregation
+  - Export version field ('1.0') allows future import compatibility
+  - deduplicateById uses generics with `{ readonly sessionId: string }` constraint for reuse across SessionLog and SessionModel types
+  - Usage log is read as raw lines (not parsed JSON) since export preserves the original format
+  - Timestamp in export filename uses replace(/[:.]/g, '-') for filesystem-safe names
+---
