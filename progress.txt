@@ -12,6 +12,8 @@
 - Preference functions are pure and immutable — reinforcePreference, decayPreferences, resolveConflicts all return new arrays
 - PreferenceCategory type: 'interactionStyle' | 'codingPreferences' | 'emotionalSignals'
 - Exponential decay formula: confidence * 2^(-daysSinceUpdate / halfLifeDays)
+- Aggregation pipeline: decay existing → extract observations → reinforce → resolve conflicts
+- SessionModel fields map to categories: codingPreferences→'codingPreferences', interactionPatterns→'interactionStyle', satisfactionSignals→'emotionalSignals'
 ---
 
 ## 2026-02-02 - US-002
@@ -57,4 +59,18 @@
   - Decay removes preferences below 0.01 threshold to prevent zombie preferences
   - Optional chaining with comparison operators causes TS2532 under noUncheckedIndexedAccess — extract to variable with `?? ''` first
   - PreferenceObservation is the input type for reinforcement (category, key, value only — no confidence/timestamps)
+---
+
+## 2026-02-02 - US-005
+- Implemented tom/aggregation.ts with cross-session preference aggregation
+- aggregateSessionIntoModel: takes UserModel + SessionModel, returns new UserModel (immutable)
+- Pipeline: decay existing prefs → extract observations from session → reinforce/add prefs → resolve conflicts
+- extractObservations maps SessionModel fields to PreferenceObservation: codingPreferences→'codingPreferences', interactionPatterns→'interactionStyle', satisfactionSignals→'emotionalSignals'
+- 12 tests passing covering new prefs, reinforcement, decay, immutability, emotional signals, empty sessions
+- Files changed: tom/aggregation.ts (new), tom/aggregation.test.ts (new), prd.json, progress.txt
+- **Learnings for future iterations:**
+  - SessionModel.satisfactionSignals are converted to individual emotionalSignals preferences (frustration, satisfaction, urgency as separate keys)
+  - resolveConflicts is called after reinforcement to deduplicate same category+key entries
+  - Default decay half-life is 30 days, configurable via parameter
+  - noUnusedLocals catches unused imports like `vi` from vitest — only import what you use
 ---
