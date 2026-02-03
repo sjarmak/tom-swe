@@ -11,15 +11,22 @@ import * as os from 'node:os'
 
 // --- Types ---
 
-interface HookEntry {
+interface HookCommand {
   readonly type: string
   readonly command: string
+  readonly async?: boolean
+  readonly statusMessage?: string
+}
+
+interface HookGroup {
+  readonly matcher: string
+  readonly hooks: readonly HookCommand[]
 }
 
 interface HooksConfig {
-  readonly PreToolUse?: readonly HookEntry[]
-  readonly PostToolUse?: readonly HookEntry[]
-  readonly Stop?: readonly HookEntry[]
+  readonly PreToolUse?: readonly HookGroup[]
+  readonly PostToolUse?: readonly HookGroup[]
+  readonly Stop?: readonly HookGroup[]
 }
 
 interface RegistrationResult {
@@ -30,44 +37,62 @@ interface RegistrationResult {
 
 // --- Hook Definitions ---
 
-function getHooksDir(): string {
+function getDistHooksDir(): string {
+  // From compiled dist/tom/hooks/, resolve to dist/tom/hooks/
   return path.resolve(__dirname)
 }
 
-function buildTomHooks(hooksDir: string): HooksConfig {
+function buildTomHooks(distHooksDir: string): HooksConfig {
   return {
     PostToolUse: [{
-      type: 'command',
-      command: `bash "${path.join(hooksDir, 'post-tool-use.sh')}"`,
+      matcher: '',
+      hooks: [{
+        type: 'command',
+        command: `node "${path.join(distHooksDir, 'capture-interaction.js')}"`,
+        async: true,
+        statusMessage: 'ToM: capturing interaction',
+      }],
     }],
     PreToolUse: [{
-      type: 'command',
-      command: `bash "${path.join(hooksDir, 'pre-tool-use.sh')}"`,
+      matcher: '',
+      hooks: [{
+        type: 'command',
+        command: `node "${path.join(distHooksDir, 'pre-tool-use.js')}"`,
+        statusMessage: 'ToM: checking preferences',
+      }],
     }],
     Stop: [{
-      type: 'command',
-      command: `bash "${path.join(hooksDir, 'stop-analyze.sh')}"`,
+      matcher: '',
+      hooks: [{
+        type: 'command',
+        command: `node "${path.join(distHooksDir, 'stop-analyze.js')}"`,
+        async: true,
+        statusMessage: 'ToM: analyzing session',
+      }],
     }],
   }
 }
 
 // --- Registration ---
 
-function isMatchingHook(existing: HookEntry, tomHook: HookEntry): boolean {
-  return existing.command === tomHook.command
+function containsTomHook(groups: readonly HookGroup[], tomGroup: HookGroup): boolean {
+  const tomCommand = tomGroup.hooks[0]?.command ?? ''
+  return groups.some(group =>
+    group.hooks.some(hook => hook.command === tomCommand)
+  )
 }
 
-function mergeHookArray(
-  existing: readonly HookEntry[] | undefined,
-  tomHooks: readonly HookEntry[]
-): { readonly hooks: readonly HookEntry[]; readonly addedCount: number } {
-  const current: readonly HookEntry[] = existing ?? []
-  const toAdd = tomHooks.filter(
-    tomHook => !current.some(entry => isMatchingHook(entry, tomHook))
+function mergeHookGroups(
+  existing: readonly HookGroup[] | undefined,
+  tomGroups: readonly HookGroup[]
+): { readonly groups: readonly HookGroup[]; readonly addedCount: number } {
+  const current: readonly HookGroup[] = existing ?? []
+  const toAdd = tomGroups.filter(
+    tomGroup => !containsTomHook(current, tomGroup)
   )
 
   return {
-    hooks: [...current, ...toAdd],
+    groups: [...current, ...toAdd],
     addedCount: toAdd.length,
   }
 }
@@ -80,8 +105,8 @@ function mergeHookArray(
  */
 export function registerHooks(settingsPath?: string): RegistrationResult {
   const resolvedPath = settingsPath ?? path.join(os.homedir(), '.claude', 'settings.json')
-  const hooksDir = getHooksDir()
-  const tomHooks = buildTomHooks(hooksDir)
+  const distHooksDir = getDistHooksDir()
+  const tomHooks = buildTomHooks(distHooksDir)
 
   // Read existing settings or start fresh
   let settings: Record<string, unknown> = {}
@@ -93,11 +118,11 @@ export function registerHooks(settingsPath?: string): RegistrationResult {
   }
 
   // Get or create hooks section
-  const existingHooks = (settings['hooks'] ?? {}) as Record<string, readonly HookEntry[] | undefined>
+  const existingHooks = (settings['hooks'] ?? {}) as Record<string, readonly HookGroup[] | undefined>
 
   const added: string[] = []
   const alreadyPresent: string[] = []
-  const updatedHooks: Record<string, readonly HookEntry[]> = {}
+  const updatedHooks: Record<string, readonly HookGroup[]> = {}
   for (const [key, value] of Object.entries(existingHooks)) {
     if (value !== undefined) {
       updatedHooks[key] = value
@@ -106,12 +131,12 @@ export function registerHooks(settingsPath?: string): RegistrationResult {
 
   const hookTypes = ['PostToolUse', 'PreToolUse', 'Stop'] as const
   for (const hookType of hookTypes) {
-    const tomHookArray = tomHooks[hookType] ?? []
-    const result = mergeHookArray(
+    const tomHookGroups = tomHooks[hookType] ?? []
+    const result = mergeHookGroups(
       existingHooks[hookType],
-      tomHookArray
+      tomHookGroups
     )
-    updatedHooks[hookType] = result.hooks
+    updatedHooks[hookType] = result.groups
 
     if (result.addedCount > 0) {
       added.push(hookType)
@@ -174,8 +199,8 @@ export function formatResult(result: RegistrationResult): string {
 /**
  * Returns an example settings.json snippet showing the hook configuration.
  */
-export function getExampleSnippet(hooksDir?: string): string {
-  const dir = hooksDir ?? getHooksDir()
+export function getExampleSnippet(distHooksDir?: string): string {
+  const dir = distHooksDir ?? getDistHooksDir()
   return JSON.stringify({
     tom: {
       enabled: true,
@@ -185,20 +210,7 @@ export function getExampleSnippet(hooksDir?: string): string {
         consultation: 'sonnet',
       },
     },
-    hooks: {
-      PostToolUse: [{
-        type: 'command',
-        command: `bash "${path.join(dir, 'post-tool-use.sh')}"`,
-      }],
-      PreToolUse: [{
-        type: 'command',
-        command: `bash "${path.join(dir, 'pre-tool-use.sh')}"`,
-      }],
-      Stop: [{
-        type: 'command',
-        command: `bash "${path.join(dir, 'stop-analyze.sh')}"`,
-      }],
-    },
+    hooks: buildTomHooks(dir),
   }, null, 2)
 }
 
