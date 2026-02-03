@@ -24,30 +24,44 @@ ToM-SWE observes how you use Claude Code and builds a model of your preferences 
 
 ## Installation
 
-Install the plugin from the Claude Code marketplace:
+### From marketplace (inside Claude Code)
+
+First, add the marketplace source:
+
+```
+/plugin marketplace add sjarmak/tom-swe
+```
+
+Then install the plugin:
+
+```
+/plugin install tom-swe@tom-swe
+```
+
+### From local clone
 
 ```bash
-claude plugin add sjarmak/tom-swe
+git clone https://github.com/sjarmak/tom-swe.git
 ```
 
-Then run setup to create the config file:
+Then inside Claude Code:
 
 ```
-/tom-setup
+/plugin marketplace add ./tom-swe
+/plugin install tom-swe@tom-swe
+```
+
+### Setup
+
+After installation, run the setup skill to create the config:
+
+```
+/tom-swe:tom-setup
 ```
 
 This creates `~/.claude/tom/config.json` with ToM enabled and default settings. The system starts learning immediately in your next session.
 
-### Manual installation
-
-Clone the repository and install as a local plugin:
-
-```bash
-git clone https://github.com/sjarmak/tom-swe.git
-claude plugin add ./tom-swe
-```
-
-Then run `/tom-setup` or create the config manually:
+You can also create the config manually:
 
 ```bash
 mkdir -p ~/.claude/tom
@@ -82,14 +96,16 @@ Edit `~/.claude/tom/config.json`:
 
 ## Skills
 
+All skills are namespaced under `tom-swe:` when installed as a plugin.
+
 | Skill | Description |
 |-------|-------------|
-| `/tom-setup` | Create config and enable ToM for first-time use |
-| `/tom-status` | Show current model state, storage stats, top preferences |
-| `/tom-inspect` | Deep inspection of session logs, models, and raw data |
-| `/tom-reset` | Clear all ToM memory data (requires confirmation) |
-| `/tom-export` | Export your user model as JSON |
-| `/tom-forget` | Selectively remove specific preferences |
+| `/tom-swe:tom-setup` | Create config and enable ToM for first-time use |
+| `/tom-swe:tom-status` | Show current model state, storage stats, top preferences |
+| `/tom-swe:tom-inspect` | Deep inspection of session logs, models, and raw data |
+| `/tom-swe:tom-reset` | Clear all ToM memory data (requires confirmation) |
+| `/tom-swe:tom-export` | Export your user model as JSON |
+| `/tom-swe:tom-forget` | Selectively remove specific preferences |
 
 ## Privacy
 
