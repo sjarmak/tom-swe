@@ -10,6 +10,7 @@ import * as esbuild from 'esbuild'
 
 const entryPoints = [
   // Hooks
+  'tom/hooks/session-start.ts',
   'tom/hooks/capture-interaction.ts',
   'tom/hooks/pre-tool-use.ts',
   'tom/hooks/stop-analyze.ts',

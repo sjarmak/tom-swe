@@ -19,6 +19,8 @@ import type { AmbiguityThreshold, AmbiguityResult } from '../ambiguity.js'
 import { readUserModel, globalTomDir } from '../memory-io.js'
 import { search } from '../bm25.js'
 import type { BM25Index, BM25SearchResult } from '../bm25.js'
+import { logUsage } from '../routing.js'
+import { readHookInput, getSessionId, isInternalInvocation, toRecord } from './hook-input.js'
 
 // --- Configuration ---
 
@@ -51,20 +53,6 @@ export function readTomSettings(): TomSettings {
 
 export function isTomEnabled(): boolean {
   return readTomSettings().enabled
-}
-
-// --- Session & Environment ---
-
-export function getSessionId(): string {
-  return process.env['CLAUDE_SESSION_ID'] ?? `pid-${process.pid}`
-}
-
-function parseToolInput(raw: string): Record<string, unknown> {
-  try {
-    return JSON.parse(raw) as Record<string, unknown>
-  } catch {
-    return {}
-  }
 }
 
 // --- BM25 Index Loading ---
@@ -151,26 +139,6 @@ function buildSuggestionFromUserModel(
   return parseResult.success ? parseResult.data : null
 }
 
-// --- Usage Logging ---
-
-interface UsageLogEntry {
-  readonly timestamp: string
-  readonly operation: string
-  readonly model: string
-  readonly tokenCount: number
-  readonly sessionId: string
-}
-
-export function logUsage(entry: UsageLogEntry): void {
-  const logPath = path.join(globalTomDir(), 'usage.log')
-  const dir = path.dirname(logPath)
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
-  }
-  const line = JSON.stringify(entry) + '\n'
-  fs.appendFileSync(logPath, line, 'utf-8')
-}
-
 // --- Consultation Pipeline ---
 
 export interface ConsultationResult {
@@ -190,7 +158,8 @@ export function consultToM(
   toolName: string,
   toolInput: Record<string, unknown>,
   recentMessages: readonly string[],
-  threshold: AmbiguityThreshold
+  threshold: AmbiguityThreshold,
+  sessionId: string = getSessionId(null)
 ): ConsultationResult {
   const hasUserModel = readUserModel('global') !== null
 
@@ -225,7 +194,6 @@ export function consultToM(
     suggestion = buildSuggestionFromUserModel(ambiguityResult, toolName)
   }
 
-  const sessionId = getSessionId()
   logUsage({
     timestamp: new Date().toISOString(),
     operation: 'consultation',
@@ -241,38 +209,71 @@ export function consultToM(
   }
 }
 
+// --- Hook Output ---
+
+export interface PreToolUseHookOutput {
+  readonly hookSpecificOutput: {
+    readonly hookEventName: 'PreToolUse'
+    readonly additionalContext: string
+  }
+}
+
+/**
+ * Builds the documented PreToolUse JSON stdout shape that injects context
+ * for Claude. Deliberately carries NO permissionDecision field: the hook
+ * never auto-approves or blocks — it only adds a short suggestion line.
+ */
+export function buildHookOutput(suggestion: ToMSuggestion): PreToolUseHookOutput {
+  const confidencePercent = Math.round(suggestion.confidence * 100)
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      additionalContext:
+        `ToM ${suggestion.type} suggestion (confidence ${confidencePercent}%): ${suggestion.content}`,
+    },
+  }
+}
+
 // --- CLI Entry Point ---
 
-export function main(): void {
+export async function main(
+  stream: NodeJS.ReadableStream = process.stdin
+): Promise<void> {
+  if (isInternalInvocation()) {
+    return
+  }
   if (!isTomEnabled()) {
     return
   }
 
-  const toolName = process.env['TOOL_NAME'] ?? ''
-  const toolInputRaw = process.env['TOOL_INPUT'] ?? '{}'
-
-  if (!toolName) {
+  const input = await readHookInput(stream)
+  if (!input?.tool_name) {
     return
   }
 
-  const toolInput = parseToolInput(toolInputRaw)
+  const toolName = input.tool_name
+  const toolInput = toRecord(input.tool_input)
   const settings = readTomSettings()
+  const sessionId = getSessionId(input)
 
-  // Recent messages not available in env; use empty array
-  // The ambiguity detection will still work based on tool parameters
+  // Recent messages are not part of the PreToolUse payload; use empty array.
+  // The ambiguity detection will still work based on tool parameters.
   const recentMessages: readonly string[] = []
 
   try {
-    const result = consultToM(toolName, toolInput, recentMessages, settings.consultThreshold)
+    const result = consultToM(
+      toolName,
+      toolInput,
+      recentMessages,
+      settings.consultThreshold,
+      sessionId
+    )
 
     if (result.consulted && result.suggestion) {
-      // Write suggestion to stdout for Claude Code hook system injection
-      const output = JSON.stringify(result.suggestion)
-      process.stdout.write(output)
+      process.stdout.write(JSON.stringify(buildHookOutput(result.suggestion)))
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
-    const sessionId = getSessionId()
     logUsage({
       timestamp: new Date().toISOString(),
       operation: 'consultation-error',
@@ -286,5 +287,5 @@ export function main(): void {
 
 // Run if executed directly
 if (require.main === module) {
-  main()
+  void main()
 }

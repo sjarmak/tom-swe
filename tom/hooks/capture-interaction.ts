@@ -2,44 +2,10 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
-// --- Secret Patterns ---
-
-const SECRET_PATTERNS: readonly RegExp[] = [
-  /^sk-[a-zA-Z0-9_-]+$/,          // OpenAI-style keys
-  /^ghp_[a-zA-Z0-9]+$/,           // GitHub personal tokens
-  /^gho_[a-zA-Z0-9]+$/,           // GitHub OAuth tokens
-  /^ghs_[a-zA-Z0-9]+$/,           // GitHub server tokens
-  /^github_pat_[a-zA-Z0-9_]+$/,   // GitHub fine-grained PATs
-  /^Bearer\s+.+/i,                // Bearer tokens
-  /^Basic\s+.+/i,                 // Basic auth
-  /^token\s+.+/i,                 // Generic token prefix
-  /^xox[bposa]-[a-zA-Z0-9-]+$/,   // Slack tokens
-  /^AKIA[A-Z0-9]{16}$/,           // AWS access keys
-  /^eyJ[a-zA-Z0-9_-]+\.eyJ/,     // JWT tokens
-  /password[=:].+/i,              // password= or password:
-  /^[a-f0-9]{40}$/,               // 40-char hex (git hashes, some tokens)
-  /^npm_[a-zA-Z0-9]+$/,           // npm tokens
-  /^pypi-[a-zA-Z0-9]+$/,          // PyPI tokens
-]
-
-const REDACTED = '[REDACTED]'
-const MAX_VALUE_LENGTH = 200
+import { readHookInput, getSessionId, isInternalInvocation, toRecord } from './hook-input.js'
+import { sanitizeValue, MAX_VALUE_LENGTH } from '../secrets.js'
 
 // --- Sanitization ---
-
-function looksLikeSecret(value: string): boolean {
-  return SECRET_PATTERNS.some((pattern) => pattern.test(value.trim()))
-}
-
-function sanitizeValue(value: string): string {
-  if (looksLikeSecret(value)) {
-    return REDACTED
-  }
-  if (value.length > MAX_VALUE_LENGTH) {
-    return REDACTED
-  }
-  return value
-}
 
 export function extractParameterShape(
   toolInput: Record<string, unknown>
@@ -71,16 +37,9 @@ interface InteractionEntry {
 
 function buildInteractionEntry(
   toolName: string,
-  toolInput: string,
+  toolInput: Record<string, unknown>,
   toolOutput: string
 ): InteractionEntry {
-  let parsedInput: Record<string, unknown> = {}
-  try {
-    parsedInput = JSON.parse(toolInput) as Record<string, unknown>
-  } catch {
-    parsedInput = {}
-  }
-
   const outcomeSummary =
     toolOutput.length > MAX_VALUE_LENGTH
       ? toolOutput.slice(0, MAX_VALUE_LENGTH) + '...'
@@ -88,17 +47,27 @@ function buildInteractionEntry(
 
   return {
     toolName,
-    parameterShape: extractParameterShape(parsedInput),
+    parameterShape: extractParameterShape(toolInput),
     outcomeSummary: sanitizeValue(outcomeSummary),
     timestamp: new Date().toISOString(),
   }
 }
 
-// --- Session File Management ---
-
-function getSessionId(): string {
-  return process.env['CLAUDE_SESSION_ID'] ?? `pid-${process.pid}`
+/**
+ * Flattens the PostToolUse tool response (object or string) into the
+ * outcome summary string that buildInteractionEntry truncates/sanitizes.
+ */
+export function summarizeToolResponse(toolResponse: unknown): string {
+  if (toolResponse === null || toolResponse === undefined) {
+    return ''
+  }
+  if (typeof toolResponse === 'string') {
+    return toolResponse
+  }
+  return JSON.stringify(toolResponse)
 }
+
+// --- Session File Management ---
 
 function getSessionFilePath(sessionId: string): string {
   const tomDir = path.join(os.homedir(), '.claude', 'tom', 'sessions')
@@ -115,11 +84,11 @@ function ensureDirectoryExists(filePath: string): void {
 // --- Main Capture Function ---
 
 export function captureInteraction(
+  sessionId: string,
   toolName: string,
-  toolInput: string,
+  toolInput: Record<string, unknown>,
   toolOutput: string
 ): void {
-  const sessionId = getSessionId()
   const filePath = getSessionFilePath(sessionId)
   const entry = buildInteractionEntry(toolName, toolInput, toolOutput)
 
@@ -152,9 +121,12 @@ export function captureInteraction(
     interactions: [...sessionData.interactions, entry],
   }
 
-  // Use async write for speed — fire and forget
-  fs.writeFile(filePath, JSON.stringify(updated, null, 2), 'utf-8', () => {
-    // no-op callback — fire and forget
+  // Async write for speed — not awaited, but failures must surface (stderr,
+  // matching the other hooks' error pattern), never be silently discarded.
+  fs.writeFile(filePath, JSON.stringify(updated, null, 2), 'utf-8', (err) => {
+    if (err) {
+      process.stderr.write(`ToM capture-interaction write error: ${err.message}\n`)
+    }
   })
 }
 
@@ -171,23 +143,28 @@ function isTomEnabled(): boolean {
   }
 }
 
-export function main(): void {
+export async function main(
+  stream: NodeJS.ReadableStream = process.stdin
+): Promise<void> {
+  if (isInternalInvocation()) {
+    return
+  }
   if (!isTomEnabled()) {
     return
   }
 
-  const toolName = process.env['TOOL_NAME'] ?? ''
-  const toolInput = process.env['TOOL_INPUT'] ?? '{}'
-  const toolOutput = process.env['TOOL_OUTPUT'] ?? ''
-
-  if (!toolName) {
+  const input = await readHookInput(stream)
+  if (!input?.tool_name) {
     return
   }
 
-  captureInteraction(toolName, toolInput, toolOutput)
+  const toolInput = toRecord(input.tool_input)
+  const toolOutput = summarizeToolResponse(input.tool_response)
+
+  captureInteraction(getSessionId(input), input.tool_name, toolInput, toolOutput)
 }
 
 // Run if executed directly
 if (require.main === module) {
-  main()
+  void main()
 }

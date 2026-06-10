@@ -15,11 +15,13 @@ import { globalTomDir } from './memory-io.js'
 
 export type OperationType = 'memoryUpdate' | 'consultation' | 'profileInit'
 
-interface UsageLogEntry {
+export interface UsageLogEntry {
   readonly timestamp: string
   readonly operation: string
   readonly model: string
   readonly tokenCount: number
+  readonly sessionId?: string
+  readonly reason?: string
 }
 
 // --- Defaults ---

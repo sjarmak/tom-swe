@@ -26,6 +26,7 @@ import {
   projectTomDir,
 } from '../memory-io.js'
 import { aggregateSessionIntoModel } from '../aggregation.js'
+import { extractSessionModel } from '../session-extract.js'
 import { MEMORY_OPERATION_TOOLS, isMemoryOperationAllowed } from './config.js'
 
 // --- Types ---
@@ -251,89 +252,6 @@ export function analyzeSession(
     result: { sessionModel, operationCount: nextState.operationCount },
     state: nextState,
   }
-}
-
-/**
- * Heuristic extraction of SessionModel from SessionLog.
- */
-function extractSessionModel(sessionLog: SessionLog): SessionModel {
-  const toolCounts: Record<string, number> = {}
-  const codingPrefs: string[] = []
-  const patterns: string[] = []
-  let frustrationCount = 0
-  let satisfactionCount = 0
-
-  for (const interaction of sessionLog.interactions) {
-    toolCounts[interaction.toolName] = (toolCounts[interaction.toolName] ?? 0) + 1
-
-    // Extract coding preferences from parameter shapes
-    const paramKeys = Object.keys(interaction.parameterShape)
-    if (paramKeys.includes('language') || paramKeys.includes('file_path')) {
-      const fileExt = interaction.parameterShape['file_path'] ?? ''
-      if (fileExt && !codingPrefs.includes(fileExt)) {
-        codingPrefs.push(fileExt)
-      }
-    }
-
-    // Detect satisfaction from outcomes
-    const outcome = interaction.outcomeSummary.toLowerCase()
-    if (outcome.includes('error') || outcome.includes('fail') || outcome.includes('retry')) {
-      frustrationCount++
-    }
-    if (outcome.includes('success') || outcome.includes('complete') || outcome.includes('pass')) {
-      satisfactionCount++
-    }
-  }
-
-  // Derive intent from most-used tools
-  const sortedTools = Object.entries(toolCounts)
-    .sort(([, a], [, b]) => b - a)
-    .map(([name]) => name)
-
-  const topTool = sortedTools[0] ?? 'unknown'
-  const intent = deriveIntent(topTool, sessionLog.interactions.length)
-
-  // Derive interaction patterns from tool sequence
-  for (const toolName of sortedTools.slice(0, 5)) {
-    patterns.push(`uses-${toolName}`)
-  }
-
-  const totalInteractions = sessionLog.interactions.length
-  const frustration = totalInteractions > 0 && frustrationCount / totalInteractions > 0.3
-  const satisfaction = totalInteractions > 0 && satisfactionCount / totalInteractions > 0.5
-
-  const urgency = totalInteractions > 20 ? 'high' as const
-    : totalInteractions > 10 ? 'medium' as const
-    : 'low' as const
-
-  return {
-    sessionId: sessionLog.sessionId,
-    intent,
-    interactionPatterns: patterns,
-    codingPreferences: codingPrefs,
-    satisfactionSignals: {
-      frustration,
-      satisfaction,
-      urgency,
-    },
-  }
-}
-
-function deriveIntent(topTool: string, interactionCount: number): string {
-  const toolIntentMap: Record<string, string> = {
-    Edit: 'code modification',
-    Write: 'file creation',
-    Read: 'code exploration',
-    Bash: 'command execution',
-    Grep: 'code search',
-    Glob: 'file search',
-    Task: 'complex task delegation',
-  }
-
-  const baseIntent = toolIntentMap[topTool] ?? `${topTool} usage`
-  const scope = interactionCount > 20 ? 'extensive' : interactionCount > 10 ? 'moderate' : 'brief'
-
-  return `${scope} ${baseIntent}`
 }
 
 // --- Tool: initialize_user_profile ---

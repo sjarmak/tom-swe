@@ -27,19 +27,19 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// tom/hooks/pre-tool-use.ts
-var pre_tool_use_exports = {};
-__export(pre_tool_use_exports, {
+// tom/hooks/session-start.ts
+var session_start_exports = {};
+__export(session_start_exports, {
   buildHookOutput: () => buildHookOutput,
-  consultToM: () => consultToM,
-  isTomEnabled: () => isTomEnabled,
-  main: () => main,
-  readTomSettings: () => readTomSettings
+  buildModelSummary: () => buildModelSummary,
+  main: () => main
 });
-module.exports = __toCommonJS(pre_tool_use_exports);
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
-var os3 = __toESM(require("node:os"));
+module.exports = __toCommonJS(session_start_exports);
+
+// tom/memory-io.ts
+var fs = __toESM(require("node:fs"));
+var path = __toESM(require("node:path"));
+var os = __toESM(require("node:os"));
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -808,10 +808,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path3) {
+  if (!path3)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path3.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1194,11 +1194,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path3, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path3);
     return iss;
   });
 }
@@ -1381,7 +1381,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path4 = []) => {
+  const processError = (error49, path3 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1391,7 +1391,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path3, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1423,8 +1423,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path4) {
+  const path3 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path3) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13401,13 +13401,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path4 = ref.slice(1).split("/").filter(Boolean);
-  if (path4.length === 0) {
+  const path3 = ref.slice(1).split("/").filter(Boolean);
+  if (path3.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path4[0] === defsKey) {
-    const key = path4[1];
+  if (path3[0] === defsKey) {
+    const key = path3[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13855,125 +13855,7 @@ var ToMSuggestionSchema = external_exports.strictObject({
   sourceSessions: external_exports.array(external_exports.string())
 });
 
-// tom/ambiguity.ts
-var THRESHOLD_VALUES = {
-  low: 0.3,
-  medium: 0.5,
-  high: 0.7
-};
-var FILE_PATH_PATTERN = /(?:\/[\w.-]+)+(?:\.\w+)?/;
-var SHORT_MESSAGE_WORD_LIMIT = 10;
-var STYLE_SENSITIVE_TOOLS = /* @__PURE__ */ new Set([
-  "Write",
-  "Edit",
-  "NotebookEdit"
-]);
-var PREFERENCE_KEYWORDS = [
-  "style",
-  "pattern",
-  "architecture",
-  "library",
-  "framework",
-  "convention",
-  "approach",
-  "design",
-  "structure",
-  "organize",
-  "refactor",
-  "naming",
-  "format"
-];
-var VAGUE_KEYWORDS = [
-  "fix",
-  "improve",
-  "update",
-  "change",
-  "make",
-  "do",
-  "handle",
-  "better",
-  "clean",
-  "nice"
-];
-function detectAmbiguity(input) {
-  const threshold = input.threshold ?? "medium";
-  const thresholdValue = THRESHOLD_VALUES[threshold];
-  const reasons = [];
-  let totalScore = 0;
-  const lastMessage = input.recentUserMessages.length > 0 ? input.recentUserMessages[input.recentUserMessages.length - 1] ?? "" : "";
-  const shortVagueScore = scoreShortVagueInstruction(lastMessage);
-  if (shortVagueScore > 0) {
-    totalScore += shortVagueScore;
-    reasons.push("Short or vague user instruction without specific file paths");
-  }
-  const multiTargetScore = scoreMultipleFileTargets(input.toolName, input.toolParameters);
-  if (multiTargetScore > 0) {
-    totalScore += multiTargetScore;
-    reasons.push("Edit tool used without a clear single file target");
-  }
-  const preferenceScore = scorePreferenceSensitive(input.toolName, input.recentUserMessages);
-  if (preferenceScore > 0) {
-    totalScore += preferenceScore;
-    reasons.push("Decision involves style, architecture, or library preferences");
-  }
-  const noModelScore = scoreNoUserModel(input.hasUserModel ?? true);
-  if (noModelScore > 0) {
-    totalScore += noModelScore;
-    reasons.push("No user model exists for this project");
-  }
-  const clampedScore = Math.min(totalScore, 1);
-  const reason = reasons.length > 0 ? reasons.join("; ") : "No ambiguity detected";
-  return {
-    isAmbiguous: clampedScore > thresholdValue,
-    score: Math.round(clampedScore * 100) / 100,
-    reason
-  };
-}
-function scoreShortVagueInstruction(message) {
-  if (message.length === 0) return 0.2;
-  const words = message.trim().split(/\s+/);
-  const wordCount = words.length;
-  const hasFilePath = FILE_PATH_PATTERN.test(message);
-  if (wordCount >= SHORT_MESSAGE_WORD_LIMIT) return 0;
-  let score = 0;
-  if (!hasFilePath) {
-    score += 0.15;
-  }
-  const lowerMessage = message.toLowerCase();
-  const vagueCount = VAGUE_KEYWORDS.filter((kw) => lowerMessage.includes(kw)).length;
-  if (vagueCount > 0) {
-    score += Math.min(vagueCount * 0.1, 0.2);
-  }
-  return score;
-}
-function scoreMultipleFileTargets(toolName, toolParameters) {
-  if (!STYLE_SENSITIVE_TOOLS.has(toolName)) return 0;
-  const filePath = toolParameters["file_path"];
-  const oldString = toolParameters["old_string"];
-  if (!filePath || filePath.length === 0) return 0.3;
-  if (toolName === "Edit" && (!oldString || oldString.length === 0)) return 0.15;
-  return 0;
-}
-function scorePreferenceSensitive(toolName, allMessages) {
-  let score = 0;
-  if (STYLE_SENSITIVE_TOOLS.has(toolName)) {
-    score += 0.1;
-  }
-  const combinedMessages = allMessages.join(" ").toLowerCase();
-  const matchCount = PREFERENCE_KEYWORDS.filter((kw) => combinedMessages.includes(kw)).length;
-  if (matchCount > 0) {
-    score += Math.min(matchCount * 0.08, 0.25);
-  }
-  return score;
-}
-function scoreNoUserModel(hasUserModel) {
-  return hasUserModel ? 0 : 0.25;
-}
-
 // tom/memory-io.ts
-var fs = __toESM(require("node:fs"));
-var path = __toESM(require("node:path"));
-var os = __toESM(require("node:os"));
 function globalTomDir() {
   return path.join(os.homedir(), ".claude", "tom");
 }
@@ -14034,60 +13916,36 @@ function readUserModel(scope = "merged") {
   return result.success ? result.data : null;
 }
 
-// tom/bm25.ts
-var K1 = 1.2;
-var B = 0.75;
-var TIER_WEIGHTS = {
-  1: 1,
-  2: 2,
-  3: 3
-};
-function tokenize(text) {
-  return text.toLowerCase().split(/\W+/).filter((token) => token.length > 0);
-}
-function search(index, query, k = 3) {
-  if (index.documentCount === 0) {
-    return [];
-  }
-  const queryTokens = tokenize(query);
-  if (queryTokens.length === 0) {
-    return [];
-  }
-  const scored = [];
-  for (const doc of index.docs) {
-    let score = 0;
-    for (const token of queryTokens) {
-      const tf = doc.termFreqs[token] ?? 0;
-      if (tf === 0) continue;
-      const idfValue = index.idf[token] ?? 0;
-      const numerator = tf * (K1 + 1);
-      const denominator = tf + K1 * (1 - B + B * (doc.length / index.avgDocLength));
-      score += idfValue * (numerator / denominator);
-    }
-    if (score > 0) {
-      const tierWeight = TIER_WEIGHTS[doc.tier] ?? 1;
-      scored.push({
-        id: doc.id,
-        score: score * tierWeight
-      });
-    }
-  }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, k);
-}
-
-// tom/routing.ts
+// tom/config.ts
 var fs2 = __toESM(require("node:fs"));
 var path2 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
-function logUsage(entry) {
-  const logPath = path2.join(globalTomDir(), "usage.log");
-  const dir = path2.dirname(logPath);
-  if (!fs2.existsSync(dir)) {
-    fs2.mkdirSync(dir, { recursive: true });
+var TomConfigSchema = external_exports.strictObject({
+  enabled: external_exports.boolean().default(false),
+  consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
+  models: external_exports.strictObject({
+    memoryUpdate: external_exports.string().default("haiku"),
+    consultation: external_exports.string().default("sonnet")
+  }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
+  preferenceDecayDays: external_exports.number().default(30),
+  maxSessionsRetained: external_exports.number().default(100)
+});
+function readTomConfig() {
+  try {
+    const configPath = path2.join(os2.homedir(), ".claude", "tom", "config.json");
+    const content = fs2.readFileSync(configPath, "utf-8");
+    const raw = JSON.parse(content);
+    const result = TomConfigSchema.safeParse(raw);
+    if (result.success) {
+      return result.data;
+    }
+    return TomConfigSchema.parse({});
+  } catch {
+    return TomConfigSchema.parse({});
   }
-  const line = JSON.stringify(entry) + "\n";
-  fs2.appendFileSync(logPath, line, "utf-8");
+}
+function isTomEnabled() {
+  return readTomConfig().enabled;
 }
 
 // tom/hooks/hook-input.ts
@@ -14126,127 +13984,36 @@ async function readHookInput(stream = process.stdin) {
   const result = HookInputSchema.safeParse(parsed);
   return result.success ? result.data : null;
 }
-function getSessionId(input) {
-  return input?.session_id ?? process.env["CLAUDE_SESSION_ID"] ?? `pid-${process.pid}`;
-}
 function isInternalInvocation() {
   return process.env["TOM_SWE_INTERNAL"] === "1";
 }
-function toRecord(value) {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    return value;
-  }
-  return {};
-}
 
-// tom/hooks/pre-tool-use.ts
-var DEFAULT_CONSULTATION_MODEL = "sonnet";
-var DEFAULT_THRESHOLD = "medium";
-function readTomSettings() {
-  try {
-    const configPath = path3.join(os3.homedir(), ".claude", "tom", "config.json");
-    const content = fs3.readFileSync(configPath, "utf-8");
-    const config2 = JSON.parse(content);
-    const enabled = config2["enabled"] === true;
-    const threshold = config2["consultThreshold"];
-    const validThresholds = ["low", "medium", "high"];
-    const consultThreshold = typeof threshold === "string" && validThresholds.includes(threshold) ? threshold : DEFAULT_THRESHOLD;
-    return { enabled, consultThreshold };
-  } catch {
-    return { enabled: false, consultThreshold: DEFAULT_THRESHOLD };
+// tom/hooks/session-start.ts
+var MIN_CONFIDENCE = 0.5;
+var MAX_PREFERENCE_LINES = 7;
+function buildModelSummary(model) {
+  const confidentPrefs = [...model.preferencesClusters].filter((p) => p.confidence >= MIN_CONFIDENCE).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
+  const lines = [];
+  if (confidentPrefs.length > 0) {
+    lines.push("ToM user preferences (learned across sessions):");
+    for (const pref of confidentPrefs) {
+      const confidencePercent = Math.round(pref.confidence * 100);
+      lines.push(`- ${pref.category}/${pref.key}: ${pref.value} (${confidencePercent}%)`);
+    }
   }
+  if (model.interactionStyleSummary) {
+    lines.push(`Interaction style: ${model.interactionStyleSummary}`);
+  }
+  if (model.codingStyleSummary) {
+    lines.push(`Coding style: ${model.codingStyleSummary}`);
+  }
+  return lines.length > 0 ? lines.join("\n") : null;
 }
-function isTomEnabled() {
-  return readTomSettings().enabled;
-}
-function loadCachedIndex() {
-  try {
-    const indexPath = path3.join(globalTomDir(), "bm25-index.json");
-    const content = fs3.readFileSync(indexPath, "utf-8");
-    return JSON.parse(content);
-  } catch {
-    return null;
-  }
-}
-function buildSuggestionFromSearch(searchResults, ambiguityResult, toolName) {
-  if (searchResults.length === 0) {
-    return null;
-  }
-  const topResults = searchResults.slice(0, 3);
-  const sourceSessions = topResults.map((r) => r.id).filter((id) => id.startsWith("session:") || id.startsWith("model:")).map((id) => id.replace(/^(session|model):/, ""));
-  const preferenceHints = topResults.map((r) => r.id.startsWith("user-model") ? "user model preferences" : `session ${r.id.replace(/^(session|model):/, "")}`).join(", ");
-  const content = `Based on past interactions (${preferenceHints}), the user may have preferences relevant to this ${toolName} operation. Ambiguity reason: ${ambiguityResult.reason}.`;
-  const suggestion = {
-    type: ambiguityResult.reason.includes("style") || ambiguityResult.reason.includes("preference") ? "style" : "disambiguation",
-    content,
-    confidence: Math.round(ambiguityResult.score * 100) / 100,
-    sourceSessions
-  };
-  const parseResult = ToMSuggestionSchema.safeParse(suggestion);
-  return parseResult.success ? parseResult.data : null;
-}
-function buildSuggestionFromUserModel(ambiguityResult, toolName) {
-  const userModel = readUserModel("merged");
-  if (!userModel || userModel.preferencesClusters.length === 0) {
-    return null;
-  }
-  const topPrefs = [...userModel.preferencesClusters].sort((a, b) => b.confidence - a.confidence).slice(0, 5);
-  const prefSummary = topPrefs.map((p) => `${p.key}=${p.value} (${Math.round(p.confidence * 100)}%)`).join(", ");
-  const content = `User preferences: ${prefSummary}. Consider these for the current ${toolName} operation. Ambiguity reason: ${ambiguityResult.reason}.`;
-  const suggestion = {
-    type: "preference",
-    content,
-    confidence: Math.round(ambiguityResult.score * 100) / 100,
-    sourceSessions: []
-  };
-  const parseResult = ToMSuggestionSchema.safeParse(suggestion);
-  return parseResult.success ? parseResult.data : null;
-}
-function consultToM(toolName, toolInput, recentMessages, threshold, sessionId = getSessionId(null)) {
-  const hasUserModel = readUserModel("global") !== null;
-  const ambiguityResult = detectAmbiguity({
-    toolName,
-    toolParameters: toolInput,
-    recentUserMessages: recentMessages,
-    threshold,
-    hasUserModel
-  });
-  if (!ambiguityResult.isAmbiguous) {
-    return {
-      consulted: false,
-      ambiguityResult,
-      suggestion: null
-    };
-  }
-  const cachedIndex = loadCachedIndex();
-  let suggestion = null;
-  if (cachedIndex) {
-    const query = [toolName, ...recentMessages].join(" ");
-    const results = search(cachedIndex, query, 3);
-    suggestion = buildSuggestionFromSearch(results, ambiguityResult, toolName);
-  }
-  if (!suggestion) {
-    suggestion = buildSuggestionFromUserModel(ambiguityResult, toolName);
-  }
-  logUsage({
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    operation: "consultation",
-    model: DEFAULT_CONSULTATION_MODEL,
-    tokenCount: 0,
-    sessionId
-  });
-  return {
-    consulted: true,
-    ambiguityResult,
-    suggestion
-  };
-}
-function buildHookOutput(suggestion) {
-  const confidencePercent = Math.round(suggestion.confidence * 100);
+function buildHookOutput(summary) {
   return {
     hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      additionalContext: `ToM ${suggestion.type} suggestion (confidence ${confidencePercent}%): ${suggestion.content}`
+      hookEventName: "SessionStart",
+      additionalContext: summary
     }
   };
 }
@@ -14257,38 +14024,16 @@ async function main(stream = process.stdin) {
   if (!isTomEnabled()) {
     return;
   }
-  const input = await readHookInput(stream);
-  if (!input?.tool_name) {
+  await readHookInput(stream);
+  const model = readUserModel("merged");
+  if (!model) {
     return;
   }
-  const toolName = input.tool_name;
-  const toolInput = toRecord(input.tool_input);
-  const settings = readTomSettings();
-  const sessionId = getSessionId(input);
-  const recentMessages = [];
-  try {
-    const result = consultToM(
-      toolName,
-      toolInput,
-      recentMessages,
-      settings.consultThreshold,
-      sessionId
-    );
-    if (result.consulted && result.suggestion) {
-      process.stdout.write(JSON.stringify(buildHookOutput(result.suggestion)));
-    }
-  } catch (error48) {
-    const errorMessage = error48 instanceof Error ? error48.message : String(error48);
-    logUsage({
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      operation: "consultation-error",
-      model: DEFAULT_CONSULTATION_MODEL,
-      tokenCount: 0,
-      sessionId
-    });
-    process.stderr.write(`ToM pre-tool-use error: ${errorMessage}
-`);
+  const summary = buildModelSummary(model);
+  if (!summary) {
+    return;
   }
+  process.stdout.write(JSON.stringify(buildHookOutput(summary)));
 }
 if (require.main === module) {
   void main();
@@ -14296,8 +14041,6 @@ if (require.main === module) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   buildHookOutput,
-  consultToM,
-  isTomEnabled,
-  main,
-  readTomSettings
+  buildModelSummary,
+  main
 });

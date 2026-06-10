@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { extractParameterShape, captureInteraction, main } from './capture-interaction'
+import { Readable } from 'node:stream'
+import {
+  extractParameterShape,
+  summarizeToolResponse,
+  captureInteraction,
+  main,
+} from './capture-interaction'
 
 describe('extractParameterShape', () => {
   it('extracts string values normally', () => {
@@ -92,31 +98,40 @@ describe('extractParameterShape', () => {
   })
 })
 
+describe('summarizeToolResponse', () => {
+  it('returns strings unchanged', () => {
+    expect(summarizeToolResponse('plain output')).toBe('plain output')
+  })
+
+  it('returns empty string for null and undefined', () => {
+    expect(summarizeToolResponse(null)).toBe('')
+    expect(summarizeToolResponse(undefined)).toBe('')
+  })
+
+  it('stringifies object responses', () => {
+    expect(summarizeToolResponse({ stdout: 'ok', exitCode: 0 })).toBe(
+      '{"stdout":"ok","exitCode":0}'
+    )
+  })
+})
+
 describe('captureInteraction', () => {
   let tempDir: string
   let originalHome: string | undefined
-  let originalSessionId: string | undefined
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tom-capture-test-'))
     originalHome = process.env['HOME']
-    originalSessionId = process.env['CLAUDE_SESSION_ID']
     process.env['HOME'] = tempDir
-    process.env['CLAUDE_SESSION_ID'] = 'test-session-001'
   })
 
   afterEach(() => {
     process.env['HOME'] = originalHome
-    if (originalSessionId !== undefined) {
-      process.env['CLAUDE_SESSION_ID'] = originalSessionId
-    } else {
-      delete process.env['CLAUDE_SESSION_ID']
-    }
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
   it('creates a new session file with first interaction', async () => {
-    captureInteraction('Bash', '{"command":"ls"}', 'file1.ts\nfile2.ts')
+    captureInteraction('test-session-001', 'Bash', { command: 'ls' }, 'file1.ts\nfile2.ts')
 
     // Wait for async write
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -132,10 +147,10 @@ describe('captureInteraction', () => {
   })
 
   it('appends interactions to existing session file', async () => {
-    captureInteraction('Bash', '{"command":"ls"}', 'output1')
+    captureInteraction('test-session-001', 'Bash', { command: 'ls' }, 'output1')
     await new Promise((resolve) => setTimeout(resolve, 100))
 
-    captureInteraction('Read', '{"file_path":"foo.ts"}', 'file contents')
+    captureInteraction('test-session-001', 'Read', { file_path: 'foo.ts' }, 'file contents')
     await new Promise((resolve) => setTimeout(resolve, 100))
 
     const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
@@ -145,24 +160,26 @@ describe('captureInteraction', () => {
     expect(data.interactions[1].toolName).toBe('Read')
   })
 
-  it('redacts secrets in tool input', async () => {
+  it('redacts bare secret values in tool input', async () => {
     captureInteraction(
+      'test-session-001',
       'Bash',
-      '{"command":"curl -H \\"Authorization: Bearer eyJhbGciOiJIUzI1NiJ9\\""}',
+      { token: 'ghp_abc123def456', command: 'git push' },
       'ok'
     )
     await new Promise((resolve) => setTimeout(resolve, 100))
 
     const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    // The command value itself isn't a bare token pattern, so it's kept.
-    // Bare token values are redacted.
-    expect(data.interactions[0].parameterShape).toBeDefined()
+    expect(data.interactions[0].parameterShape).toEqual({
+      token: '[REDACTED]',
+      command: 'git push',
+    })
   })
 
   it('truncates long tool output in outcome summary', async () => {
     const longOutput = 'x'.repeat(300)
-    captureInteraction('Bash', '{"command":"cat big-file"}', longOutput)
+    captureInteraction('test-session-001', 'Bash', { command: 'cat big-file' }, longOutput)
     await new Promise((resolve) => setTimeout(resolve, 100))
 
     const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
@@ -171,43 +188,28 @@ describe('captureInteraction', () => {
     expect(data.interactions[0].outcomeSummary).toBe('[REDACTED]')
   })
 
-  it('handles invalid JSON in tool input gracefully', async () => {
-    captureInteraction('Bash', 'not-valid-json', 'output')
-    await new Promise((resolve) => setTimeout(resolve, 100))
+  it('logs write failures to stderr instead of swallowing them', async () => {
+    // Occupy the session file path with a directory so writeFile fails (EISDIR)
+    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'broken-session.json')
+    fs.mkdirSync(filePath, { recursive: true })
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.interactions[0].parameterShape).toEqual({})
-  })
+    const stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true)
+    try {
+      captureInteraction('broken-session', 'Bash', { command: 'ls' }, 'out')
+      await new Promise((resolve) => setTimeout(resolve, 100))
 
-  it('uses CLAUDE_SESSION_ID for session identification', async () => {
-    process.env['CLAUDE_SESSION_ID'] = 'custom-session-42'
-    captureInteraction('Bash', '{"command":"echo hi"}', 'hi')
-    await new Promise((resolve) => setTimeout(resolve, 100))
-
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'custom-session-42.json')
-    expect(fs.existsSync(filePath)).toBe(true)
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.sessionId).toBe('custom-session-42')
-  })
-
-  it('falls back to PID-based session ID when CLAUDE_SESSION_ID not set', async () => {
-    delete process.env['CLAUDE_SESSION_ID']
-    captureInteraction('Bash', '{"command":"echo hi"}', 'hi')
-    await new Promise((resolve) => setTimeout(resolve, 100))
-
-    const expectedFile = path.join(
-      tempDir,
-      '.claude',
-      'tom',
-      'sessions',
-      `pid-${process.pid}.json`
-    )
-    expect(fs.existsSync(expectedFile)).toBe(true)
+      expect(stderrSpy).toHaveBeenCalledWith(
+        expect.stringContaining('ToM capture-interaction write error:')
+      )
+    } finally {
+      stderrSpy.mockRestore()
+    }
   })
 
   it('sets timestamps on interaction entries', async () => {
-    captureInteraction('Bash', '{"command":"date"}', 'Mon Jan 1')
+    captureInteraction('test-session-001', 'Bash', { command: 'date' }, 'Mon Jan 1')
     await new Promise((resolve) => setTimeout(resolve, 100))
 
     const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
@@ -224,19 +226,29 @@ describe('main', () => {
   let tempDir: string
   let originalHome: string | undefined
   let originalSessionId: string | undefined
-  let originalToolName: string | undefined
-  let originalToolInput: string | undefined
-  let originalToolOutput: string | undefined
+  let originalInternal: string | undefined
+
+  function enableTom(): void {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true })
+    )
+  }
+
+  function payloadStream(payload: Record<string, unknown>): Readable {
+    return Readable.from([JSON.stringify(payload)])
+  }
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tom-main-test-'))
     originalHome = process.env['HOME']
     originalSessionId = process.env['CLAUDE_SESSION_ID']
-    originalToolName = process.env['TOOL_NAME']
-    originalToolInput = process.env['TOOL_INPUT']
-    originalToolOutput = process.env['TOOL_OUTPUT']
+    originalInternal = process.env['TOM_SWE_INTERNAL']
     process.env['HOME'] = tempDir
-    process.env['CLAUDE_SESSION_ID'] = 'test-main-session'
+    delete process.env['CLAUDE_SESSION_ID']
+    delete process.env['TOM_SWE_INTERNAL']
   })
 
   afterEach(() => {
@@ -249,57 +261,124 @@ describe('main', () => {
       }
     }
     restoreEnv('CLAUDE_SESSION_ID', originalSessionId)
-    restoreEnv('TOOL_NAME', originalToolName)
-    restoreEnv('TOOL_INPUT', originalToolInput)
-    restoreEnv('TOOL_OUTPUT', originalToolOutput)
+    restoreEnv('TOM_SWE_INTERNAL', originalInternal)
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
   it('is a no-op when tom.enabled is not true', async () => {
-    process.env['TOOL_NAME'] = 'Bash'
-    process.env['TOOL_INPUT'] = '{"command":"ls"}'
-    process.env['TOOL_OUTPUT'] = 'output'
-
-    main()
+    await main(payloadStream({
+      session_id: 'disabled-session',
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+      tool_response: 'output',
+    }))
     await new Promise((resolve) => setTimeout(resolve, 100))
 
     const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
     expect(fs.existsSync(sessionsDir)).toBe(false)
   })
 
-  it('captures interaction when tom.enabled is true', async () => {
-    // Create config with enabled = true
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    fs.mkdirSync(tomDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(tomDir, 'config.json'),
-      JSON.stringify({ enabled: true })
-    )
+  it('captures interaction from the stdin payload when tom.enabled is true', async () => {
+    enableTom()
 
-    process.env['TOOL_NAME'] = 'Read'
-    process.env['TOOL_INPUT'] = '{"file_path":"src/index.ts"}'
-    process.env['TOOL_OUTPUT'] = 'console.log("hello")'
-
-    main()
+    await main(payloadStream({
+      session_id: 'stdin-session',
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: 'src/index.ts' },
+      tool_response: 'file contents here',
+    }))
     await new Promise((resolve) => setTimeout(resolve, 100))
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-main-session.json')
+    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'stdin-session.json')
     expect(fs.existsSync(filePath)).toBe(true)
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    expect(data.sessionId).toBe('stdin-session')
     expect(data.interactions[0].toolName).toBe('Read')
+    expect(data.interactions[0].parameterShape).toEqual({ file_path: 'src/index.ts' })
+    expect(data.interactions[0].outcomeSummary).toBe('file contents here')
   })
 
-  it('is a no-op when TOOL_NAME is empty', async () => {
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    fs.mkdirSync(tomDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(tomDir, 'config.json'),
-      JSON.stringify({ enabled: true })
-    )
+  it('stringifies object tool_response into the outcome summary', async () => {
+    enableTom()
 
-    process.env['TOOL_NAME'] = ''
+    await main(payloadStream({
+      session_id: 'object-response',
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'true' },
+      tool_response: { stdout: 'ok', exitCode: 0 },
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
 
-    main()
+    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'object-response.json')
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    expect(data.interactions[0].outcomeSummary).toBe('{"stdout":"ok","exitCode":0}')
+  })
+
+  it('prefers payload session_id over CLAUDE_SESSION_ID', async () => {
+    enableTom()
+    process.env['CLAUDE_SESSION_ID'] = 'env-session'
+
+    await main(payloadStream({
+      session_id: 'payload-session',
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+      tool_response: 'out',
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
+    expect(fs.existsSync(path.join(sessionsDir, 'payload-session.json'))).toBe(true)
+    expect(fs.existsSync(path.join(sessionsDir, 'env-session.json'))).toBe(false)
+  })
+
+  it('is a no-op on empty stdin', async () => {
+    enableTom()
+
+    await main(Readable.from(['']))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
+    expect(fs.existsSync(sessionsDir)).toBe(false)
+  })
+
+  it('is a no-op on malformed stdin JSON', async () => {
+    enableTom()
+
+    await main(Readable.from(['{broken json']))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
+    expect(fs.existsSync(sessionsDir)).toBe(false)
+  })
+
+  it('is a no-op when the payload has no tool_name', async () => {
+    enableTom()
+
+    await main(payloadStream({
+      session_id: 'no-tool',
+      hook_event_name: 'PostToolUse',
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
+    expect(fs.existsSync(sessionsDir)).toBe(false)
+  })
+
+  it('exits silently when TOM_SWE_INTERNAL is "1"', async () => {
+    enableTom()
+    process.env['TOM_SWE_INTERNAL'] = '1'
+
+    await main(payloadStream({
+      session_id: 'internal-session',
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+      tool_response: 'out',
+    }))
     await new Promise((resolve) => setTimeout(resolve, 100))
 
     const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')

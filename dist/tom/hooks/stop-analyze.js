@@ -31,17 +31,14 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var stop_analyze_exports = {};
 __export(stop_analyze_exports, {
   analyzeCompletedSession: () => analyzeCompletedSession,
-  extractSessionModel: () => extractSessionModel,
-  getSessionId: () => getSessionId,
   isTomEnabled: () => isTomEnabled,
-  logUsage: () => logUsage,
   main: () => main,
   readRawSessionLog: () => readRawSessionLog
 });
 module.exports = __toCommonJS(stop_analyze_exports);
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
-var os2 = __toESM(require("node:os"));
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -810,10 +807,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path5) {
+  if (!path5)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path5.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1196,11 +1193,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path5, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path5);
     return iss;
   });
 }
@@ -1383,7 +1380,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path4 = []) => {
+  const processError = (error49, path5 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1393,7 +1390,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path5, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1425,8 +1422,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path4) {
+  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path5) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13403,13 +13400,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path4 = ref.slice(1).split("/").filter(Boolean);
-  if (path4.length === 0) {
+  const path5 = ref.slice(1).split("/").filter(Boolean);
+  if (path5.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path4[0] === defsKey) {
-    const key = path4[1];
+  if (path5[0] === defsKey) {
+    const key = path5[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -14130,83 +14127,7 @@ function buildIndex(documents) {
   };
 }
 
-// tom/agent/tools.ts
-function listJsonFiles(dirPath) {
-  try {
-    const files = fs2.readdirSync(dirPath);
-    return files.filter((f) => f.endsWith(".json"));
-  } catch {
-    return [];
-  }
-}
-function buildMemoryIndex(scope = "global") {
-  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const documents = [];
-  const sessionsDir = path2.join(tomDir, "sessions");
-  const sessionFiles = listJsonFiles(sessionsDir);
-  for (const file2 of sessionFiles) {
-    const sessionId = file2.replace(".json", "");
-    const session = readSessionLog(sessionId, scope);
-    if (session) {
-      const content = session.interactions.map((i) => `${i.toolName} ${Object.keys(i.parameterShape).join(" ")} ${i.outcomeSummary}`).join(" ");
-      documents.push({ id: `session:${sessionId}`, content, tier: 1 });
-    }
-  }
-  const modelsDir = path2.join(tomDir, "session-models");
-  const modelFiles = listJsonFiles(modelsDir);
-  for (const file2 of modelFiles) {
-    const sessionId = file2.replace(".json", "");
-    const model = readSessionModel(sessionId, scope);
-    if (model) {
-      const content = [
-        model.intent,
-        ...model.interactionPatterns,
-        ...model.codingPreferences
-      ].join(" ");
-      documents.push({ id: `model:${sessionId}`, content, tier: 2 });
-    }
-  }
-  const userModel = readUserModel(scope === "global" ? "global" : "project");
-  if (userModel) {
-    const content = [
-      userModel.interactionStyleSummary,
-      userModel.codingStyleSummary,
-      ...userModel.preferencesClusters.map((p) => `${p.category} ${p.key} ${p.value}`)
-    ].join(" ");
-    documents.push({ id: "user-model", content, tier: 3 });
-  }
-  return buildIndex(documents);
-}
-
-// tom/hooks/stop-analyze.ts
-var DEFAULT_MODEL = "haiku";
-function isTomEnabled() {
-  try {
-    const configPath = path3.join(os2.homedir(), ".claude", "tom", "config.json");
-    const content = fs3.readFileSync(configPath, "utf-8");
-    const config2 = JSON.parse(content);
-    return config2["enabled"] === true;
-  } catch {
-    return false;
-  }
-}
-function getSessionId() {
-  return process.env["CLAUDE_SESSION_ID"] ?? `pid-${process.pid}`;
-}
-function getSessionFilePath(sessionId) {
-  return path3.join(globalTomDir(), "sessions", `${sessionId}.json`);
-}
-function readRawSessionLog(sessionId) {
-  try {
-    const filePath = getSessionFilePath(sessionId);
-    const content = fs3.readFileSync(filePath, "utf-8");
-    const raw = JSON.parse(content);
-    const result = SessionLogSchema.safeParse(raw);
-    return result.success ? result.data : null;
-  } catch {
-    return null;
-  }
-}
+// tom/session-extract.ts
 function extractSessionModel(sessionLog) {
   const toolCounts = {};
   const codingPrefs = [];
@@ -14266,11 +14187,88 @@ function deriveIntent(topTool, interactionCount) {
   const scope = interactionCount > 20 ? "extensive" : interactionCount > 10 ? "moderate" : "brief";
   return `${scope} ${baseIntent}`;
 }
-function getUsageLogPath() {
-  return path3.join(globalTomDir(), "usage.log");
+
+// tom/agent/tools.ts
+function listJsonFiles(dirPath) {
+  try {
+    const files = fs2.readdirSync(dirPath);
+    return files.filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+}
+function buildMemoryIndex(scope = "global") {
+  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
+  const documents = [];
+  const sessionsDir = path2.join(tomDir, "sessions");
+  const sessionFiles = listJsonFiles(sessionsDir);
+  for (const file2 of sessionFiles) {
+    const sessionId = file2.replace(".json", "");
+    const session = readSessionLog(sessionId, scope);
+    if (session) {
+      const content = session.interactions.map((i) => `${i.toolName} ${Object.keys(i.parameterShape).join(" ")} ${i.outcomeSummary}`).join(" ");
+      documents.push({ id: `session:${sessionId}`, content, tier: 1 });
+    }
+  }
+  const modelsDir = path2.join(tomDir, "session-models");
+  const modelFiles = listJsonFiles(modelsDir);
+  for (const file2 of modelFiles) {
+    const sessionId = file2.replace(".json", "");
+    const model = readSessionModel(sessionId, scope);
+    if (model) {
+      const content = [
+        model.intent,
+        ...model.interactionPatterns,
+        ...model.codingPreferences
+      ].join(" ");
+      documents.push({ id: `model:${sessionId}`, content, tier: 2 });
+    }
+  }
+  const userModel = readUserModel(scope === "global" ? "global" : "project");
+  if (userModel) {
+    const content = [
+      userModel.interactionStyleSummary,
+      userModel.codingStyleSummary,
+      ...userModel.preferencesClusters.map((p) => `${p.category} ${p.key} ${p.value}`)
+    ].join(" ");
+    documents.push({ id: "user-model", content, tier: 3 });
+  }
+  return buildIndex(documents);
+}
+
+// tom/routing.ts
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os2 = __toESM(require("node:os"));
+var DEFAULT_MODELS = {
+  memoryUpdate: "haiku",
+  consultation: "sonnet",
+  profileInit: "sonnet"
+};
+var OPERATION_CONFIG_KEY = {
+  memoryUpdate: "memoryUpdate",
+  consultation: "consultation",
+  profileInit: "consultation"
+};
+function getModelForOperation(operation) {
+  const defaultModel = DEFAULT_MODELS[operation];
+  const configKey = OPERATION_CONFIG_KEY[operation];
+  try {
+    const configPath = path3.join(os2.homedir(), ".claude", "tom", "config.json");
+    const content = fs3.readFileSync(configPath, "utf-8");
+    const config2 = JSON.parse(content);
+    const models = config2["models"];
+    const configuredModel = models?.[configKey];
+    if (typeof configuredModel === "string" && configuredModel.length > 0) {
+      return configuredModel;
+    }
+    return defaultModel;
+  } catch {
+    return defaultModel;
+  }
 }
 function logUsage(entry) {
-  const logPath = getUsageLogPath();
+  const logPath = path3.join(globalTomDir(), "usage.log");
   const dir = path3.dirname(logPath);
   if (!fs3.existsSync(dir)) {
     fs3.mkdirSync(dir, { recursive: true });
@@ -14278,7 +14276,266 @@ function logUsage(entry) {
   const line = JSON.stringify(entry) + "\n";
   fs3.appendFileSync(logPath, line, "utf-8");
 }
-function analyzeCompletedSession(sessionId) {
+
+// tom/llm-analyze.ts
+var import_node_child_process = require("node:child_process");
+var LLM_ANALYSIS_TIMEOUT_MS = 45e3;
+function buildAnalysisPrompt(sessionLog) {
+  return [
+    "You are analyzing a Claude Code session log to extract the user's session model.",
+    "Return ONLY a single JSON object \u2014 no prose, no markdown fences \u2014 matching exactly this shape:",
+    "{",
+    `  "sessionId": "${sessionLog.sessionId}",`,
+    '  "intent": "<string: concise description of what the user was trying to accomplish>",',
+    '  "interactionPatterns": ["<string: recurring interaction or workflow patterns observed>"],',
+    '  "codingPreferences": ["<string: coding preferences inferable from the session>"],',
+    '  "satisfactionSignals": {',
+    '    "frustration": <boolean: did the user hit repeated errors or friction?>,',
+    '    "satisfaction": <boolean: did the session conclude successfully?>,',
+    '    "urgency": "<one of exactly: low | medium | high>"',
+    "  }",
+    "}",
+    'No additional fields are allowed. "urgency" must be exactly "low", "medium", or "high".',
+    "",
+    "Session log (JSON):",
+    JSON.stringify(sessionLog)
+  ].join("\n");
+}
+var DETAIL_MAX_LENGTH = 500;
+function truncateDetail(text) {
+  return text.length > DETAIL_MAX_LENGTH ? `${text.slice(0, DETAIL_MAX_LENGTH)}\u2026` : text;
+}
+function extractFirstJsonObject(text) {
+  const start = text.indexOf("{");
+  if (start === -1) {
+    return null;
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+function extractTokensUsed(usage) {
+  if (typeof usage !== "object" || usage === null) {
+    return null;
+  }
+  const record2 = usage;
+  const input = record2["input_tokens"];
+  const output = record2["output_tokens"];
+  const inputTokens = typeof input === "number" ? input : null;
+  const outputTokens = typeof output === "number" ? output : null;
+  if (inputTokens === null && outputTokens === null) {
+    return null;
+  }
+  return (inputTokens ?? 0) + (outputTokens ?? 0);
+}
+function parseAnalysisOutput(stdout, expectedSessionId) {
+  let modelText = stdout;
+  let tokensUsed = null;
+  try {
+    const wrapper = JSON.parse(stdout);
+    if (typeof wrapper === "object" && wrapper !== null) {
+      const record2 = wrapper;
+      if (typeof record2["result"] === "string") {
+        modelText = record2["result"];
+      }
+      tokensUsed = extractTokensUsed(record2["usage"]);
+    }
+  } catch {
+  }
+  const jsonBlock = extractFirstJsonObject(modelText);
+  if (jsonBlock === null) {
+    return {
+      ok: false,
+      reason: "no-json-found",
+      detail: truncateDetail(`no JSON object in output: ${modelText}`)
+    };
+  }
+  let candidate;
+  try {
+    candidate = JSON.parse(jsonBlock);
+  } catch (error48) {
+    const message = error48 instanceof Error ? error48.message : String(error48);
+    return {
+      ok: false,
+      reason: "invalid-json",
+      detail: truncateDetail(message)
+    };
+  }
+  const parsed = SessionModelSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      reason: "schema-mismatch",
+      detail: truncateDetail(parsed.error.message)
+    };
+  }
+  return {
+    ok: true,
+    model: { ...parsed.data, sessionId: expectedSessionId },
+    tokensUsed,
+    path: "llm"
+  };
+}
+async function analyzeSessionWithLlm(sessionLog, model, options = {}) {
+  const timeoutMs = options.timeoutMs ?? LLM_ANALYSIS_TIMEOUT_MS;
+  const prompt = buildAnalysisPrompt(sessionLog);
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const settle = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
+    let child;
+    try {
+      child = (0, import_node_child_process.spawn)(
+        "claude",
+        ["-p", prompt, "--model", model, "--output-format", "json"],
+        {
+          env: { ...process.env, TOM_SWE_INTERNAL: "1" },
+          stdio: ["ignore", "pipe", "pipe"]
+        }
+      );
+    } catch (error48) {
+      const message = error48 instanceof Error ? error48.message : String(error48);
+      settle({ ok: false, reason: "spawn-error", detail: truncateDetail(message) });
+      return;
+    }
+    timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      settle({
+        ok: false,
+        reason: "timeout",
+        detail: `claude did not respond within ${timeoutMs}ms`
+      });
+    }, timeoutMs);
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error48) => {
+      settle({ ok: false, reason: "spawn-error", detail: truncateDetail(error48.message) });
+    });
+    child.on("close", (code) => {
+      if (code !== 0) {
+        settle({
+          ok: false,
+          reason: "non-zero-exit",
+          detail: truncateDetail(`exit code ${code ?? "null"}: ${stderr}`)
+        });
+        return;
+      }
+      settle(parseAnalysisOutput(stdout, sessionLog.sessionId));
+    });
+  });
+}
+
+// tom/hooks/hook-input.ts
+var HookInputSchema = external_exports.looseObject({
+  session_id: external_exports.string().optional(),
+  hook_event_name: external_exports.string().optional(),
+  tool_name: external_exports.string().optional(),
+  tool_input: external_exports.unknown().optional(),
+  tool_response: external_exports.unknown().optional(),
+  stop_hook_active: external_exports.boolean().optional(),
+  source: external_exports.string().optional()
+});
+async function readAll(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf-8") : chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+async function readHookInput(stream = process.stdin) {
+  let raw;
+  try {
+    raw = await readAll(stream);
+  } catch {
+    return null;
+  }
+  if (raw.trim() === "") {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const result = HookInputSchema.safeParse(parsed);
+  return result.success ? result.data : null;
+}
+function getSessionId(input) {
+  return input?.session_id ?? process.env["CLAUDE_SESSION_ID"] ?? `pid-${process.pid}`;
+}
+function isInternalInvocation() {
+  return process.env["TOM_SWE_INTERNAL"] === "1";
+}
+
+// tom/hooks/stop-analyze.ts
+var NO_MODEL = "none";
+function isTomEnabled() {
+  try {
+    const configPath = path4.join(os3.homedir(), ".claude", "tom", "config.json");
+    const content = fs4.readFileSync(configPath, "utf-8");
+    const config2 = JSON.parse(content);
+    return config2["enabled"] === true;
+  } catch {
+    return false;
+  }
+}
+function getSessionFilePath(sessionId) {
+  return path4.join(globalTomDir(), "sessions", `${sessionId}.json`);
+}
+function readRawSessionLog(sessionId) {
+  try {
+    const filePath = getSessionFilePath(sessionId);
+    const content = fs4.readFileSync(filePath, "utf-8");
+    const raw = JSON.parse(content);
+    const result = SessionLogSchema.safeParse(raw);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+async function analyzeCompletedSession(sessionId) {
   const sessionLog = readRawSessionLog(sessionId);
   if (!sessionLog) {
     return {
@@ -14290,7 +14547,29 @@ function analyzeCompletedSession(sessionId) {
       error: `Session log not found for ${sessionId}`
     };
   }
-  const sessionModel = extractSessionModel(sessionLog);
+  const configuredModel = getModelForOperation("memoryUpdate");
+  const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel);
+  let sessionModel;
+  if (llmResult.ok) {
+    sessionModel = llmResult.model;
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "session-analysis",
+      model: configuredModel,
+      tokenCount: llmResult.tokensUsed ?? 0,
+      sessionId
+    });
+  } else {
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "session-analysis-fallback",
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      reason: `${llmResult.reason}: ${llmResult.detail}`
+    });
+    sessionModel = extractSessionModel(sessionLog);
+  }
   writeSessionModel(sessionModel, "global");
   const currentUserModel = readUserModel("global");
   const emptyModel = {
@@ -14305,19 +14584,12 @@ function analyzeCompletedSession(sessionId) {
   );
   writeUserModel(updatedUserModel, "global");
   const index = buildMemoryIndex("global");
-  const indexPath = path3.join(globalTomDir(), "bm25-index.json");
-  const indexDir = path3.dirname(indexPath);
-  if (!fs3.existsSync(indexDir)) {
-    fs3.mkdirSync(indexDir, { recursive: true });
+  const indexPath = path4.join(globalTomDir(), "bm25-index.json");
+  const indexDir = path4.dirname(indexPath);
+  if (!fs4.existsSync(indexDir)) {
+    fs4.mkdirSync(indexDir, { recursive: true });
   }
-  fs3.writeFileSync(indexPath, JSON.stringify(index), "utf-8");
-  logUsage({
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    operation: "session-analysis",
-    model: DEFAULT_MODEL,
-    tokenCount: 0,
-    sessionId
-  });
+  fs4.writeFileSync(indexPath, JSON.stringify(index), "utf-8");
   return {
     success: true,
     sessionId,
@@ -14326,39 +14598,41 @@ function analyzeCompletedSession(sessionId) {
     indexRebuilt: true
   };
 }
-function main() {
+async function main(stream = process.stdin) {
+  if (isInternalInvocation()) {
+    return;
+  }
   if (!isTomEnabled()) {
     return;
   }
-  const sessionId = getSessionId();
-  if (!sessionId) {
+  const input = await readHookInput(stream);
+  if (input?.stop_hook_active === true) {
     return;
   }
+  const sessionId = getSessionId(input);
   try {
-    analyzeCompletedSession(sessionId);
+    await analyzeCompletedSession(sessionId);
   } catch (error48) {
     const errorMessage = error48 instanceof Error ? error48.message : String(error48);
     logUsage({
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
       operation: "session-analysis-error",
-      model: DEFAULT_MODEL,
+      model: NO_MODEL,
       tokenCount: 0,
-      sessionId
+      sessionId,
+      reason: errorMessage
     });
     process.stderr.write(`ToM stop-analyze error: ${errorMessage}
 `);
   }
 }
 if (require.main === module) {
-  main();
+  void main();
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   analyzeCompletedSession,
-  extractSessionModel,
-  getSessionId,
   isTomEnabled,
-  logUsage,
   main,
   readRawSessionLog
 });

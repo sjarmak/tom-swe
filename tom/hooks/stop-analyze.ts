@@ -2,7 +2,9 @@
  * Stop hook TypeScript helper: Analyzes the completed session and updates memory.
  *
  * 1. Reads current session's Tier 1 log
- * 2. Extracts Tier 2 session model (heuristic analysis)
+ * 2. Extracts Tier 2 session model via headless claude (configured memoryUpdate
+ *    model); falls back to heuristic extraction on any LLM failure, logging the
+ *    fallback and its reason to tom/usage.log
  * 3. Aggregates new session model into Tier 3 user model
  * 4. Rebuilds BM25 search index
  * 5. Logs completion status to tom/usage.log
@@ -17,10 +19,15 @@ import { SessionLogSchema } from '../schemas.js'
 import { readUserModel, writeSessionModel, writeUserModel, globalTomDir } from '../memory-io.js'
 import { aggregateSessionIntoModel } from '../aggregation.js'
 import { buildMemoryIndex } from '../agent/tools.js'
+import { getModelForOperation, logUsage } from '../routing.js'
+import { analyzeSessionWithLlm } from '../llm-analyze.js'
+import { extractSessionModel } from '../session-extract.js'
+import { readHookInput, getSessionId, isInternalInvocation } from './hook-input.js'
 
 // --- Configuration ---
 
-const DEFAULT_MODEL = 'haiku'
+/** Logged when no model was spawned (heuristic fallback / error paths). */
+const NO_MODEL = 'none'
 
 // --- Helpers ---
 
@@ -33,10 +40,6 @@ export function isTomEnabled(): boolean {
   } catch {
     return false
   }
-}
-
-export function getSessionId(): string {
-  return process.env['CLAUDE_SESSION_ID'] ?? `pid-${process.pid}`
 }
 
 function getSessionFilePath(sessionId: string): string {
@@ -60,110 +63,6 @@ export function readRawSessionLog(sessionId: string): SessionLog | null {
   }
 }
 
-/**
- * Heuristic extraction of SessionModel from SessionLog.
- * Mirrors the logic in agent/tools.ts extractSessionModel.
- */
-export function extractSessionModel(sessionLog: SessionLog): SessionModel {
-  const toolCounts: Record<string, number> = {}
-  const codingPrefs: string[] = []
-  const patterns: string[] = []
-  let frustrationCount = 0
-  let satisfactionCount = 0
-
-  for (const interaction of sessionLog.interactions) {
-    toolCounts[interaction.toolName] = (toolCounts[interaction.toolName] ?? 0) + 1
-
-    const paramKeys = Object.keys(interaction.parameterShape)
-    if (paramKeys.includes('language') || paramKeys.includes('file_path')) {
-      const fileExt = interaction.parameterShape['file_path'] ?? ''
-      if (fileExt && !codingPrefs.includes(fileExt)) {
-        codingPrefs.push(fileExt)
-      }
-    }
-
-    const outcome = interaction.outcomeSummary.toLowerCase()
-    if (outcome.includes('error') || outcome.includes('fail') || outcome.includes('retry')) {
-      frustrationCount++
-    }
-    if (outcome.includes('success') || outcome.includes('complete') || outcome.includes('pass')) {
-      satisfactionCount++
-    }
-  }
-
-  const sortedTools = Object.entries(toolCounts)
-    .sort(([, a], [, b]) => b - a)
-    .map(([name]) => name)
-
-  const topTool = sortedTools[0] ?? 'unknown'
-  const intent = deriveIntent(topTool, sessionLog.interactions.length)
-
-  for (const toolName of sortedTools.slice(0, 5)) {
-    patterns.push(`uses-${toolName}`)
-  }
-
-  const totalInteractions = sessionLog.interactions.length
-  const frustration = totalInteractions > 0 && frustrationCount / totalInteractions > 0.3
-  const satisfaction = totalInteractions > 0 && satisfactionCount / totalInteractions > 0.5
-
-  const urgency = totalInteractions > 20 ? 'high' as const
-    : totalInteractions > 10 ? 'medium' as const
-    : 'low' as const
-
-  return {
-    sessionId: sessionLog.sessionId,
-    intent,
-    interactionPatterns: patterns,
-    codingPreferences: codingPrefs,
-    satisfactionSignals: {
-      frustration,
-      satisfaction,
-      urgency,
-    },
-  }
-}
-
-function deriveIntent(topTool: string, interactionCount: number): string {
-  const toolIntentMap: Record<string, string> = {
-    Edit: 'code modification',
-    Write: 'file creation',
-    Read: 'code exploration',
-    Bash: 'command execution',
-    Grep: 'code search',
-    Glob: 'file search',
-    Task: 'complex task delegation',
-  }
-
-  const baseIntent = toolIntentMap[topTool] ?? `${topTool} usage`
-  const scope = interactionCount > 20 ? 'extensive' : interactionCount > 10 ? 'moderate' : 'brief'
-
-  return `${scope} ${baseIntent}`
-}
-
-// --- Usage Logging ---
-
-interface UsageLogEntry {
-  readonly timestamp: string
-  readonly operation: string
-  readonly model: string
-  readonly tokenCount: number
-  readonly sessionId: string
-}
-
-function getUsageLogPath(): string {
-  return path.join(globalTomDir(), 'usage.log')
-}
-
-export function logUsage(entry: UsageLogEntry): void {
-  const logPath = getUsageLogPath()
-  const dir = path.dirname(logPath)
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
-  }
-  const line = JSON.stringify(entry) + '\n'
-  fs.appendFileSync(logPath, line, 'utf-8')
-}
-
 // --- Main Analysis Pipeline ---
 
 export interface AnalysisResult {
@@ -178,12 +77,12 @@ export interface AnalysisResult {
 /**
  * Runs the full session analysis pipeline:
  * 1. Read Tier 1 session log
- * 2. Extract Tier 2 session model
+ * 2. Extract Tier 2 session model (LLM first, heuristic fallback) and log
+ *    which path ran to usage.log
  * 3. Aggregate into Tier 3 user model
  * 4. Rebuild BM25 index
- * 5. Log completion
  */
-export function analyzeCompletedSession(sessionId: string): AnalysisResult {
+export async function analyzeCompletedSession(sessionId: string): Promise<AnalysisResult> {
   // Step 1: Read Tier 1 session log
   const sessionLog = readRawSessionLog(sessionId)
   if (!sessionLog) {
@@ -197,8 +96,33 @@ export function analyzeCompletedSession(sessionId: string): AnalysisResult {
     }
   }
 
-  // Step 2: Extract Tier 2 session model
-  const sessionModel = extractSessionModel(sessionLog)
+  // Step 2: Extract Tier 2 session model — headless claude with the
+  // configured memoryUpdate model, falling back loudly to the heuristic
+  // extractor when the LLM path fails for any reason.
+  const configuredModel = getModelForOperation('memoryUpdate')
+  const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel)
+
+  let sessionModel: SessionModel
+  if (llmResult.ok) {
+    sessionModel = llmResult.model
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'session-analysis',
+      model: configuredModel,
+      tokenCount: llmResult.tokensUsed ?? 0,
+      sessionId,
+    })
+  } else {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'session-analysis-fallback',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      reason: `${llmResult.reason}: ${llmResult.detail}`,
+    })
+    sessionModel = extractSessionModel(sessionLog)
+  }
   writeSessionModel(sessionModel, 'global')
 
   // Step 3: Aggregate into Tier 3 user model
@@ -225,15 +149,6 @@ export function analyzeCompletedSession(sessionId: string): AnalysisResult {
   }
   fs.writeFileSync(indexPath, JSON.stringify(index), 'utf-8')
 
-  // Step 5: Log completion
-  logUsage({
-    timestamp: new Date().toISOString(),
-    operation: 'session-analysis',
-    model: DEFAULT_MODEL,
-    tokenCount: 0,
-    sessionId,
-  })
-
   return {
     success: true,
     sessionId,
@@ -245,26 +160,37 @@ export function analyzeCompletedSession(sessionId: string): AnalysisResult {
 
 // --- CLI Entry Point ---
 
-export function main(): void {
+export async function main(
+  stream: NodeJS.ReadableStream = process.stdin
+): Promise<void> {
+  if (isInternalInvocation()) {
+    return
+  }
   if (!isTomEnabled()) {
     return
   }
 
-  const sessionId = getSessionId()
-  if (!sessionId) {
+  const input = await readHookInput(stream)
+
+  // Loop guard: when Claude Code re-fires Stop after a stop hook already
+  // ran in this turn, exit immediately without output.
+  if (input?.stop_hook_active === true) {
     return
   }
 
+  const sessionId = getSessionId(input)
+
   try {
-    analyzeCompletedSession(sessionId)
+    await analyzeCompletedSession(sessionId)
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     logUsage({
       timestamp: new Date().toISOString(),
       operation: 'session-analysis-error',
-      model: DEFAULT_MODEL,
+      model: NO_MODEL,
       tokenCount: 0,
       sessionId,
+      reason: errorMessage,
     })
     // Write error to stderr but don't throw — this runs in background
     process.stderr.write(`ToM stop-analyze error: ${errorMessage}\n`)
@@ -273,5 +199,5 @@ export function main(): void {
 
 // Run if executed directly
 if (require.main === module) {
-  main()
+  void main()
 }

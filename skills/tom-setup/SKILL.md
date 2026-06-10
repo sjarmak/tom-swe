@@ -7,7 +7,7 @@ description: Initialize ToM configuration for first-time use. Creates ~/.claude/
 
 Set up Theory of Mind for first-time use.
 
-This creates the ToM config file at `~/.claude/tom/config.json` with sensible defaults and enables the system.
+This creates the ToM config file at `~/.claude/tom/config.json` with sensible defaults and enables the system. Hooks are registered automatically by the plugin's `hooks/hooks.json` — setup does not modify `~/.claude/settings.json`.
 
 Execute:
 ```bash

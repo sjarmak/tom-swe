@@ -1,12 +1,14 @@
 /**
  * /tom-setup skill — creates ~/.claude/tom/config.json with default
  * configuration if it doesn't already exist.
+ *
+ * Hook registration is handled entirely by the plugin's hooks/hooks.json
+ * (via ${CLAUDE_PLUGIN_ROOT}); setup only creates the config file.
  */
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { registerHooks, formatResult as formatHookResult } from '../hooks/register-hooks'
 
 // --- Types ---
 
@@ -14,8 +16,6 @@ interface SetupResult {
   readonly created: boolean
   readonly alreadyExists: boolean
   readonly configPath: string
-  readonly hooksRegistered?: readonly string[]
-  readonly hooksAlreadyPresent?: readonly string[]
   readonly error?: string
 }
 
@@ -34,27 +34,18 @@ const DEFAULT_CONFIG = {
 
 // --- Setup ---
 
-function getTomDir(): string {
-  return path.join(os.homedir(), '.claude', 'tom')
-}
-
 function getConfigPath(): string {
-  return path.join(getTomDir(), 'config.json')
+  return path.join(os.homedir(), '.claude', 'tom', 'config.json')
 }
 
 export function setup(): SetupResult {
   const configPath = getConfigPath()
 
   if (fs.existsSync(configPath)) {
-    // Always ensure hooks are registered, even if config already exists
-    const hookResult = registerHooks()
-
     return {
       created: false,
       alreadyExists: true,
       configPath,
-      hooksRegistered: hookResult.added,
-      hooksAlreadyPresent: hookResult.alreadyPresent,
     }
   }
 
@@ -70,15 +61,10 @@ export function setup(): SetupResult {
       'utf-8'
     )
 
-    // Register hooks in settings.json
-    const hookResult = registerHooks()
-
     return {
       created: true,
       alreadyExists: false,
       configPath,
-      hooksRegistered: hookResult.added,
-      hooksAlreadyPresent: hookResult.alreadyPresent,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -102,10 +88,6 @@ export function formatSetupResult(result: SetupResult): string {
   if (result.alreadyExists) {
     lines.push(`Config already exists at \`${result.configPath}\`.`)
     lines.push('')
-    if (result.hooksRegistered && result.hooksRegistered.length > 0) {
-      lines.push(`Registered missing hooks: ${result.hooksRegistered.join(', ')}`)
-      lines.push('')
-    }
     lines.push('ToM is already configured. Use `/tom-status` to see current state.')
     return lines.join('\n')
   }
@@ -124,10 +106,8 @@ export function formatSetupResult(result: SetupResult): string {
     lines.push(`- Consultation model: ${DEFAULT_CONFIG.models.consultation}`)
     lines.push(`- Preference decay: ${DEFAULT_CONFIG.preferenceDecayDays} days`)
     lines.push(`- Max sessions retained: ${DEFAULT_CONFIG.maxSessionsRetained}`)
-    if (result.hooksRegistered && result.hooksRegistered.length > 0) {
-      lines.push(`Registered hooks: ${result.hooksRegistered.join(', ')}`)
-    }
     lines.push('')
+    lines.push('Hooks are registered automatically by the plugin (hooks/hooks.json).')
     lines.push('ToM will begin learning your preferences in your next session.')
   }
 

@@ -16,11 +16,14 @@ ToM-SWE observes how you use Claude Code and builds a model of your preferences 
 | **Tier 2** | Session models (intent, patterns, satisfaction signals) | `~/.claude/tom/session-models/` |
 | **Tier 3** | Aggregated user model (confidence-scored preference clusters) | `~/.claude/tom/user-model.json` |
 
-### Three hooks drive the system
+### Four hooks drive the system
 
+- **SessionStart** — injects a compact summary of your learned user model (confident preferences plus interaction/coding style) as additional context at the start of each session
 - **PostToolUse** — captures interaction metadata after each tool call (async, non-blocking)
-- **PreToolUse** — detects ambiguity in the current tool call and consults your preference model for relevant context (sync)
-- **Stop** — analyzes the completed session, extracts a session model, aggregates into the user model, and rebuilds the search index (async)
+- **PreToolUse** — runs only on `Write`, `Edit`, and `NotebookEdit` tool calls; detects ambiguity and injects relevant preference context via `hookSpecificOutput.additionalContext`. Consultation is local (BM25 search over stored memory plus the user model) — no model is spawned and no permission decision is made (sync)
+- **Stop** — analyzes the completed session with a headless `claude` invocation using the configured `memoryUpdate` model; on any LLM failure it falls back to a heuristic extractor and logs the fallback with its reason to `~/.claude/tom/usage.log`. The resulting session model is aggregated into the user model and the search index is rebuilt (async)
+
+Hooks are registered by the plugin's `hooks/hooks.json` — installation requires no changes to `~/.claude/settings.json`.
 
 ## Installation
 
@@ -89,8 +92,8 @@ Edit `~/.claude/tom/config.json`:
 |-------|---------|-------------|
 | `enabled` | `false` | Master switch for all ToM hooks |
 | `consultThreshold` | `"medium"` | Ambiguity sensitivity: `"low"` (consults often), `"medium"`, `"high"` (consults rarely) |
-| `models.memoryUpdate` | `"haiku"` | Model used for session analysis |
-| `models.consultation` | `"sonnet"` | Model used for preference consultation |
+| `models.memoryUpdate` | `"haiku"` | Model used by the Stop hook for headless session analysis |
+| `models.consultation` | `"sonnet"` | Reserved for future use — preference consultation currently runs locally without spawning a model |
 | `preferenceDecayDays` | `30` | Days before low-confidence preferences expire |
 | `maxSessionsRetained` | `100` | Maximum session logs kept on disk |
 
@@ -123,7 +126,7 @@ All skills are namespaced under `tom-swe:` when installed as a plugin.
 ```bash
 npm install
 npm run typecheck    # Type checking
-npm test             # Run tests (394 tests across 20 files)
+npm test             # Run tests
 npm run build        # Bundle with esbuild (output in dist/)
 ```
 

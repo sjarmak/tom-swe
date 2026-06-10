@@ -182,6 +182,24 @@ describe('routing', () => {
       expect(second['operation']).toBe('session-analysis')
     })
 
+    it('records optional sessionId and reason fields when provided', () => {
+      logUsage({
+        timestamp: '2026-01-15T10:00:00.000Z',
+        operation: 'session-analysis-fallback',
+        model: 'none',
+        tokenCount: 0,
+        sessionId: 'session-42',
+        reason: 'timeout: claude did not respond',
+      })
+
+      const logPath = path.join(tmpDir, '.claude', 'tom', 'usage.log')
+      const content = fs.readFileSync(logPath, 'utf-8')
+      const parsed = JSON.parse(content.trim()) as Record<string, unknown>
+
+      expect(parsed['sessionId']).toBe('session-42')
+      expect(parsed['reason']).toBe('timeout: claude did not respond')
+    })
+
     it('includes all required fields in log entry', () => {
       logUsage({
         timestamp: '2026-01-15T10:00:00.000Z',

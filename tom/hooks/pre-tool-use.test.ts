@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import { Readable } from 'node:stream'
 import {
   isTomEnabled,
   readTomSettings,
-  getSessionId,
-  logUsage,
   consultToM,
+  buildHookOutput,
   main,
 } from './pre-tool-use'
 
@@ -172,89 +172,6 @@ describe('readTomSettings', () => {
     enableTom(tempDir, { consultThreshold: 'low' })
     const settings = readTomSettings()
     expect(settings.consultThreshold).toBe('low')
-  })
-})
-
-describe('getSessionId', () => {
-  let originalSessionId: string | undefined
-
-  beforeEach(() => {
-    originalSessionId = process.env['CLAUDE_SESSION_ID']
-  })
-
-  afterEach(() => {
-    if (originalSessionId !== undefined) {
-      process.env['CLAUDE_SESSION_ID'] = originalSessionId
-    } else {
-      delete process.env['CLAUDE_SESSION_ID']
-    }
-  })
-
-  it('returns CLAUDE_SESSION_ID when set', () => {
-    process.env['CLAUDE_SESSION_ID'] = 'pre-tool-session-123'
-    expect(getSessionId()).toBe('pre-tool-session-123')
-  })
-
-  it('falls back to pid-based ID when env var not set', () => {
-    delete process.env['CLAUDE_SESSION_ID']
-    expect(getSessionId()).toBe(`pid-${process.pid}`)
-  })
-})
-
-describe('logUsage', () => {
-  let originalHome: string | undefined
-  let tempDir: string
-
-  beforeEach(() => {
-    originalHome = process.env['HOME']
-    tempDir = createTempDir()
-    process.env['HOME'] = tempDir
-  })
-
-  afterEach(() => {
-    process.env['HOME'] = originalHome
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  })
-
-  it('creates usage.log with entry', () => {
-    logUsage({
-      timestamp: '2026-02-02T12:00:00.000Z',
-      operation: 'consultation',
-      model: 'sonnet',
-      tokenCount: 0,
-      sessionId: 'test-session',
-    })
-
-    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
-    expect(fs.existsSync(logPath)).toBe(true)
-
-    const content = fs.readFileSync(logPath, 'utf-8')
-    const entry = JSON.parse(content.trim())
-    expect(entry.operation).toBe('consultation')
-    expect(entry.model).toBe('sonnet')
-  })
-
-  it('appends entries to existing log', () => {
-    logUsage({
-      timestamp: '2026-02-02T12:00:00.000Z',
-      operation: 'first',
-      model: 'sonnet',
-      tokenCount: 0,
-      sessionId: 'session-1',
-    })
-    logUsage({
-      timestamp: '2026-02-02T12:01:00.000Z',
-      operation: 'second',
-      model: 'sonnet',
-      tokenCount: 100,
-      sessionId: 'session-2',
-    })
-
-    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
-    const lines = fs.readFileSync(logPath, 'utf-8').trim().split('\n')
-    expect(lines).toHaveLength(2)
-    expect(JSON.parse(lines[0] ?? '{}').operation).toBe('first')
-    expect(JSON.parse(lines[1] ?? '{}').operation).toBe('second')
   })
 })
 
@@ -440,24 +357,59 @@ describe('consultToM', () => {
   })
 })
 
+describe('buildHookOutput', () => {
+  it('produces the documented PreToolUse hookSpecificOutput shape', () => {
+    const output = buildHookOutput({
+      type: 'preference',
+      content: 'User preferences: language=typescript (90%).',
+      confidence: 0.85,
+      sourceSessions: [],
+    })
+
+    expect(output.hookSpecificOutput.hookEventName).toBe('PreToolUse')
+    expect(output.hookSpecificOutput.additionalContext).toBe(
+      'ToM preference suggestion (confidence 85%): User preferences: language=typescript (90%).'
+    )
+  })
+
+  it('never includes a permissionDecision field', () => {
+    const output = buildHookOutput({
+      type: 'style',
+      content: 'Prefers concise code.',
+      confidence: 0.5,
+      sourceSessions: ['session-1'],
+    })
+
+    expect(Object.keys(output)).toEqual(['hookSpecificOutput'])
+    expect(Object.keys(output.hookSpecificOutput)).toEqual([
+      'hookEventName',
+      'additionalContext',
+    ])
+  })
+})
+
 describe('main', () => {
   let originalHome: string | undefined
   let originalCwd: string
   let originalSessionId: string | undefined
-  let originalToolName: string | undefined
-  let originalToolInput: string | undefined
+  let originalInternal: string | undefined
   let tempDir: string
   let stdoutData: string
+
+  function payloadStream(payload: Record<string, unknown>): Readable {
+    return Readable.from([JSON.stringify(payload)])
+  }
 
   beforeEach(() => {
     originalHome = process.env['HOME']
     originalCwd = process.cwd()
     originalSessionId = process.env['CLAUDE_SESSION_ID']
-    originalToolName = process.env['TOOL_NAME']
-    originalToolInput = process.env['TOOL_INPUT']
+    originalInternal = process.env['TOM_SWE_INTERNAL']
     tempDir = createTempDir()
     process.env['HOME'] = tempDir
     process.chdir(tempDir)
+    delete process.env['CLAUDE_SESSION_ID']
+    delete process.env['TOM_SWE_INTERNAL']
     stdoutData = ''
     const originalWrite = process.stdout.write.bind(process.stdout)
     process.stdout.write = ((chunk: string | Buffer) => {
@@ -471,21 +423,15 @@ describe('main', () => {
   afterEach(() => {
     process.env['HOME'] = originalHome
     process.chdir(originalCwd)
-    if (originalSessionId !== undefined) {
-      process.env['CLAUDE_SESSION_ID'] = originalSessionId
-    } else {
-      delete process.env['CLAUDE_SESSION_ID']
+    const restoreEnv = (key: string, original: string | undefined) => {
+      if (original !== undefined) {
+        process.env[key] = original
+      } else {
+        delete process.env[key]
+      }
     }
-    if (originalToolName !== undefined) {
-      process.env['TOOL_NAME'] = originalToolName
-    } else {
-      delete process.env['TOOL_NAME']
-    }
-    if (originalToolInput !== undefined) {
-      process.env['TOOL_INPUT'] = originalToolInput
-    } else {
-      delete process.env['TOOL_INPUT']
-    }
+    restoreEnv('CLAUDE_SESSION_ID', originalSessionId)
+    restoreEnv('TOM_SWE_INTERNAL', originalInternal)
     // Restore stdout
     if ((process.stdout as any).__originalWrite) {
       process.stdout.write = (process.stdout as any).__originalWrite
@@ -494,33 +440,67 @@ describe('main', () => {
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
-  it('is a no-op when tom is not enabled', () => {
-    process.env['TOOL_NAME'] = 'Edit'
-    main()
+  it('is a no-op when tom is not enabled', async () => {
+    await main(payloadStream({
+      session_id: 's1',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Edit',
+      tool_input: {},
+    }))
     expect(stdoutData).toBe('')
     const tomDir = path.join(tempDir, '.claude', 'tom')
     expect(fs.existsSync(path.join(tomDir, 'usage.log'))).toBe(false)
   })
 
-  it('is a no-op when tool name is empty', () => {
+  it('is a no-op when the payload has no tool_name', async () => {
     enableTom(tempDir)
-    delete process.env['TOOL_NAME']
-    main()
+    await main(payloadStream({ session_id: 's1', hook_event_name: 'PreToolUse' }))
     expect(stdoutData).toBe('')
   })
 
-  it('exits immediately when ambiguity is below threshold', () => {
+  it('is a no-op on empty stdin', async () => {
     enableTom(tempDir)
-    process.env['TOOL_NAME'] = 'Read'
-    process.env['TOOL_INPUT'] = JSON.stringify({ file_path: '/src/app.ts' })
+    await main(Readable.from(['']))
+    expect(stdoutData).toBe('')
+  })
 
-    main()
+  it('is a no-op on malformed stdin JSON', async () => {
+    enableTom(tempDir)
+    await main(Readable.from(['{not json']))
+    expect(stdoutData).toBe('')
+  })
+
+  it('exits silently when TOM_SWE_INTERNAL is "1"', async () => {
+    enableTom(tempDir, { consultThreshold: 'low' })
+    process.env['TOM_SWE_INTERNAL'] = '1'
+
+    await main(payloadStream({
+      session_id: 'internal-session',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Edit',
+      tool_input: {},
+    }))
+
+    expect(stdoutData).toBe('')
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    expect(fs.existsSync(path.join(tomDir, 'usage.log'))).toBe(false)
+  })
+
+  it('outputs nothing when ambiguity is below threshold', async () => {
+    enableTom(tempDir)
+
+    await main(payloadStream({
+      session_id: 's1',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: '/src/app.ts' },
+    }))
 
     // No output (not ambiguous with default medium threshold and a file path)
     expect(stdoutData).toBe('')
   })
 
-  it('outputs suggestion when ambiguity exceeds threshold with user model', () => {
+  it('writes hookSpecificOutput context injection when a suggestion is produced', async () => {
     enableTom(tempDir, { consultThreshold: 'low' })
     writeUserModel(tempDir, [{
       category: 'codingPreferences',
@@ -531,21 +511,25 @@ describe('main', () => {
       sessionCount: 5,
     }])
 
-    process.env['TOOL_NAME'] = 'Edit'
-    process.env['TOOL_INPUT'] = '{}'
-    process.env['CLAUDE_SESSION_ID'] = 'main-test-session'
+    await main(payloadStream({
+      session_id: 'main-test-session',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Edit',
+      tool_input: {},
+    }))
 
-    main()
-
-    // Should have output a suggestion
     expect(stdoutData.length).toBeGreaterThan(0)
-    const suggestion = JSON.parse(stdoutData)
-    expect(suggestion.type).toBeDefined()
-    expect(suggestion.content).toBeDefined()
-    expect(suggestion.confidence).toBeDefined()
+    const output = JSON.parse(stdoutData)
+    expect(output.hookSpecificOutput.hookEventName).toBe('PreToolUse')
+    expect(typeof output.hookSpecificOutput.additionalContext).toBe('string')
+    expect(output.hookSpecificOutput.additionalContext).toContain('ToM')
+    expect(output.hookSpecificOutput.additionalContext).toContain('confidence')
+    expect(output.hookSpecificOutput.additionalContext).toContain('language=typescript')
+    expect(output.hookSpecificOutput.permissionDecision).toBeUndefined()
+    expect(output.permissionDecision).toBeUndefined()
   })
 
-  it('logs consultation to usage.log when consulted', () => {
+  it('logs consultation with the payload session_id', async () => {
     enableTom(tempDir, { consultThreshold: 'low' })
     writeUserModel(tempDir, [{
       category: 'codingPreferences',
@@ -555,12 +539,14 @@ describe('main', () => {
       lastUpdated: '2026-02-02T10:00:00.000Z',
       sessionCount: 3,
     }])
+    process.env['CLAUDE_SESSION_ID'] = 'env-session'
 
-    process.env['TOOL_NAME'] = 'Write'
-    process.env['TOOL_INPUT'] = '{}'
-    process.env['CLAUDE_SESSION_ID'] = 'log-test-session'
-
-    main()
+    await main(payloadStream({
+      session_id: 'log-test-session',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Write',
+      tool_input: {},
+    }))
 
     const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
     expect(fs.existsSync(logPath)).toBe(true)
@@ -571,12 +557,15 @@ describe('main', () => {
     expect(entry.sessionId).toBe('log-test-session')
   })
 
-  it('handles malformed TOOL_INPUT gracefully', () => {
+  it('handles non-object tool_input gracefully', async () => {
     enableTom(tempDir, { consultThreshold: 'low' })
-    process.env['TOOL_NAME'] = 'Edit'
-    process.env['TOOL_INPUT'] = 'not json'
 
     // Should not throw
-    main()
+    await main(payloadStream({
+      session_id: 's1',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Edit',
+      tool_input: 'not an object',
+    }))
   })
 })

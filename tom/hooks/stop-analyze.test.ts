@@ -1,16 +1,33 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import { Readable } from 'node:stream'
 import {
   isTomEnabled,
-  getSessionId,
   readRawSessionLog,
-  extractSessionModel,
-  logUsage,
   analyzeCompletedSession,
   main,
 } from './stop-analyze'
+import { analyzeSessionWithLlm } from '../llm-analyze'
+
+// Never spawn the real claude CLI in tests: the LLM path is mocked and
+// defaults to failure so existing pipeline tests exercise the heuristic
+// fallback. Individual tests override the resolved value.
+vi.mock('../llm-analyze', () => ({
+  analyzeSessionWithLlm: vi.fn(),
+}))
+
+const mockAnalyzeWithLlm = vi.mocked(analyzeSessionWithLlm)
+
+beforeEach(() => {
+  mockAnalyzeWithLlm.mockReset()
+  mockAnalyzeWithLlm.mockResolvedValue({
+    ok: false,
+    reason: 'spawn-error',
+    detail: 'mocked failure',
+  })
+})
 
 // --- Test Helpers ---
 
@@ -93,32 +110,6 @@ describe('isTomEnabled', () => {
   })
 })
 
-describe('getSessionId', () => {
-  let originalSessionId: string | undefined
-
-  beforeEach(() => {
-    originalSessionId = process.env['CLAUDE_SESSION_ID']
-  })
-
-  afterEach(() => {
-    if (originalSessionId !== undefined) {
-      process.env['CLAUDE_SESSION_ID'] = originalSessionId
-    } else {
-      delete process.env['CLAUDE_SESSION_ID']
-    }
-  })
-
-  it('returns CLAUDE_SESSION_ID when set', () => {
-    process.env['CLAUDE_SESSION_ID'] = 'test-session-123'
-    expect(getSessionId()).toBe('test-session-123')
-  })
-
-  it('falls back to pid-based ID when env var not set', () => {
-    delete process.env['CLAUDE_SESSION_ID']
-    expect(getSessionId()).toBe(`pid-${process.pid}`)
-  })
-})
-
 describe('readRawSessionLog', () => {
   let originalHome: string | undefined
   let tempDir: string
@@ -175,173 +166,6 @@ describe('readRawSessionLog', () => {
   })
 })
 
-describe('extractSessionModel', () => {
-  it('extracts intent from most-used tool', () => {
-    const log = createSessionLog('session-1', [
-      createInteraction('Edit', {}, 'success'),
-      createInteraction('Edit', {}, 'success'),
-      createInteraction('Read', {}, 'success'),
-    ])
-    const model = extractSessionModel(log as any)
-    expect(model.sessionId).toBe('session-1')
-    expect(model.intent).toBe('brief code modification')
-  })
-
-  it('extracts interaction patterns from top tools', () => {
-    const log = createSessionLog('session-2', [
-      createInteraction('Edit', {}, 'success'),
-      createInteraction('Grep', {}, 'success'),
-      createInteraction('Read', {}, 'success'),
-    ])
-    const model = extractSessionModel(log as any)
-    expect(model.interactionPatterns).toContain('uses-Edit')
-    expect(model.interactionPatterns).toContain('uses-Grep')
-    expect(model.interactionPatterns).toContain('uses-Read')
-  })
-
-  it('detects frustration from error outcomes', () => {
-    const interactions = Array.from({ length: 10 }, (_, i) =>
-      createInteraction('Bash', {}, i < 4 ? 'error: command failed' : 'success')
-    )
-    const log = createSessionLog('session-3', interactions)
-    const model = extractSessionModel(log as any)
-    expect(model.satisfactionSignals.frustration).toBe(true)
-  })
-
-  it('detects satisfaction from success outcomes', () => {
-    const interactions = Array.from({ length: 10 }, () =>
-      createInteraction('Edit', {}, 'success: completed')
-    )
-    const log = createSessionLog('session-4', interactions)
-    const model = extractSessionModel(log as any)
-    expect(model.satisfactionSignals.satisfaction).toBe(true)
-  })
-
-  it('sets urgency based on interaction count', () => {
-    const fewInteractions = Array.from({ length: 5 }, () =>
-      createInteraction('Read', {}, 'success')
-    )
-    const log1 = createSessionLog('session-5', fewInteractions)
-    expect(extractSessionModel(log1 as any).satisfactionSignals.urgency).toBe('low')
-
-    const mediumInteractions = Array.from({ length: 15 }, () =>
-      createInteraction('Read', {}, 'success')
-    )
-    const log2 = createSessionLog('session-6', mediumInteractions)
-    expect(extractSessionModel(log2 as any).satisfactionSignals.urgency).toBe('medium')
-
-    const manyInteractions = Array.from({ length: 25 }, () =>
-      createInteraction('Read', {}, 'success')
-    )
-    const log3 = createSessionLog('session-7', manyInteractions)
-    expect(extractSessionModel(log3 as any).satisfactionSignals.urgency).toBe('high')
-  })
-
-  it('extracts coding preferences from file_path parameters', () => {
-    const log = createSessionLog('session-8', [
-      createInteraction('Edit', { file_path: 'src/app.ts' }, 'success'),
-      createInteraction('Edit', { file_path: 'src/utils.ts' }, 'success'),
-    ])
-    const model = extractSessionModel(log as any)
-    expect(model.codingPreferences).toContain('src/app.ts')
-    expect(model.codingPreferences).toContain('src/utils.ts')
-  })
-
-  it('handles empty session log', () => {
-    const log = createSessionLog('empty-session', [])
-    const model = extractSessionModel(log as any)
-    expect(model.sessionId).toBe('empty-session')
-    expect(model.intent).toBe('brief unknown usage')
-    expect(model.interactionPatterns).toEqual([])
-    expect(model.codingPreferences).toEqual([])
-    expect(model.satisfactionSignals.frustration).toBe(false)
-    expect(model.satisfactionSignals.satisfaction).toBe(false)
-    expect(model.satisfactionSignals.urgency).toBe('low')
-  })
-
-  it('returns a new object (immutable)', () => {
-    const log = createSessionLog('immutable-test', [
-      createInteraction('Edit', {}, 'success'),
-    ])
-    const model1 = extractSessionModel(log as any)
-    const model2 = extractSessionModel(log as any)
-    expect(model1).not.toBe(model2)
-    expect(model1).toEqual(model2)
-  })
-})
-
-describe('logUsage', () => {
-  let originalHome: string | undefined
-  let tempDir: string
-
-  beforeEach(() => {
-    originalHome = process.env['HOME']
-    tempDir = createTempDir()
-    process.env['HOME'] = tempDir
-  })
-
-  afterEach(() => {
-    process.env['HOME'] = originalHome
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  })
-
-  it('creates usage.log file with entry', () => {
-    logUsage({
-      timestamp: '2026-02-02T12:00:00.000Z',
-      operation: 'session-analysis',
-      model: 'haiku',
-      tokenCount: 0,
-      sessionId: 'test-session',
-    })
-
-    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
-    expect(fs.existsSync(logPath)).toBe(true)
-
-    const content = fs.readFileSync(logPath, 'utf-8')
-    const entry = JSON.parse(content.trim())
-    expect(entry.operation).toBe('session-analysis')
-    expect(entry.model).toBe('haiku')
-  })
-
-  it('appends entries to existing log', () => {
-    logUsage({
-      timestamp: '2026-02-02T12:00:00.000Z',
-      operation: 'first',
-      model: 'haiku',
-      tokenCount: 0,
-      sessionId: 'session-1',
-    })
-    logUsage({
-      timestamp: '2026-02-02T12:01:00.000Z',
-      operation: 'second',
-      model: 'sonnet',
-      tokenCount: 100,
-      sessionId: 'session-2',
-    })
-
-    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
-    const lines = fs.readFileSync(logPath, 'utf-8').trim().split('\n')
-    expect(lines).toHaveLength(2)
-    expect(JSON.parse(lines[0] ?? '{}').operation).toBe('first')
-    expect(JSON.parse(lines[1] ?? '{}').operation).toBe('second')
-  })
-
-  it('creates directory structure if missing', () => {
-    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
-    expect(fs.existsSync(path.dirname(logPath))).toBe(false)
-
-    logUsage({
-      timestamp: '2026-02-02T12:00:00.000Z',
-      operation: 'test',
-      model: 'haiku',
-      tokenCount: 0,
-      sessionId: 'test',
-    })
-
-    expect(fs.existsSync(logPath)).toBe(true)
-  })
-})
-
 describe('analyzeCompletedSession', () => {
   let originalHome: string | undefined
   let originalCwd: string
@@ -361,8 +185,8 @@ describe('analyzeCompletedSession', () => {
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
-  it('returns failure when session log does not exist', () => {
-    const result = analyzeCompletedSession('nonexistent')
+  it('returns failure when session log does not exist', async () => {
+    const result = await analyzeCompletedSession('nonexistent')
     expect(result.success).toBe(false)
     expect(result.sessionModel).toBeNull()
     expect(result.userModelUpdated).toBe(false)
@@ -370,7 +194,7 @@ describe('analyzeCompletedSession', () => {
     expect(result.error).toContain('nonexistent')
   })
 
-  it('analyzes session and produces Tier 2 model', () => {
+  it('analyzes session and produces Tier 2 model', async () => {
     const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
     fs.mkdirSync(sessionsDir, { recursive: true })
     const log = createSessionLog('analyze-test', [
@@ -383,14 +207,14 @@ describe('analyzeCompletedSession', () => {
       'utf-8'
     )
 
-    const result = analyzeCompletedSession('analyze-test')
+    const result = await analyzeCompletedSession('analyze-test')
     expect(result.success).toBe(true)
     expect(result.sessionModel).not.toBeNull()
     expect(result.sessionModel?.sessionId).toBe('analyze-test')
     expect(result.sessionModel?.interactionPatterns).toContain('uses-Edit')
   })
 
-  it('writes Tier 2 session model to disk', () => {
+  it('writes Tier 2 session model to disk', async () => {
     const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
     fs.mkdirSync(sessionsDir, { recursive: true })
     const log = createSessionLog('write-test', [
@@ -402,7 +226,7 @@ describe('analyzeCompletedSession', () => {
       'utf-8'
     )
 
-    analyzeCompletedSession('write-test')
+    await analyzeCompletedSession('write-test')
 
     const modelPath = path.join(tempDir, '.claude', 'tom', 'session-models', 'write-test.json')
     expect(fs.existsSync(modelPath)).toBe(true)
@@ -410,7 +234,7 @@ describe('analyzeCompletedSession', () => {
     expect(model.sessionId).toBe('write-test')
   })
 
-  it('updates Tier 3 user model', () => {
+  it('updates Tier 3 user model', async () => {
     const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
     fs.mkdirSync(sessionsDir, { recursive: true })
     const log = createSessionLog('user-model-test', [
@@ -422,7 +246,7 @@ describe('analyzeCompletedSession', () => {
       'utf-8'
     )
 
-    const result = analyzeCompletedSession('user-model-test')
+    const result = await analyzeCompletedSession('user-model-test')
     expect(result.userModelUpdated).toBe(true)
 
     const userModelPath = path.join(tempDir, '.claude', 'tom', 'user-model.json')
@@ -431,7 +255,7 @@ describe('analyzeCompletedSession', () => {
     expect(userModel.preferencesClusters.length).toBeGreaterThan(0)
   })
 
-  it('rebuilds BM25 index', () => {
+  it('rebuilds BM25 index', async () => {
     const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
     fs.mkdirSync(sessionsDir, { recursive: true })
     const log = createSessionLog('index-test', [
@@ -443,37 +267,152 @@ describe('analyzeCompletedSession', () => {
       'utf-8'
     )
 
-    const result = analyzeCompletedSession('index-test')
+    const result = await analyzeCompletedSession('index-test')
     expect(result.indexRebuilt).toBe(true)
 
     const indexPath = path.join(tempDir, '.claude', 'tom', 'bm25-index.json')
     expect(fs.existsSync(indexPath)).toBe(true)
   })
 
-  it('logs completion to usage.log', () => {
+  function writeSessionFile(sessionId: string): void {
     const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
     fs.mkdirSync(sessionsDir, { recursive: true })
-    const log = createSessionLog('log-test', [
+    const log = createSessionLog(sessionId, [
       createInteraction('Read', {}, 'success'),
     ])
     fs.writeFileSync(
-      path.join(sessionsDir, 'log-test.json'),
+      path.join(sessionsDir, `${sessionId}.json`),
       JSON.stringify(log),
       'utf-8'
     )
+  }
 
-    analyzeCompletedSession('log-test')
-
+  function readUsageEntries(): Array<Record<string, unknown>> {
     const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
-    expect(fs.existsSync(logPath)).toBe(true)
-    const content = fs.readFileSync(logPath, 'utf-8').trim()
-    const entry = JSON.parse(content)
-    expect(entry.operation).toBe('session-analysis')
-    expect(entry.model).toBe('haiku')
-    expect(entry.sessionId).toBe('log-test')
+    return fs.readFileSync(logPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+  }
+
+  it('logs the fallback with its reason when the LLM path fails', async () => {
+    writeSessionFile('log-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'timeout',
+      detail: 'claude did not respond within 45000ms',
+    })
+
+    const result = await analyzeCompletedSession('log-test')
+    expect(result.success).toBe(true)
+
+    const entries = readUsageEntries()
+    expect(entries).toHaveLength(1)
+    const entry = entries[0] ?? {}
+    expect(entry['operation']).toBe('session-analysis-fallback')
+    expect(entry['model']).toBe('none')
+    expect(entry['tokenCount']).toBe(0)
+    expect(entry['sessionId']).toBe('log-test')
+    expect(entry['reason']).toContain('timeout')
+    expect(entry['reason']).toContain('45000ms')
   })
 
-  it('aggregates into existing user model', () => {
+  it('uses heuristic extraction on LLM failure', async () => {
+    writeSessionFile('heuristic-fallback-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'schema-mismatch',
+      detail: 'urgency invalid',
+    })
+
+    const result = await analyzeCompletedSession('heuristic-fallback-test')
+
+    expect(result.success).toBe(true)
+    expect(result.sessionModel?.interactionPatterns).toContain('uses-Read')
+  })
+
+  it('uses the LLM session model and logs real model and tokens on success', async () => {
+    writeSessionFile('llm-success-test')
+    const llmModel = {
+      sessionId: 'llm-success-test',
+      intent: 'deep refactor of the session pipeline',
+      interactionPatterns: ['reads-before-editing'],
+      codingPreferences: ['typescript strict mode'],
+      satisfactionSignals: {
+        frustration: false,
+        satisfaction: true,
+        urgency: 'medium' as const,
+      },
+    }
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: llmModel,
+      tokensUsed: 1234,
+      path: 'llm',
+    })
+
+    const result = await analyzeCompletedSession('llm-success-test')
+
+    expect(result.success).toBe(true)
+    expect(result.sessionModel).toEqual(llmModel)
+
+    // The persisted Tier 2 model is the LLM-derived one, not the heuristic one
+    const modelPath = path.join(
+      tempDir, '.claude', 'tom', 'session-models', 'llm-success-test.json'
+    )
+    expect(JSON.parse(fs.readFileSync(modelPath, 'utf-8'))).toEqual(llmModel)
+
+    const entries = readUsageEntries()
+    expect(entries).toHaveLength(1)
+    const entry = entries[0] ?? {}
+    expect(entry['operation']).toBe('session-analysis')
+    expect(entry['model']).toBe('haiku')
+    expect(entry['tokenCount']).toBe(1234)
+    expect(entry['sessionId']).toBe('llm-success-test')
+  })
+
+  it('passes the configured memoryUpdate model to the LLM analyzer', async () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true, models: { memoryUpdate: 'claude-sonnet-4-6' } }),
+      'utf-8'
+    )
+    writeSessionFile('configured-model-test')
+
+    await analyzeCompletedSession('configured-model-test')
+
+    expect(mockAnalyzeWithLlm).toHaveBeenCalledTimes(1)
+    const [logArg, modelArg] = mockAnalyzeWithLlm.mock.calls[0] ?? []
+    expect(logArg?.sessionId).toBe('configured-model-test')
+    expect(modelArg).toBe('claude-sonnet-4-6')
+  })
+
+  it('logs tokenCount 0 when LLM token usage is unavailable', async () => {
+    writeSessionFile('no-tokens-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'no-tokens-test',
+        intent: 'quick read',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+      },
+      tokensUsed: null,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('no-tokens-test')
+
+    const entries = readUsageEntries()
+    const entry = entries[0] ?? {}
+    expect(entry['operation']).toBe('session-analysis')
+    expect(entry['tokenCount']).toBe(0)
+  })
+
+  it('aggregates into existing user model', async () => {
     const tomDir = path.join(tempDir, '.claude', 'tom')
     const sessionsDir = path.join(tomDir, 'sessions')
     fs.mkdirSync(sessionsDir, { recursive: true })
@@ -510,7 +449,7 @@ describe('analyzeCompletedSession', () => {
       'utf-8'
     )
 
-    analyzeCompletedSession('aggregate-test')
+    await analyzeCompletedSession('aggregate-test')
 
     const userModelPath = path.join(tomDir, 'user-model.json')
     const updatedModel = JSON.parse(fs.readFileSync(userModelPath, 'utf-8'))
@@ -526,38 +465,10 @@ describe('main', () => {
   let originalHome: string | undefined
   let originalCwd: string
   let originalSessionId: string | undefined
+  let originalInternal: string | undefined
   let tempDir: string
 
-  beforeEach(() => {
-    originalHome = process.env['HOME']
-    originalCwd = process.cwd()
-    originalSessionId = process.env['CLAUDE_SESSION_ID']
-    tempDir = createTempDir()
-    process.env['HOME'] = tempDir
-    process.chdir(tempDir)
-  })
-
-  afterEach(() => {
-    process.env['HOME'] = originalHome
-    process.chdir(originalCwd)
-    if (originalSessionId !== undefined) {
-      process.env['CLAUDE_SESSION_ID'] = originalSessionId
-    } else {
-      delete process.env['CLAUDE_SESSION_ID']
-    }
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  })
-
-  it('is a no-op when tom is not enabled', () => {
-    // No settings file → tom.enabled is false
-    main()
-    // Should not create any files
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    expect(fs.existsSync(path.join(tomDir, 'usage.log'))).toBe(false)
-  })
-
-  it('runs analysis when tom is enabled and session exists', () => {
-    // Enable tom
+  function enableTom(): void {
     const tomDir = path.join(tempDir, '.claude', 'tom')
     fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
@@ -565,10 +476,9 @@ describe('main', () => {
       JSON.stringify({ enabled: true }),
       'utf-8'
     )
+  }
 
-    // Create session
-    const sessionId = 'main-test-session'
-    process.env['CLAUDE_SESSION_ID'] = sessionId
+  function writeSession(sessionId: string): void {
     const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
     fs.mkdirSync(sessionsDir, { recursive: true })
     const log = createSessionLog(sessionId, [
@@ -579,8 +489,57 @@ describe('main', () => {
       JSON.stringify(log),
       'utf-8'
     )
+  }
 
-    main()
+  function payloadStream(payload: Record<string, unknown>): Readable {
+    return Readable.from([JSON.stringify(payload)])
+  }
+
+  beforeEach(() => {
+    originalHome = process.env['HOME']
+    originalCwd = process.cwd()
+    originalSessionId = process.env['CLAUDE_SESSION_ID']
+    originalInternal = process.env['TOM_SWE_INTERNAL']
+    tempDir = createTempDir()
+    process.env['HOME'] = tempDir
+    process.chdir(tempDir)
+    delete process.env['CLAUDE_SESSION_ID']
+    delete process.env['TOM_SWE_INTERNAL']
+  })
+
+  afterEach(() => {
+    process.env['HOME'] = originalHome
+    process.chdir(originalCwd)
+    const restoreEnv = (key: string, original: string | undefined) => {
+      if (original !== undefined) {
+        process.env[key] = original
+      } else {
+        delete process.env[key]
+      }
+    }
+    restoreEnv('CLAUDE_SESSION_ID', originalSessionId)
+    restoreEnv('TOM_SWE_INTERNAL', originalInternal)
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('is a no-op when tom is not enabled', async () => {
+    // No settings file → tom.enabled is false
+    await main(payloadStream({ session_id: 's1', hook_event_name: 'Stop' }))
+    // Should not create any files
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    expect(fs.existsSync(path.join(tomDir, 'usage.log'))).toBe(false)
+  })
+
+  it('runs analysis for the payload session_id when tom is enabled', async () => {
+    enableTom()
+    const sessionId = 'main-test-session'
+    writeSession(sessionId)
+
+    await main(payloadStream({
+      session_id: sessionId,
+      hook_event_name: 'Stop',
+      stop_hook_active: false,
+    }))
 
     // Should have created session model
     const modelPath = path.join(tempDir, '.claude', 'tom', 'session-models', `${sessionId}.json`)
@@ -595,19 +554,77 @@ describe('main', () => {
     expect(fs.existsSync(logPath)).toBe(true)
   })
 
-  it('logs error to usage.log when session does not exist but tom is enabled', () => {
-    // Enable tom
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    fs.mkdirSync(tomDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(tomDir, 'config.json'),
-      JSON.stringify({ enabled: true }),
-      'utf-8'
-    )
+  it('prefers payload session_id over CLAUDE_SESSION_ID', async () => {
+    enableTom()
+    process.env['CLAUDE_SESSION_ID'] = 'env-session'
+    writeSession('payload-session')
 
-    process.env['CLAUDE_SESSION_ID'] = 'nonexistent-session'
+    await main(payloadStream({
+      session_id: 'payload-session',
+      hook_event_name: 'Stop',
+    }))
+
+    const modelPath = path.join(
+      tempDir, '.claude', 'tom', 'session-models', 'payload-session.json'
+    )
+    expect(fs.existsSync(modelPath)).toBe(true)
+  })
+
+  it('falls back to CLAUDE_SESSION_ID on empty stdin', async () => {
+    enableTom()
+    process.env['CLAUDE_SESSION_ID'] = 'env-session'
+    writeSession('env-session')
+
+    await main(Readable.from(['']))
+
+    const modelPath = path.join(
+      tempDir, '.claude', 'tom', 'session-models', 'env-session.json'
+    )
+    expect(fs.existsSync(modelPath)).toBe(true)
+  })
+
+  it('exits immediately without output when stop_hook_active is true', async () => {
+    enableTom()
+    const sessionId = 'loop-guard-session'
+    writeSession(sessionId)
+
+    await main(payloadStream({
+      session_id: sessionId,
+      hook_event_name: 'Stop',
+      stop_hook_active: true,
+    }))
+
+    // No analysis artifacts should exist
+    const modelPath = path.join(tempDir, '.claude', 'tom', 'session-models', `${sessionId}.json`)
+    expect(fs.existsSync(modelPath)).toBe(false)
+    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
+    expect(fs.existsSync(logPath)).toBe(false)
+  })
+
+  it('exits silently when TOM_SWE_INTERNAL is "1"', async () => {
+    enableTom()
+    process.env['TOM_SWE_INTERNAL'] = '1'
+    const sessionId = 'internal-session'
+    writeSession(sessionId)
+
+    await main(payloadStream({
+      session_id: sessionId,
+      hook_event_name: 'Stop',
+    }))
+
+    const modelPath = path.join(tempDir, '.claude', 'tom', 'session-models', `${sessionId}.json`)
+    expect(fs.existsSync(modelPath)).toBe(false)
+    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
+    expect(fs.existsSync(logPath)).toBe(false)
+  })
+
+  it('does not throw when the session log does not exist', async () => {
+    enableTom()
 
     // main() should not throw even on missing session
-    main()
+    await main(payloadStream({
+      session_id: 'nonexistent-session',
+      hook_event_name: 'Stop',
+    }))
   })
 })
