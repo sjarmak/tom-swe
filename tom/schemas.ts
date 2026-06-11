@@ -17,6 +17,11 @@ export const SessionLogSchema = z.strictObject({
   // Redacted user prompt text captured by the UserPromptSubmit hook.
   // Optional for backward compatibility with logs written before capture.
   userMessages: z.array(z.string()).optional(),
+  // Join fields for the external work-audit graph: session working
+  // directory and git branch, set once per session by the capture hooks.
+  // A bead/work-item id is mechanically resolvable from these.
+  cwd: z.string().optional(),
+  gitBranch: z.string().optional(),
 })
 
 // --- Tier 2: Session Model ---

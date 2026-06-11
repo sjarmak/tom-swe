@@ -1,8 +1,9 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import { execFileSync } from 'node:child_process'
 
-import { readHookInput, getSessionId, isInternalInvocation, toRecord } from './hook-input.js'
+import { readHookInput, getSessionId, isExcludedSession, toRecord } from './hook-input.js'
 import { sanitizeValue, MAX_VALUE_LENGTH } from '../secrets.js'
 import { isTomEnabled } from '../config.js'
 
@@ -84,11 +85,31 @@ function ensureDirectoryExists(filePath: string): void {
 
 // --- Main Capture Function ---
 
+/**
+ * Resolves the current git branch for the join fields. Runs in the async
+ * (backgrounded) capture path only, and only when the session log doesn't
+ * already carry a branch — one subprocess per session, not per tool call.
+ */
+function resolveGitBranch(cwd: string): string | undefined {
+  try {
+    // --show-current (not rev-parse HEAD): works on unborn branches too.
+    const branch = execFileSync('git', ['branch', '--show-current'], {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 2000,
+    }).trim()
+    return branch !== '' ? branch : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function captureInteraction(
   sessionId: string,
   toolName: string,
   toolInput: Record<string, unknown>,
-  toolOutput: string
+  toolOutput: string,
+  cwd?: string
 ): void {
   const filePath = getSessionFilePath(sessionId)
   const entry = buildInteractionEntry(toolName, toolInput, toolOutput)
@@ -101,6 +122,8 @@ export function captureInteraction(
     startedAt: string
     endedAt: string
     interactions: InteractionEntry[]
+    cwd?: string
+    gitBranch?: string
   }
 
   try {
@@ -115,11 +138,19 @@ export function captureInteraction(
     }
   }
 
+  // Join fields, set once per session: cwd from the payload, branch from
+  // one lazy git call (skipped on every subsequent capture).
+  const joinCwd = sessionData.cwd ?? cwd
+  const joinBranch =
+    sessionData.gitBranch ?? (joinCwd ? resolveGitBranch(joinCwd) : undefined)
+
   // Append interaction (async-safe: write full file with new entry)
   const updated = {
     ...sessionData,
     endedAt: new Date().toISOString(),
     interactions: [...sessionData.interactions, entry],
+    ...(joinCwd !== undefined ? { cwd: joinCwd } : {}),
+    ...(joinBranch !== undefined ? { gitBranch: joinBranch } : {}),
   }
 
   // Async write for speed — not awaited, but failures must surface (stderr,
@@ -136,7 +167,7 @@ export function captureInteraction(
 export async function main(
   stream: NodeJS.ReadableStream = process.stdin
 ): Promise<void> {
-  if (isInternalInvocation()) {
+  if (isExcludedSession()) {
     return
   }
   if (!isTomEnabled()) {
@@ -151,7 +182,13 @@ export async function main(
   const toolInput = toRecord(input.tool_input)
   const toolOutput = summarizeToolResponse(input.tool_response)
 
-  captureInteraction(getSessionId(input), input.tool_name, toolInput, toolOutput)
+  captureInteraction(
+    getSessionId(input),
+    input.tool_name,
+    toolInput,
+    toolOutput,
+    input.cwd
+  )
 }
 
 // Run if executed directly

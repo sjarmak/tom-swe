@@ -84,6 +84,16 @@ function deleteSessionModelFile(sessionId: string, scope: 'global' | 'project'):
   }
 }
 
+function deleteSnapshotFile(sessionId: string, scope: 'global' | 'project'): void {
+  const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
+  const snapshotPath = path.join(tomDir, 'user-model-history', `${sessionId}.json`)
+  try {
+    fs.unlinkSync(snapshotPath)
+  } catch {
+    // Snapshots only exist for sessions analyzed after the history feature — ignore
+  }
+}
+
 function saveIndex(index: BM25Index, scope: 'global' | 'project'): void {
   const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
   const indexPath = path.join(tomDir, 'bm25-index.json')
@@ -131,6 +141,7 @@ export function pruneOldSessions(
   for (const session of toRemove) {
     deleteSessionFile(session.sessionId, scope)
     deleteSessionModelFile(session.sessionId, scope)
+    deleteSnapshotFile(session.sessionId, scope)
     prunedIds.push(session.sessionId)
   }
 

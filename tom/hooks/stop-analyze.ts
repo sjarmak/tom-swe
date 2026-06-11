@@ -24,7 +24,8 @@ import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { extractSessionModel } from '../session-extract.js'
 import { runPromotion } from '../promotion.js'
-import { readHookInput, getSessionId, isInternalInvocation } from './hook-input.js'
+import { pruneOldSessions } from '../pruning.js'
+import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
 // --- Configuration ---
 
@@ -90,6 +91,9 @@ export async function analyzeCompletedSession(
   if (transcriptPath) {
     const usage = readTranscriptUsage(transcriptPath)
     if (usage) {
+      // Join fields ride along so the external work-audit graph can map
+      // this session to a work item without reading Tier 1.
+      const earlyLog = readRawSessionLog(sessionId)
       logUsage({
         timestamp: new Date().toISOString(),
         operation: 'session-usage',
@@ -102,6 +106,8 @@ export async function analyzeCompletedSession(
           cacheCreationTokens: usage.cacheCreationTokens,
           cacheReadTokens: usage.cacheReadTokens,
           assistantMessages: usage.assistantMessages,
+          cwd: earlyLog?.cwd ?? cwd,
+          gitBranch: earlyLog?.gitBranch ?? null,
         },
       })
     } else {
@@ -233,7 +239,35 @@ export async function analyzeCompletedSession(
     })
   }
 
-  // Step 5: Rebuild BM25 index
+  // Step 5: Snapshot the post-session user model for as-of queries.
+  // The live user-model.json is overwritten every session; temporal
+  // leave-one-out evaluation needs the model exactly as it stood after
+  // each session. One JSON per session, pruned with the session files.
+  try {
+    const finalModel = readUserModel('global')
+    if (finalModel) {
+      const historyDir = path.join(globalTomDir(), 'user-model-history')
+      if (!fs.existsSync(historyDir)) {
+        fs.mkdirSync(historyDir, { recursive: true })
+      }
+      fs.writeFileSync(
+        path.join(historyDir, `${sessionId}.json`),
+        JSON.stringify(finalModel, null, 2),
+        'utf-8'
+      )
+    }
+  } catch (error) {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'snapshot-error',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      reason: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  // Step 6: Rebuild BM25 index
   const index = buildMemoryIndex('global')
   const indexPath = path.join(globalTomDir(), 'bm25-index.json')
   const indexDir = path.dirname(indexPath)
@@ -241,6 +275,21 @@ export async function analyzeCompletedSession(
     fs.mkdirSync(indexDir, { recursive: true })
   }
   fs.writeFileSync(indexPath, JSON.stringify(index), 'utf-8')
+
+  // Step 7: Prune Tier 1/2 (and matching snapshots) past the retention cap.
+  // Designed for this hook since US-013 but never wired until now.
+  try {
+    pruneOldSessions(config.maxSessionsRetained)
+  } catch (error) {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'prune-error',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      reason: error instanceof Error ? error.message : String(error),
+    })
+  }
 
   return {
     success: true,
@@ -256,7 +305,7 @@ export async function analyzeCompletedSession(
 export async function main(
   stream: NodeJS.ReadableStream = process.stdin
 ): Promise<void> {
-  if (isInternalInvocation()) {
+  if (isExcludedSession()) {
     return
   }
   if (!isTomEnabled()) {

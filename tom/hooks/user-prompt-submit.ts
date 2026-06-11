@@ -26,7 +26,7 @@ import { consultToM } from '../consult.js'
 import { redactUserMessage } from '../redaction.js'
 import { looksLikeSecret, REDACTED } from '../secrets.js'
 import { logUsage } from '../routing.js'
-import { readHookInput, getSessionId, isInternalInvocation } from './hook-input.js'
+import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
 // --- Injection Framing ---
 
@@ -59,6 +59,8 @@ interface StoredSessionLog {
   endedAt: string
   interactions: unknown[]
   userMessages?: string[]
+  cwd?: string
+  gitBranch?: string
 }
 
 function getSessionFilePath(sessionId: string): string {
@@ -71,7 +73,11 @@ function getSessionFilePath(sessionId: string): string {
  * (append-only; never rewrites existing entries). Creates the session
  * file if this prompt arrives before any PostToolUse capture.
  */
-export function appendUserMessage(sessionId: string, message: string): void {
+export function appendUserMessage(
+  sessionId: string,
+  message: string,
+  cwd?: string
+): void {
   const filePath = getSessionFilePath(sessionId)
   const dir = path.dirname(filePath)
 
@@ -99,6 +105,9 @@ export function appendUserMessage(sessionId: string, message: string): void {
     ...sessionData,
     endedAt: new Date().toISOString(),
     userMessages: [...(sessionData.userMessages ?? []), message],
+    // cwd join field, set once; the branch is resolved by the async
+    // capture hook — this path blocks the prompt, so no subprocess here.
+    ...(sessionData.cwd === undefined && cwd !== undefined ? { cwd } : {}),
   }
 
   fs.writeFileSync(filePath, JSON.stringify(updated, null, 2), 'utf-8')
@@ -134,7 +143,7 @@ export function buildHookOutput(suggestion: ToMSuggestion): UserPromptSubmitHook
 export async function main(
   stream: NodeJS.ReadableStream = process.stdin
 ): Promise<void> {
-  if (isInternalInvocation()) {
+  if (isExcludedSession()) {
     return
   }
 
@@ -154,7 +163,7 @@ export async function main(
 
   try {
     const redacted = redactPrompt(prompt)
-    appendUserMessage(sessionId, redacted)
+    appendUserMessage(sessionId, redacted, input?.cwd)
 
     const result = consultToM(redacted, config.consultThreshold, sessionId)
     if (result.consulted && result.suggestion) {

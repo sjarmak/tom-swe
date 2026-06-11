@@ -286,6 +286,51 @@ describe('main', () => {
     expect(fs.existsSync(path.join(tomDir, 'usage.log'))).toBe(false)
   })
 
+  it('exits silently in Gas City agent sessions (GC_AGENT set)', async () => {
+    enableTom(tempDir, { consultThreshold: 'low' })
+    const originalGcAgent = process.env['GC_AGENT']
+    process.env['GC_AGENT'] = 'polecat-3'
+
+    try {
+      await main(payloadStream({
+        session_id: 'rig-session',
+        hook_event_name: 'UserPromptSubmit',
+        prompt: 'fix it',
+      }))
+    } finally {
+      if (originalGcAgent !== undefined) {
+        process.env['GC_AGENT'] = originalGcAgent
+      } else {
+        delete process.env['GC_AGENT']
+      }
+    }
+
+    // Nothing captured, nothing consulted: agent behavior never trains
+    // the user model.
+    expect(stdoutData).toBe('')
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    expect(fs.existsSync(path.join(tomDir, 'sessions'))).toBe(false)
+    expect(fs.existsSync(path.join(tomDir, 'usage.log'))).toBe(false)
+  })
+
+  it('records the cwd join field once on prompt capture', async () => {
+    enableTom(tempDir)
+
+    await main(payloadStream({
+      session_id: 'cwd-session',
+      hook_event_name: 'UserPromptSubmit',
+      prompt: 'please refactor the parser module for readability',
+      cwd: '/work/repo',
+    }))
+
+    const sessionPath = path.join(
+      tempDir, '.claude', 'tom', 'sessions', 'cwd-session.json'
+    )
+    const data = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'))
+    expect(data.cwd).toBe('/work/repo')
+    expect(data.gitBranch).toBeUndefined()
+  })
+
   it('captures the redacted prompt in the Tier 1 session log', async () => {
     enableTom(tempDir)
 

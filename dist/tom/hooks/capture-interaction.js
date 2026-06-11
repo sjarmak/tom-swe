@@ -39,6 +39,7 @@ module.exports = __toCommonJS(capture_interaction_exports);
 var fs2 = __toESM(require("node:fs"));
 var path2 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
+var import_node_child_process = require("node:child_process");
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -13858,6 +13859,16 @@ function getSessionId(input) {
 function isInternalInvocation() {
   return process.env["TOM_SWE_INTERNAL"] === "1";
 }
+function isExcludedSession() {
+  if (isInternalInvocation()) {
+    return true;
+  }
+  if (process.env["TOM_SWE_DISABLE"] === "1") {
+    return true;
+  }
+  const gcAgent = process.env["GC_AGENT"];
+  return typeof gcAgent === "string" && gcAgent !== "";
+}
 function toRecord(value) {
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
     return value;
@@ -14006,7 +14017,19 @@ function ensureDirectoryExists(filePath) {
     fs2.mkdirSync(dir, { recursive: true });
   }
 }
-function captureInteraction(sessionId, toolName, toolInput, toolOutput) {
+function resolveGitBranch(cwd) {
+  try {
+    const branch = (0, import_node_child_process.execFileSync)("git", ["branch", "--show-current"], {
+      cwd,
+      encoding: "utf-8",
+      timeout: 2e3
+    }).trim();
+    return branch !== "" ? branch : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function captureInteraction(sessionId, toolName, toolInput, toolOutput, cwd) {
   const filePath = getSessionFilePath(sessionId);
   const entry = buildInteractionEntry(toolName, toolInput, toolOutput);
   ensureDirectoryExists(filePath);
@@ -14022,10 +14045,14 @@ function captureInteraction(sessionId, toolName, toolInput, toolOutput) {
       interactions: []
     };
   }
+  const joinCwd = sessionData.cwd ?? cwd;
+  const joinBranch = sessionData.gitBranch ?? (joinCwd ? resolveGitBranch(joinCwd) : void 0);
   const updated = {
     ...sessionData,
     endedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    interactions: [...sessionData.interactions, entry]
+    interactions: [...sessionData.interactions, entry],
+    ...joinCwd !== void 0 ? { cwd: joinCwd } : {},
+    ...joinBranch !== void 0 ? { gitBranch: joinBranch } : {}
   };
   fs2.writeFile(filePath, JSON.stringify(updated, null, 2), "utf-8", (err) => {
     if (err) {
@@ -14035,7 +14062,7 @@ function captureInteraction(sessionId, toolName, toolInput, toolOutput) {
   });
 }
 async function main(stream = process.stdin) {
-  if (isInternalInvocation()) {
+  if (isExcludedSession()) {
     return;
   }
   if (!isTomEnabled()) {
@@ -14047,7 +14074,13 @@ async function main(stream = process.stdin) {
   }
   const toolInput = toRecord(input.tool_input);
   const toolOutput = summarizeToolResponse(input.tool_response);
-  captureInteraction(getSessionId(input), input.tool_name, toolInput, toolOutput);
+  captureInteraction(
+    getSessionId(input),
+    input.tool_name,
+    toolInput,
+    toolOutput,
+    input.cwd
+  );
 }
 if (require.main === module) {
   void main();

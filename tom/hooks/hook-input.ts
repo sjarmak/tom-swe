@@ -84,6 +84,26 @@ export function isInternalInvocation(): boolean {
 }
 
 /**
+ * Guard for sessions that must never train the user model. ToM models one
+ * user; autonomous agent sessions are machine behavior, and learning from
+ * them poisons the model. Excluded:
+ * - TOM_SWE_INTERNAL=1 — ToM's own headless spawns (recursion guard)
+ * - TOM_SWE_DISABLE=1 — explicit operator opt-out for any agent harness
+ * - GC_AGENT set    — Gas City rig sessions (mayors and polecats both;
+ *   rig interaction patterns are not user coding preferences)
+ */
+export function isExcludedSession(): boolean {
+  if (isInternalInvocation()) {
+    return true
+  }
+  if (process.env['TOM_SWE_DISABLE'] === '1') {
+    return true
+  }
+  const gcAgent = process.env['GC_AGENT']
+  return typeof gcAgent === 'string' && gcAgent !== ''
+}
+
+/**
  * Narrows an unknown tool_input payload to a plain record, defaulting to {}.
  */
 export function toRecord(value: unknown): Record<string, unknown> {

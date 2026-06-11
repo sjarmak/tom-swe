@@ -12,7 +12,7 @@ import type { UserModel } from '../schemas.js'
 import { readUserModel } from '../memory-io.js'
 import { isTomEnabled } from '../config.js'
 import { logUsage } from '../routing.js'
-import { readHookInput, getSessionId, isInternalInvocation } from './hook-input.js'
+import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
 // --- Configuration ---
 
@@ -85,7 +85,7 @@ export function buildHookOutput(summary: string): SessionStartHookOutput {
 export async function main(
   stream: NodeJS.ReadableStream = process.stdin
 ): Promise<void> {
-  if (isInternalInvocation()) {
+  if (isExcludedSession()) {
     return
   }
   if (!isTomEnabled()) {

@@ -13825,7 +13825,12 @@ var SessionLogSchema = external_exports.strictObject({
   interactions: external_exports.array(InteractionSchema),
   // Redacted user prompt text captured by the UserPromptSubmit hook.
   // Optional for backward compatibility with logs written before capture.
-  userMessages: external_exports.array(external_exports.string()).optional()
+  userMessages: external_exports.array(external_exports.string()).optional(),
+  // Join fields for the external work-audit graph: session working
+  // directory and git branch, set once per session by the capture hooks.
+  // A bead/work-item id is mechanically resolvable from these.
+  cwd: external_exports.string().optional(),
+  gitBranch: external_exports.string().optional()
 });
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),

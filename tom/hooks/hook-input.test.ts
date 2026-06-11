@@ -4,6 +4,7 @@ import {
   readHookInput,
   getSessionId,
   isInternalInvocation,
+  isExcludedSession,
   toRecord,
 } from './hook-input'
 
@@ -168,6 +169,56 @@ describe('isInternalInvocation', () => {
     expect(isInternalInvocation()).toBe(false)
     process.env['TOM_SWE_INTERNAL'] = '0'
     expect(isInternalInvocation()).toBe(false)
+  })
+})
+
+describe('isExcludedSession', () => {
+  const GUARD_VARS = ['TOM_SWE_INTERNAL', 'TOM_SWE_DISABLE', 'GC_AGENT'] as const
+  let saved: Record<string, string | undefined>
+
+  beforeEach(() => {
+    saved = {}
+    for (const v of GUARD_VARS) {
+      saved[v] = process.env[v]
+      delete process.env[v]
+    }
+  })
+
+  afterEach(() => {
+    for (const v of GUARD_VARS) {
+      const value = saved[v]
+      if (value !== undefined) {
+        process.env[v] = value
+      } else {
+        delete process.env[v]
+      }
+    }
+  })
+
+  it('excludes ToM-internal invocations', () => {
+    process.env['TOM_SWE_INTERNAL'] = '1'
+    expect(isExcludedSession()).toBe(true)
+  })
+
+  it('excludes explicit operator opt-out via TOM_SWE_DISABLE', () => {
+    process.env['TOM_SWE_DISABLE'] = '1'
+    expect(isExcludedSession()).toBe(true)
+  })
+
+  it('excludes Gas City agent sessions (GC_AGENT set)', () => {
+    process.env['GC_AGENT'] = 'polecat-7'
+    expect(isExcludedSession()).toBe(true)
+    process.env['GC_AGENT'] = 'mayor'
+    expect(isExcludedSession()).toBe(true)
+  })
+
+  it('does not exclude normal interactive sessions', () => {
+    expect(isExcludedSession()).toBe(false)
+    // Empty GC_AGENT is not an agent session.
+    process.env['GC_AGENT'] = ''
+    expect(isExcludedSession()).toBe(false)
+    process.env['TOM_SWE_DISABLE'] = '0'
+    expect(isExcludedSession()).toBe(false)
   })
 })
 

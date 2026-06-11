@@ -323,6 +323,104 @@ describe('analyzeCompletedSession', () => {
     expect(entries.some((e) => String(e['operation']).startsWith('session-usage'))).toBe(false)
   })
 
+  it('writes a post-session user-model snapshot for as-of queries', async () => {
+    writeSessionFile('snapshot-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'spawn-error',
+      detail: 'claude not found',
+    })
+
+    await analyzeCompletedSession('snapshot-test')
+
+    const snapshotPath = path.join(
+      tempDir, '.claude', 'tom', 'user-model-history', 'snapshot-test.json'
+    )
+    expect(fs.existsSync(snapshotPath)).toBe(true)
+    const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf-8'))
+    const live = JSON.parse(
+      fs.readFileSync(path.join(tempDir, '.claude', 'tom', 'user-model.json'), 'utf-8')
+    )
+    // The snapshot is the model exactly as it stood after this session.
+    expect(snapshot).toEqual(live)
+  })
+
+  it('prunes oldest sessions (and their snapshots) past maxSessionsRetained', async () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true, maxSessionsRetained: 2 }),
+      'utf-8'
+    )
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'spawn-error',
+      detail: 'claude not found',
+    })
+
+    // Three sessions, distinct start times; oldest must be pruned.
+    writeSessionFile('prune-old')
+    writeSessionFile('prune-mid')
+    writeSessionFile('prune-new')
+    const sessionsDir = path.join(tomDir, 'sessions')
+    const stamp = (id: string, startedAt: string): void => {
+      const p = path.join(sessionsDir, `${id}.json`)
+      const log = JSON.parse(fs.readFileSync(p, 'utf-8'))
+      fs.writeFileSync(p, JSON.stringify({ ...log, startedAt }), 'utf-8')
+    }
+    stamp('prune-old', '2026-01-01T00:00:00.000Z')
+    stamp('prune-mid', '2026-02-01T00:00:00.000Z')
+    stamp('prune-new', '2026-03-01T00:00:00.000Z')
+    // Pre-existing snapshot for the session about to be pruned.
+    const historyDir = path.join(tomDir, 'user-model-history')
+    fs.mkdirSync(historyDir, { recursive: true })
+    fs.writeFileSync(path.join(historyDir, 'prune-old.json'), '{}', 'utf-8')
+
+    await analyzeCompletedSession('prune-new')
+
+    expect(fs.existsSync(path.join(sessionsDir, 'prune-old.json'))).toBe(false)
+    expect(fs.existsSync(path.join(historyDir, 'prune-old.json'))).toBe(false)
+    expect(fs.existsSync(path.join(sessionsDir, 'prune-mid.json'))).toBe(true)
+    expect(fs.existsSync(path.join(sessionsDir, 'prune-new.json'))).toBe(true)
+  })
+
+  it('carries cwd and gitBranch join fields in session-usage detail', async () => {
+    writeSessionFile('join-usage-test')
+    // Enrich the Tier 1 log with join fields as the capture hook would.
+    const sessionPath = path.join(
+      tempDir, '.claude', 'tom', 'sessions', 'join-usage-test.json'
+    )
+    const log = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'))
+    fs.writeFileSync(
+      sessionPath,
+      JSON.stringify({ ...log, cwd: '/work/repo', gitBranch: 'polecat/mem-42' }),
+      'utf-8'
+    )
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'spawn-error',
+      detail: 'claude not found',
+    })
+
+    const transcriptPath = path.join(tempDir, 'join-transcript.jsonl')
+    fs.writeFileSync(
+      transcriptPath,
+      JSON.stringify({
+        type: 'assistant',
+        message: { id: 'm1', usage: { input_tokens: 10, output_tokens: 5 } },
+      }),
+      'utf-8'
+    )
+
+    await analyzeCompletedSession('join-usage-test', process.cwd(), transcriptPath)
+
+    const entry = readUsageEntries().find((e) => e['operation'] === 'session-usage')
+    const detail = (entry?.['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['cwd']).toBe('/work/repo')
+    expect(detail['gitBranch']).toBe('polecat/mem-42')
+  })
+
   it('logs the fallback with its reason when the LLM path fails', async () => {
     writeSessionFile('log-test')
     mockAnalyzeWithLlm.mockResolvedValue({

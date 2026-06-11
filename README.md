@@ -134,6 +134,18 @@ All skills are namespaced under `tom-swe:` when installed as a plugin.
 - Use `/tom-forget` to selectively remove individual preferences
 - Disable the system entirely by setting `"enabled": false` in config
 
+### Session exclusion (agent sessions never train the user model)
+
+ToM models one user. Autonomous agent sessions are machine behavior, and learning from them poisons the model, so every hook exits silently when any of these hold:
+
+- `TOM_SWE_INTERNAL=1` — ToM's own headless spawns (recursion guard)
+- `TOM_SWE_DISABLE=1` — explicit opt-out for any agent harness or automation
+- `GC_AGENT` is set — Gas City rig sessions (mayors and polecats; the rig exports this to every agent it launches, so no rig configuration is needed)
+
+### Work-audit join fields and model history
+
+For coordination with external work-audit tooling, the Tier 1 session log records the session's `cwd` and git branch (set once per session; the branch is resolved in the async capture path only), and `session-usage` telemetry entries carry both. After each analysis, the post-session user model is also snapshotted to `~/.claude/tom/user-model-history/<session-id>.json` so the model's state *as of* any past session can be queried (temporal leave-one-out evaluation); snapshots are pruned together with their sessions under `maxSessionsRetained`.
+
 ## Telemetry
 
 Every ToM operation appends one JSON line to `~/.claude/tom/usage.log`. The format is versioned (`v: 1`) and designed for external consumers — evaluation harnesses, analysis agents, or `jq` — in addition to the `/tom-status` rollup. Telemetry never leaves your machine.

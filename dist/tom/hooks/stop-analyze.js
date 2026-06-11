@@ -35,8 +35,8 @@ __export(stop_analyze_exports, {
   readRawSessionLog: () => readRawSessionLog
 });
 module.exports = __toCommonJS(stop_analyze_exports);
-var fs7 = __toESM(require("node:fs"));
-var path6 = __toESM(require("node:path"));
+var fs8 = __toESM(require("node:fs"));
+var path7 = __toESM(require("node:path"));
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -805,10 +805,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path7) {
-  if (!path7)
+function getElementAtPath(obj, path8) {
+  if (!path8)
     return obj;
-  return path7.reduce((acc, key) => acc?.[key], obj);
+  return path8.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1191,11 +1191,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path7, issues) {
+function prefixIssues(path8, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path7);
+    iss.path.unshift(path8);
     return iss;
   });
 }
@@ -1378,7 +1378,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path7 = []) => {
+  const processError = (error49, path8 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1388,7 +1388,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path7, ...issue2.path];
+        const fullpath = [...path8, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1420,8 +1420,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path7) {
+  const path8 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path8) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13398,13 +13398,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path7 = ref.slice(1).split("/").filter(Boolean);
-  if (path7.length === 0) {
+  const path8 = ref.slice(1).split("/").filter(Boolean);
+  if (path8.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path7[0] === defsKey) {
-    const key = path7[1];
+  if (path8[0] === defsKey) {
+    const key = path8[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13820,7 +13820,12 @@ var SessionLogSchema = external_exports.strictObject({
   interactions: external_exports.array(InteractionSchema),
   // Redacted user prompt text captured by the UserPromptSubmit hook.
   // Optional for backward compatibility with logs written before capture.
-  userMessages: external_exports.array(external_exports.string()).optional()
+  userMessages: external_exports.array(external_exports.string()).optional(),
+  // Join fields for the external work-audit graph: session working
+  // directory and git branch, set once per session by the capture hooks.
+  // A bead/work-item id is mechanically resolvable from these.
+  cwd: external_exports.string().optional(),
+  gitBranch: external_exports.string().optional()
 });
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
@@ -14818,6 +14823,99 @@ function runPromotion(userModel, config2, cwd) {
   };
 }
 
+// tom/pruning.ts
+var fs7 = __toESM(require("node:fs"));
+var path6 = __toESM(require("node:path"));
+function listJsonFiles2(dirPath) {
+  try {
+    return fs7.readdirSync(dirPath).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+}
+function getSessionTimestamps(scope) {
+  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
+  const sessionsDir = path6.join(tomDir, "sessions");
+  const files = listJsonFiles2(sessionsDir);
+  const timestamps = [];
+  for (const file2 of files) {
+    const sessionId = file2.replace(".json", "");
+    const session = readSessionLog(sessionId, scope);
+    if (session) {
+      timestamps.push({
+        sessionId: session.sessionId,
+        startedAt: session.startedAt
+      });
+    }
+  }
+  return timestamps;
+}
+function deleteSessionFile(sessionId, scope) {
+  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
+  const sessionPath = path6.join(tomDir, "sessions", `${sessionId}.json`);
+  try {
+    fs7.unlinkSync(sessionPath);
+  } catch {
+  }
+}
+function deleteSessionModelFile(sessionId, scope) {
+  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
+  const modelPath = path6.join(tomDir, "session-models", `${sessionId}.json`);
+  try {
+    fs7.unlinkSync(modelPath);
+  } catch {
+  }
+}
+function deleteSnapshotFile(sessionId, scope) {
+  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
+  const snapshotPath = path6.join(tomDir, "user-model-history", `${sessionId}.json`);
+  try {
+    fs7.unlinkSync(snapshotPath);
+  } catch {
+  }
+}
+function saveIndex(index, scope) {
+  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
+  const indexPath = path6.join(tomDir, "bm25-index.json");
+  const dir = path6.dirname(indexPath);
+  if (!fs7.existsSync(dir)) {
+    fs7.mkdirSync(dir, { recursive: true });
+  }
+  fs7.writeFileSync(indexPath, JSON.stringify(index), "utf-8");
+}
+function pruneOldSessions(maxSessionsRetained, scope = "global") {
+  const sessions = getSessionTimestamps(scope);
+  const sessionsBeforePrune = sessions.length;
+  if (sessions.length <= maxSessionsRetained) {
+    return {
+      prunedSessionIds: [],
+      sessionsBeforePrune,
+      sessionsAfterPrune: sessionsBeforePrune,
+      indexRebuilt: false
+    };
+  }
+  const sorted = [...sessions].sort(
+    (a, b) => a.startedAt.localeCompare(b.startedAt)
+  );
+  const countToRemove = sorted.length - maxSessionsRetained;
+  const toRemove = sorted.slice(0, countToRemove);
+  const prunedIds = [];
+  for (const session of toRemove) {
+    deleteSessionFile(session.sessionId, scope);
+    deleteSessionModelFile(session.sessionId, scope);
+    deleteSnapshotFile(session.sessionId, scope);
+    prunedIds.push(session.sessionId);
+  }
+  const index = buildMemoryIndex(scope);
+  saveIndex(index, scope);
+  return {
+    prunedSessionIds: prunedIds,
+    sessionsBeforePrune,
+    sessionsAfterPrune: sessionsBeforePrune - countToRemove,
+    indexRebuilt: true
+  };
+}
+
 // tom/hooks/hook-input.ts
 var HookInputSchema = external_exports.looseObject({
   session_id: external_exports.string().optional(),
@@ -14868,16 +14966,26 @@ function getSessionId(input) {
 function isInternalInvocation() {
   return process.env["TOM_SWE_INTERNAL"] === "1";
 }
+function isExcludedSession() {
+  if (isInternalInvocation()) {
+    return true;
+  }
+  if (process.env["TOM_SWE_DISABLE"] === "1") {
+    return true;
+  }
+  const gcAgent = process.env["GC_AGENT"];
+  return typeof gcAgent === "string" && gcAgent !== "";
+}
 
 // tom/hooks/stop-analyze.ts
 var NO_MODEL = "none";
 function getSessionFilePath(sessionId) {
-  return path6.join(globalTomDir(), "sessions", `${sessionId}.json`);
+  return path7.join(globalTomDir(), "sessions", `${sessionId}.json`);
 }
 function readRawSessionLog(sessionId) {
   try {
     const filePath = getSessionFilePath(sessionId);
-    const content = fs7.readFileSync(filePath, "utf-8");
+    const content = fs8.readFileSync(filePath, "utf-8");
     const raw = JSON.parse(content);
     const result = SessionLogSchema.safeParse(raw);
     return result.success ? result.data : null;
@@ -14889,6 +14997,7 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
   if (transcriptPath) {
     const usage = readTranscriptUsage(transcriptPath);
     if (usage) {
+      const earlyLog = readRawSessionLog(sessionId);
       logUsage({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         operation: "session-usage",
@@ -14900,7 +15009,9 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
           outputTokens: usage.outputTokens,
           cacheCreationTokens: usage.cacheCreationTokens,
           cacheReadTokens: usage.cacheReadTokens,
-          assistantMessages: usage.assistantMessages
+          assistantMessages: usage.assistantMessages,
+          cwd: earlyLog?.cwd ?? cwd,
+          gitBranch: earlyLog?.gitBranch ?? null
         }
       });
     } else {
@@ -15012,13 +15123,48 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
       reason: error48 instanceof Error ? error48.message : String(error48)
     });
   }
-  const index = buildMemoryIndex("global");
-  const indexPath = path6.join(globalTomDir(), "bm25-index.json");
-  const indexDir = path6.dirname(indexPath);
-  if (!fs7.existsSync(indexDir)) {
-    fs7.mkdirSync(indexDir, { recursive: true });
+  try {
+    const finalModel = readUserModel("global");
+    if (finalModel) {
+      const historyDir = path7.join(globalTomDir(), "user-model-history");
+      if (!fs8.existsSync(historyDir)) {
+        fs8.mkdirSync(historyDir, { recursive: true });
+      }
+      fs8.writeFileSync(
+        path7.join(historyDir, `${sessionId}.json`),
+        JSON.stringify(finalModel, null, 2),
+        "utf-8"
+      );
+    }
+  } catch (error48) {
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "snapshot-error",
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      reason: error48 instanceof Error ? error48.message : String(error48)
+    });
   }
-  fs7.writeFileSync(indexPath, JSON.stringify(index), "utf-8");
+  const index = buildMemoryIndex("global");
+  const indexPath = path7.join(globalTomDir(), "bm25-index.json");
+  const indexDir = path7.dirname(indexPath);
+  if (!fs8.existsSync(indexDir)) {
+    fs8.mkdirSync(indexDir, { recursive: true });
+  }
+  fs8.writeFileSync(indexPath, JSON.stringify(index), "utf-8");
+  try {
+    pruneOldSessions(config2.maxSessionsRetained);
+  } catch (error48) {
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "prune-error",
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      reason: error48 instanceof Error ? error48.message : String(error48)
+    });
+  }
   return {
     success: true,
     sessionId,
@@ -15028,7 +15174,7 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
   };
 }
 async function main(stream = process.stdin) {
-  if (isInternalInvocation()) {
+  if (isExcludedSession()) {
     return;
   }
   if (!isTomEnabled()) {

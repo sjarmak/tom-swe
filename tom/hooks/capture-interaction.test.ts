@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { Readable } from 'node:stream'
+import { execFileSync } from 'node:child_process'
 import {
   extractParameterShape,
   summarizeToolResponse,
@@ -158,6 +159,48 @@ describe('captureInteraction', () => {
     expect(data.interactions).toHaveLength(2)
     expect(data.interactions[0].toolName).toBe('Bash')
     expect(data.interactions[1].toolName).toBe('Read')
+  })
+
+  it('records cwd and git branch join fields once per session', async () => {
+    // A real git repo in the temp dir: the branch resolver runs actual git.
+    const repoDir = path.join(tempDir, 'work')
+    fs.mkdirSync(repoDir)
+    execFileSync('git', ['init', '-q', '-b', 'tom/join-test'], { cwd: repoDir })
+
+    captureInteraction('join-session', 'Bash', { command: 'ls' }, 'ok', repoDir)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'join-session.json')
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    expect(data.cwd).toBe(repoDir)
+    expect(data.gitBranch).toBe('tom/join-test')
+
+    // Second capture with a different cwd must not overwrite the join fields.
+    captureInteraction('join-session', 'Read', { file_path: 'a.ts' }, 'ok', '/elsewhere')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const again = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    expect(again.cwd).toBe(repoDir)
+    expect(again.gitBranch).toBe('tom/join-test')
+  })
+
+  it('omits the branch outside a git repo and survives without cwd', async () => {
+    const plainDir = path.join(tempDir, 'plain')
+    fs.mkdirSync(plainDir)
+
+    captureInteraction('no-git-session', 'Bash', { command: 'ls' }, 'ok', plainDir)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'no-git-session.json')
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    expect(data.cwd).toBe(plainDir)
+    expect(data.gitBranch).toBeUndefined()
+
+    captureInteraction('no-cwd-session', 'Bash', { command: 'ls' }, 'ok')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const noCwd = JSON.parse(
+      fs.readFileSync(path.join(tempDir, '.claude', 'tom', 'sessions', 'no-cwd-session.json'), 'utf-8')
+    )
+    expect(noCwd.cwd).toBeUndefined()
   })
 
   it('redacts bare secret values in tool input', async () => {

@@ -13823,7 +13823,12 @@ var SessionLogSchema = external_exports.strictObject({
   interactions: external_exports.array(InteractionSchema),
   // Redacted user prompt text captured by the UserPromptSubmit hook.
   // Optional for backward compatibility with logs written before capture.
-  userMessages: external_exports.array(external_exports.string()).optional()
+  userMessages: external_exports.array(external_exports.string()).optional(),
+  // Join fields for the external work-audit graph: session working
+  // directory and git branch, set once per session by the capture hooks.
+  // A bead/work-item id is mechanically resolvable from these.
+  cwd: external_exports.string().optional(),
+  gitBranch: external_exports.string().optional()
 });
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
@@ -14062,6 +14067,16 @@ function getSessionId(input) {
 function isInternalInvocation() {
   return process.env["TOM_SWE_INTERNAL"] === "1";
 }
+function isExcludedSession() {
+  if (isInternalInvocation()) {
+    return true;
+  }
+  if (process.env["TOM_SWE_DISABLE"] === "1") {
+    return true;
+  }
+  const gcAgent = process.env["GC_AGENT"];
+  return typeof gcAgent === "string" && gcAgent !== "";
+}
 
 // tom/hooks/session-start.ts
 var MIN_CONFIDENCE = 0.5;
@@ -14093,7 +14108,7 @@ function buildHookOutput(summary) {
   };
 }
 async function main(stream = process.stdin) {
-  if (isInternalInvocation()) {
+  if (isExcludedSession()) {
     return;
   }
   if (!isTomEnabled()) {

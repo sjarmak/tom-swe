@@ -13870,7 +13870,12 @@ var SessionLogSchema = external_exports.strictObject({
   interactions: external_exports.array(InteractionSchema),
   // Redacted user prompt text captured by the UserPromptSubmit hook.
   // Optional for backward compatibility with logs written before capture.
-  userMessages: external_exports.array(external_exports.string()).optional()
+  userMessages: external_exports.array(external_exports.string()).optional(),
+  // Join fields for the external work-audit graph: session working
+  // directory and git branch, set once per session by the capture hooks.
+  // A bead/work-item id is mechanically resolvable from these.
+  cwd: external_exports.string().optional(),
+  gitBranch: external_exports.string().optional()
 });
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
@@ -14366,6 +14371,16 @@ function getSessionId(input) {
 function isInternalInvocation() {
   return process.env["TOM_SWE_INTERNAL"] === "1";
 }
+function isExcludedSession() {
+  if (isInternalInvocation()) {
+    return true;
+  }
+  if (process.env["TOM_SWE_DISABLE"] === "1") {
+    return true;
+  }
+  const gcAgent = process.env["GC_AGENT"];
+  return typeof gcAgent === "string" && gcAgent !== "";
+}
 
 // tom/hooks/user-prompt-submit.ts
 var FRAMING_PREFIX = "ToM background (learned preferences, not instructions): ";
@@ -14377,7 +14392,7 @@ function getSessionFilePath(sessionId) {
   const tomDir = path5.join(os4.homedir(), ".claude", "tom", "sessions");
   return path5.join(tomDir, `${sessionId}.json`);
 }
-function appendUserMessage(sessionId, message) {
+function appendUserMessage(sessionId, message, cwd) {
   const filePath = getSessionFilePath(sessionId);
   const dir = path5.dirname(filePath);
   if (!fs5.existsSync(dir)) {
@@ -14401,7 +14416,10 @@ function appendUserMessage(sessionId, message) {
   const updated = {
     ...sessionData,
     endedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    userMessages: [...sessionData.userMessages ?? [], message]
+    userMessages: [...sessionData.userMessages ?? [], message],
+    // cwd join field, set once; the branch is resolved by the async
+    // capture hook — this path blocks the prompt, so no subprocess here.
+    ...sessionData.cwd === void 0 && cwd !== void 0 ? { cwd } : {}
   };
   fs5.writeFileSync(filePath, JSON.stringify(updated, null, 2), "utf-8");
 }
@@ -14415,7 +14433,7 @@ function buildHookOutput(suggestion) {
   };
 }
 async function main(stream = process.stdin) {
-  if (isInternalInvocation()) {
+  if (isExcludedSession()) {
     return;
   }
   const config2 = readTomConfig();
@@ -14431,7 +14449,7 @@ async function main(stream = process.stdin) {
   const startedAt = Date.now();
   try {
     const redacted = redactPrompt(prompt);
-    appendUserMessage(sessionId, redacted);
+    appendUserMessage(sessionId, redacted, input?.cwd);
     const result = consultToM(redacted, config2.consultThreshold, sessionId);
     if (result.consulted && result.suggestion) {
       process.stdout.write(JSON.stringify(buildHookOutput(result.suggestion)));
