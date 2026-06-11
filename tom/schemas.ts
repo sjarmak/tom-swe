@@ -86,6 +86,13 @@ const PreferenceClusterSchema = z.strictObject({
   // marker block and retired from per-session injection. Optional for
   // backward compatibility with user models written before promotion existed.
   promoted: z.boolean().optional(),
+  // Provenance: a preference born from a user correction is non-obvious by
+  // construction (the agent got it wrong first) and gets promotion priority
+  // plus negative "avoid X" rendering. Optional; absent means observation.
+  learnedVia: z.enum(['correction', 'observation']).optional(),
+  // The value the user corrected AWAY from, when known — the "what not to
+  // do" half of a correction-derived preference.
+  correctedFrom: z.string().optional(),
 })
 
 export const UserModelSchema = z.strictObject({

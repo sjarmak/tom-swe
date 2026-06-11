@@ -107,7 +107,14 @@ Edit `~/.claude/tom/config.json`:
 | `promotion.threshold` | `0.8` | Minimum confidence for a preference to be promoted |
 | `promotion.minSessions` | `5` | Minimum sessions a preference must be observed across before promotion |
 
-Promoted preferences are written into a marker-bounded block (`<!-- tom-swe:begin ... -->` / `<!-- tom-swe:end -->`) that is regenerated wholesale after each session — the ToM store stays the source of truth. Coding preferences go to the project's `CLAUDE.md` (only if it already exists; tom-swe never creates files in your repos), while interaction-style and emotional-signal preferences go to `~/.claude/CLAUDE.md`. A preference whose confidence later decays below the threshold drops out of the block automatically and returns to per-session injection. `/tom-reset` removes the marker blocks along with the store.
+Promoted preferences are written into a marker-bounded block (`<!-- tom-swe:begin ... -->` / `<!-- tom-swe:end -->`) that is regenerated wholesale after each session — the ToM store stays the source of truth. Coding preferences go to the project's `CLAUDE.md` (only if it already exists; tom-swe never creates files in your repos), while interaction-style preferences go to `~/.claude/CLAUDE.md`. A preference whose confidence later decays below the threshold drops out of the block automatically and returns to per-session injection. `/tom-reset` removes the marker blocks along with the store.
+
+Crossing the thresholds is necessary but not sufficient. CLAUDE.md is a ~200-line budgeted file whose value is mostly what an agent could NOT infer from the repository, so promotion applies four further gates:
+
+- **Category**: only `codingPreferences` and `interactionStyle` promote. Emotional signals are runtime state for ToM's own behavior, never standing guidance.
+- **Derivability** (project targets): new observation-derived candidates pass a headless model judgment — "is this already visible from the repo's configs, deps, and docs?" — and statically derivable facts are dropped (logged as `promotion-skipped`). Correction-derived preferences bypass this gate: a correction is prima facie evidence the static information wasn't enough. If the judgment is unavailable, only corrections promote (conservative fallback).
+- **Priority and cap**: the block carries at most 10 lines, correction-derived first (the negative surface — what the agent got wrong — is the valuable half), then by confidence × sessions. Correction-derived entries render as negative guidance: `Avoid X for key; use Y instead (user corrected this)`.
+- **Host-file budget**: a CLAUDE.md already over ~200 lines accepts no new entries (existing ones keep regenerating so retirement still works); skips are logged, never silent.
 
 ## Skills
 

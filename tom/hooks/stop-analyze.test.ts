@@ -17,6 +17,16 @@ vi.mock('../llm-analyze', () => ({
   analyzeSessionWithLlm: vi.fn(),
 }))
 
+// The derivability gate also spawns claude headlessly; tests pass
+// everything through so promotion-pipeline assertions stay focused
+// (gate behavior itself is covered in promotion.test.ts).
+vi.mock('../promotion-gate', () => ({
+  judgeDerivability: vi.fn(
+    (candidates: ReadonlyArray<{ id: string }>) =>
+      new Set(candidates.map((c) => c.id))
+  ),
+}))
+
 const mockAnalyzeWithLlm = vi.mocked(analyzeSessionWithLlm)
 
 beforeEach(() => {

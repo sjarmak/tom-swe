@@ -13875,7 +13875,14 @@ var PreferenceClusterSchema = external_exports.strictObject({
   // True when the preference has been promoted into a durable CLAUDE.md
   // marker block and retired from per-session injection. Optional for
   // backward compatibility with user models written before promotion existed.
-  promoted: external_exports.boolean().optional()
+  promoted: external_exports.boolean().optional(),
+  // Provenance: a preference born from a user correction is non-obvious by
+  // construction (the agent got it wrong first) and gets promotion priority
+  // plus negative "avoid X" rendering. Optional; absent means observation.
+  learnedVia: external_exports.enum(["correction", "observation"]).optional(),
+  // The value the user corrected AWAY from, when known — the "what not to
+  // do" half of a correction-derived preference.
+  correctedFrom: external_exports.string().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -14082,6 +14089,10 @@ function applyCorrections(preferences, corrections, penaltyFactor = DEFAULT_CORR
   const now = (/* @__PURE__ */ new Date()).toISOString();
   let result = preferences;
   for (const correction of corrections) {
+    const penalized = result.filter(
+      (p) => p.category === correction.category && p.key === correction.key && !(correction.correctedValue !== void 0 && p.value === correction.correctedValue)
+    ).sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
+    const correctedFrom = penalized[0]?.value;
     result = result.map((p) => {
       const matchesTarget = p.category === correction.category && p.key === correction.key;
       const isCorrectedToValue = correction.correctedValue !== void 0 && p.value === correction.correctedValue;
@@ -14100,6 +14111,13 @@ function applyCorrections(preferences, corrections, penaltyFactor = DEFAULT_CORR
         key: correction.key,
         value: correction.correctedValue
       });
+      result = result.map(
+        (p) => p.category === correction.category && p.key === correction.key && p.value === correction.correctedValue ? {
+          ...p,
+          learnedVia: "correction",
+          ...correctedFrom !== void 0 ? { correctedFrom } : {}
+        } : p
+      );
     }
   }
   return [...result];

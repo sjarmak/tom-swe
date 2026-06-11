@@ -13872,7 +13872,14 @@ var PreferenceClusterSchema = external_exports.strictObject({
   // True when the preference has been promoted into a durable CLAUDE.md
   // marker block and retired from per-session injection. Optional for
   // backward compatibility with user models written before promotion existed.
-  promoted: external_exports.boolean().optional()
+  promoted: external_exports.boolean().optional(),
+  // Provenance: a preference born from a user correction is non-obvious by
+  // construction (the agent got it wrong first) and gets promotion priority
+  // plus negative "avoid X" rendering. Optional; absent means observation.
+  learnedVia: external_exports.enum(["correction", "observation"]).optional(),
+  // The value the user corrected AWAY from, when known — the "what not to
+  // do" half of a correction-derived preference.
+  correctedFrom: external_exports.string().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),

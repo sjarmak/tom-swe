@@ -24,6 +24,8 @@ import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { extractSessionModel } from '../session-extract.js'
 import { runPromotion } from '../promotion.js'
+import { judgeDerivability } from '../promotion-gate.js'
+import type { GateCandidate } from '../promotion-gate.js'
 import { pruneOldSessions } from '../pruning.js'
 import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
@@ -209,7 +211,9 @@ export async function analyzeCompletedSession(
   // marker blocks and retire them from injection. Promotion failures must
   // never break the analysis pipeline (catch, log, continue).
   try {
-    const promotion = runPromotion(aggregatedUserModel, config.promotion, cwd)
+    const gate = (candidates: readonly GateCandidate[]): ReadonlySet<string> | null =>
+      judgeDerivability(candidates, cwd, configuredModel)
+    const promotion = runPromotion(aggregatedUserModel, config.promotion, cwd, gate)
     // runPromotion returns the same reference when promotion is disabled;
     // otherwise persist the updated promoted/retired flags.
     if (promotion.model !== aggregatedUserModel) {

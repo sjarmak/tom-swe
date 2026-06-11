@@ -243,6 +243,31 @@ describe('applyCorrections', () => {
     expect(old?.confidence).toBeCloseTo(0.4)
   })
 
+  it('stamps correction provenance (learnedVia + correctedFrom) on the corrected-to cluster', () => {
+    const prefs = [makePreference({ value: 'JavaScript', confidence: 0.8 })]
+    const result = applyCorrections(prefs, [
+      makeCorrection({ correctedValue: 'TypeScript' }),
+    ])
+
+    const correctedTo = result.find((p) => p.value === 'TypeScript')
+    expect(correctedTo?.learnedVia).toBe('correction')
+    expect(correctedTo?.correctedFrom).toBe('JavaScript')
+
+    // The penalized original carries no provenance fields.
+    const old = result.find((p) => p.value === 'JavaScript')
+    expect(old?.learnedVia).toBeUndefined()
+  })
+
+  it('omits correctedFrom when no prior value existed for the key', () => {
+    const result = applyCorrections([], [
+      makeCorrection({ correctedValue: 'TypeScript' }),
+    ])
+
+    const correctedTo = result.find((p) => p.value === 'TypeScript')
+    expect(correctedTo?.learnedVia).toBe('correction')
+    expect(correctedTo?.correctedFrom).toBeUndefined()
+  })
+
   it('does not penalize an existing preference matching the corrected-to value', () => {
     const prefs = [
       makePreference({ value: 'JavaScript', confidence: 0.8 }),

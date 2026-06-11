@@ -320,13 +320,23 @@ describe('runPromotion', () => {
     fs.rmSync(projectDir, { recursive: true, force: true })
   })
 
+  // Gate that passes everything: pipeline tests stay focused on routing.
+  const allowAll = (
+    candidates: ReadonlyArray<{ id: string }>
+  ): ReadonlySet<string> => new Set(candidates.map((c) => c.id))
+
   it('routes codingPreferences to the project CLAUDE.md when it exists', () => {
     const projectFile = path.join(projectDir, 'CLAUDE.md')
     fs.writeFileSync(projectFile, '# Project\n', 'utf-8')
     fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true })
 
     const codingPref = cluster({ value: 'vitest' })
-    const result = runPromotion(userModel([codingPref]), DEFAULT_PROMOTION, projectDir)
+    const result = runPromotion(
+      userModel([codingPref]),
+      DEFAULT_PROMOTION,
+      projectDir,
+      allowAll
+    )
 
     const content = fs.readFileSync(projectFile, 'utf-8')
     expect(content).toContain(PROMOTION_BEGIN_MARKER)
@@ -340,29 +350,167 @@ describe('runPromotion', () => {
     }
   })
 
-  it('routes interactionStyle and emotionalSignals to the global CLAUDE.md', () => {
+  it('routes interactionStyle to the global CLAUDE.md and never promotes emotionalSignals', () => {
     fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true })
     const interaction = cluster({
       category: 'interactionStyle',
       key: 'pattern',
       value: 'concise-answers',
     })
+    // Emotional signals reinforce nearly every session and would cross any
+    // threshold; they are runtime state, not guidance, and must not promote.
     const emotional = cluster({
       category: 'emotionalSignals',
-      key: 'urgency',
-      value: 'low',
+      key: 'satisfaction',
+      value: 'true',
     })
 
     const result = runPromotion(
       userModel([interaction, emotional]),
       DEFAULT_PROMOTION,
-      projectDir
+      projectDir,
+      allowAll
     )
 
     const content = fs.readFileSync(globalMemoryFilePath(), 'utf-8')
     expect(content).toContain('Prefers concise-answers (interactionStyle/pattern')
-    expect(content).toContain('Prefers low (emotionalSignals/urgency')
+    expect(content).not.toContain('emotionalSignals')
+    expect(result.promoted.map((p) => p.category)).not.toContain('emotionalSignals')
     expect(result.targets).toContain(globalMemoryFilePath())
+  })
+
+  it('renders correction-derived preferences as negative guidance with priority', () => {
+    const projectFile = path.join(projectDir, 'CLAUDE.md')
+    fs.writeFileSync(projectFile, '# Project\n', 'utf-8')
+
+    const corrected = cluster({
+      key: 'testRunner',
+      value: 'vitest',
+      learnedVia: 'correction',
+      correctedFrom: 'jest',
+      confidence: 0.85,
+      sessionCount: 5,
+    })
+    const observed = cluster({
+      key: 'bundler',
+      value: 'esbuild',
+      confidence: 0.95,
+      sessionCount: 20,
+    })
+
+    const result = runPromotion(
+      userModel([observed, corrected]),
+      DEFAULT_PROMOTION,
+      projectDir,
+      allowAll
+    )
+
+    const content = fs.readFileSync(projectFile, 'utf-8')
+    expect(content).toContain(
+      'Avoid jest for testRunner; use vitest instead (user corrected this; 5 sessions)'
+    )
+    // Correction-derived sorts first despite the lower confidence x sessions.
+    expect(result.promoted[0]?.key).toBe('testRunner')
+  })
+
+  it('conservatively limits new project promotions to corrections when the gate is unavailable', () => {
+    const projectFile = path.join(projectDir, 'CLAUDE.md')
+    fs.writeFileSync(projectFile, '# Project\n', 'utf-8')
+
+    const corrected = cluster({
+      key: 'testRunner',
+      value: 'vitest',
+      learnedVia: 'correction',
+    })
+    const observed = cluster({ key: 'bundler', value: 'esbuild' })
+
+    // gate = null: judgment unavailable
+    const result = runPromotion(
+      userModel([corrected, observed]),
+      DEFAULT_PROMOTION,
+      projectDir,
+      null
+    )
+
+    const content = fs.readFileSync(projectFile, 'utf-8')
+    expect(content).toContain('vitest')
+    expect(content).not.toContain('esbuild')
+    expect(result.promoted.map((p) => p.key)).toEqual(['testRunner'])
+  })
+
+  it('drops candidates the derivability gate rejects and logs the skip', () => {
+    const projectFile = path.join(projectDir, 'CLAUDE.md')
+    fs.writeFileSync(projectFile, '# Project\n', 'utf-8')
+
+    const derivable = cluster({ key: 'testRunner', value: 'vitest' })
+    const notDerivable = cluster({ key: 'deployRitual', value: 'canary-first' })
+
+    const rejectVitest = (
+      candidates: ReadonlyArray<{ id: string }>
+    ): ReadonlySet<string> =>
+      new Set(candidates.map((c) => c.id).filter((id) => !id.includes('vitest')))
+
+    const result = runPromotion(
+      userModel([derivable, notDerivable]),
+      DEFAULT_PROMOTION,
+      projectDir,
+      rejectVitest
+    )
+
+    const content = fs.readFileSync(projectFile, 'utf-8')
+    expect(content).toContain('canary-first')
+    expect(content).not.toContain('vitest')
+    expect(result.promoted.map((p) => p.key)).toEqual(['deployRitual'])
+
+    const usageLog = fs.readFileSync(
+      path.join(homeDir, '.claude', 'tom', 'usage.log'),
+      'utf-8'
+    )
+    const skipEntry = usageLog
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((e) => e['operation'] === 'promotion-skipped')
+    expect(skipEntry).toBeDefined()
+    expect((skipEntry?.['detail'] as Record<string, unknown>)['reason']).toBe(
+      'statically-derivable'
+    )
+  })
+
+  it('caps the block at MAX_BLOCK_PREFERENCES priority-ordered lines', () => {
+    fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true })
+
+    const prefs = Array.from({ length: 14 }, (_, i) =>
+      cluster({
+        category: 'interactionStyle',
+        key: `style-${String(i).padStart(2, '0')}`,
+        value: `v${i}`,
+        confidence: 0.8 + i * 0.01,
+        sessionCount: 5,
+      })
+    )
+
+    const result = runPromotion(userModel(prefs), DEFAULT_PROMOTION, projectDir, allowAll)
+
+    expect(result.promoted).toHaveLength(10)
+    const content = fs.readFileSync(globalMemoryFilePath(), 'utf-8')
+    const lines = content.split('\n').filter((l) => l.startsWith('- '))
+    expect(lines).toHaveLength(10)
+    // Highest confidence x sessions survive the cap.
+    expect(content).toContain('style-13')
+    expect(content).not.toContain('style-00')
+  })
+
+  it('accepts no NEW entries into a host file over the line budget', () => {
+    const projectFile = path.join(projectDir, 'CLAUDE.md')
+    const bigContent = '# Project\n' + Array.from({ length: 205 }, (_, i) => `line ${i}`).join('\n') + '\n'
+    fs.writeFileSync(projectFile, bigContent, 'utf-8')
+
+    const newPref = cluster({ key: 'testRunner', value: 'vitest' })
+    const result = runPromotion(userModel([newPref]), DEFAULT_PROMOTION, projectDir, allowAll)
+
+    expect(result.promoted).toHaveLength(0)
+    expect(fs.readFileSync(projectFile, 'utf-8')).not.toContain('vitest')
   })
 
   it('does not create a project CLAUDE.md that does not exist', () => {

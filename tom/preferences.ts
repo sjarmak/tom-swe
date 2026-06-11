@@ -124,6 +124,22 @@ export function applyCorrections(
   let result: readonly PreferenceCluster[] = preferences
 
   for (const correction of corrections) {
+    // The value corrected away from — the most recently updated penalized
+    // entry — becomes provenance on the corrected-to preference (the
+    // "avoid X" half used by promotion's negative rendering).
+    const penalized = result
+      .filter(
+        (p) =>
+          p.category === correction.category &&
+          p.key === correction.key &&
+          !(
+            correction.correctedValue !== undefined &&
+            p.value === correction.correctedValue
+          )
+      )
+      .sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated))
+    const correctedFrom = penalized[0]?.value
+
     result = result.map((p) => {
       const matchesTarget =
         p.category === correction.category && p.key === correction.key
@@ -146,6 +162,18 @@ export function applyCorrections(
         key: correction.key,
         value: correction.correctedValue,
       })
+      // Stamp correction provenance on the corrected-to cluster.
+      result = result.map((p) =>
+        p.category === correction.category &&
+        p.key === correction.key &&
+        p.value === correction.correctedValue
+          ? {
+              ...p,
+              learnedVia: 'correction' as const,
+              ...(correctedFrom !== undefined ? { correctedFrom } : {}),
+            }
+          : p
+      )
     }
   }
 
