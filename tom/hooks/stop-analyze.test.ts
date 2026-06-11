@@ -490,13 +490,17 @@ describe('analyzeCompletedSession', () => {
     const result = await analyzeCompletedSession('llm-success-test')
 
     expect(result.success).toBe(true)
-    expect(result.sessionModel).toEqual(llmModel)
+    // endedAt is stamped mechanically from the Tier 1 log.
+    expect(result.sessionModel).toEqual({ ...llmModel, endedAt: expect.any(String) })
 
     // The persisted Tier 2 model is the LLM-derived one, not the heuristic one
     const modelPath = path.join(
       tempDir, '.claude', 'tom', 'session-models', 'llm-success-test.json'
     )
-    expect(JSON.parse(fs.readFileSync(modelPath, 'utf-8'))).toEqual(llmModel)
+    expect(JSON.parse(fs.readFileSync(modelPath, 'utf-8'))).toEqual({
+      ...llmModel,
+      endedAt: expect.any(String),
+    })
 
     const entries = readUsageEntries()
     expect(entries).toHaveLength(1)
@@ -713,37 +717,39 @@ describe('analyzeCompletedSession', () => {
     expect(winner?.['confidence']).toBeCloseTo(0.1)
   })
 
-  function writeUserModelFile(clusters: readonly object[]): string {
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    fs.mkdirSync(tomDir, { recursive: true })
-    const modelPath = path.join(tomDir, 'user-model.json')
-    fs.writeFileSync(
-      modelPath,
-      JSON.stringify({
-        preferencesClusters: clusters,
-        interactionStyleSummary: '',
-        codingStyleSummary: '',
-        projectOverrides: {},
-      }),
-      'utf-8'
-    )
-    return modelPath
-  }
-
-  function stableCluster(overrides: Record<string, unknown> = {}): object {
-    return {
-      category: 'interactionStyle',
-      key: 'verbosity',
-      value: 'concise',
-      confidence: 0.9,
-      lastUpdated: new Date().toISOString(),
-      sessionCount: 10,
-      ...overrides,
+  /**
+   * Seeds N Tier 2 session models carrying the same keyed preference.
+   * Tier 3 is rebuilt from Tier 2 on every analysis, so N recent models
+   * yield confidence ~0.1*N and sessionCount N for that preference —
+   * the honest way to reach promotion thresholds under rebuild semantics.
+   */
+  function seedTier2(
+    count: number,
+    fields: { category: 'interactionStyle' | 'codingPreferences'; key: string; value: string }
+  ): void {
+    const modelsDir = path.join(tempDir, '.claude', 'tom', 'session-models')
+    fs.mkdirSync(modelsDir, { recursive: true })
+    for (let i = 0; i < count; i++) {
+      const entry = { key: fields.key, value: fields.value }
+      const model = {
+        sessionId: `seed-${fields.key}-${i}`,
+        intent: 'seed session',
+        interactionPatterns: fields.category === 'interactionStyle' ? [entry] : [],
+        codingPreferences: fields.category === 'codingPreferences' ? [entry] : [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [],
+        endedAt: new Date(Date.now() - (count - i) * 60_000).toISOString(),
+      }
+      fs.writeFileSync(
+        path.join(modelsDir, `${model.sessionId}.json`),
+        JSON.stringify(model),
+        'utf-8'
+      )
     }
   }
 
   it('promotes stable preferences into the global CLAUDE.md and persists promoted flags', async () => {
-    const modelPath = writeUserModelFile([stableCluster()])
+    seedTier2(9, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })
     writeSessionFile('promotion-test')
 
     const result = await analyzeCompletedSession('promotion-test')
@@ -758,7 +764,9 @@ describe('analyzeCompletedSession', () => {
     expect(content).toContain('<!-- tom-swe:end -->')
 
     // Promoted flag persisted in the user model
-    const persisted = JSON.parse(fs.readFileSync(modelPath, 'utf-8')) as {
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(tempDir, '.claude', 'tom', 'user-model.json'), 'utf-8')
+    ) as {
       preferencesClusters: Array<Record<string, unknown>>
     }
     const promoted = persisted.preferencesClusters.find(
@@ -785,13 +793,7 @@ describe('analyzeCompletedSession', () => {
     // cwd is tempDir (chdir in beforeEach); the project memory file exists
     const projectClaudeMd = path.join(tempDir, 'CLAUDE.md')
     fs.writeFileSync(projectClaudeMd, '# Project rules\n', 'utf-8')
-    writeUserModelFile([
-      stableCluster({
-        category: 'codingPreferences',
-        key: 'testing',
-        value: 'vitest',
-      }),
-    ])
+    seedTier2(9, { category: 'codingPreferences', key: 'testing', value: 'vitest' })
     writeSessionFile('project-promotion-test')
 
     await analyzeCompletedSession('project-promotion-test')
@@ -801,8 +803,52 @@ describe('analyzeCompletedSession', () => {
     expect(content).toContain('Prefers vitest')
   })
 
+  it('does not inflate confidence when the same session is analyzed repeatedly', async () => {
+    // THE dogfooding regression: Stop fires per turn-end; incremental
+    // aggregation re-reinforced the same session every fire (9 analyses /
+    // 4 sessions inflated emotionalSignals to 90% in a day). Under rebuild,
+    // N analyses of one session contribute exactly one session's worth.
+    writeSessionFile('idempotent-test')
+    const modelsDir = path.join(tempDir, '.claude', 'tom', 'session-models')
+
+    await analyzeCompletedSession('idempotent-test')
+    // Age the Tier 2 file past the debounce window, then re-analyze twice.
+    for (let i = 0; i < 2; i++) {
+      const tier2 = path.join(modelsDir, 'idempotent-test.json')
+      const past = new Date(Date.now() - 10 * 60_000)
+      fs.utimesSync(tier2, past, past)
+      await analyzeCompletedSession('idempotent-test')
+    }
+
+    const userModel = JSON.parse(
+      fs.readFileSync(path.join(tempDir, '.claude', 'tom', 'user-model.json'), 'utf-8')
+    ) as { preferencesClusters: Array<{ key: string; confidence: number; sessionCount: number }> }
+    const satisfaction = userModel.preferencesClusters.find((p) => p.key === 'satisfaction')
+    expect(satisfaction?.sessionCount).toBe(1)
+    expect(satisfaction?.confidence).toBeCloseTo(0.1)
+  })
+
+  it('debounces re-analysis of a freshly analyzed session', async () => {
+    writeSessionFile('debounce-test')
+
+    const first = await analyzeCompletedSession('debounce-test')
+    expect(first.sessionModel).not.toBeNull()
+
+    // Immediate re-fire (same turn cadence): skipped, logged, no LLM call.
+    mockAnalyzeWithLlm.mockClear()
+    const second = await analyzeCompletedSession('debounce-test')
+    expect(second.success).toBe(true)
+    expect(second.sessionModel).toBeNull()
+    expect(second.userModelUpdated).toBe(false)
+    expect(mockAnalyzeWithLlm).not.toHaveBeenCalled()
+
+    const entries = readUsageEntries()
+    expect(entries.some((e) => e['operation'] === 'analysis-debounced')).toBe(true)
+  })
+
   it('does not promote preferences below the promotion thresholds', async () => {
-    writeUserModelFile([stableCluster({ confidence: 0.5 })])
+    // 4 sessions → confidence 0.4, below both the 0.8 and 5-session bars.
+    seedTier2(4, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })
     writeSessionFile('no-promotion-test')
 
     await analyzeCompletedSession('no-promotion-test')
@@ -817,7 +863,7 @@ describe('analyzeCompletedSession', () => {
   it('logs promotion-error and completes the pipeline when promotion fails', async () => {
     // A directory at the global CLAUDE.md path makes the block write throw
     fs.mkdirSync(path.join(tempDir, '.claude', 'CLAUDE.md'), { recursive: true })
-    writeUserModelFile([stableCluster()])
+    seedTier2(9, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })
     writeSessionFile('promotion-error-test')
 
     const result = await analyzeCompletedSession('promotion-error-test')

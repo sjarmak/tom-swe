@@ -45,15 +45,34 @@ export type LlmAnalysisResult = LlmAnalysisSuccess | LlmAnalysisFailure
 
 // --- Prompt ---
 
-export function buildAnalysisPrompt(sessionLog: SessionLog): string {
+/** Existing preference vocabulary passed in for key/value reuse. */
+export interface VocabularyEntry {
+  readonly category: string
+  readonly key: string
+  readonly value: string
+}
+
+export function buildAnalysisPrompt(
+  sessionLog: SessionLog,
+  vocabulary: readonly VocabularyEntry[] = []
+): string {
+  const vocabularySection =
+    vocabulary.length > 0
+      ? [
+          '',
+          'Existing preference vocabulary — REUSE these exact keys (and exact values when the same preference recurs) instead of inventing new phrasings. Cross-session reinforcement only works on exact key+value matches:',
+          ...vocabulary.map((v) => `- ${v.category} / ${v.key} = ${v.value}`),
+        ]
+      : []
+
   return [
     'You are analyzing a Claude Code session log to extract the user\'s session model.',
     'Return ONLY a single JSON object — no prose, no markdown fences — matching exactly this shape:',
     '{',
     `  "sessionId": "${sessionLog.sessionId}",`,
     '  "intent": "<string: concise description of what the user was trying to accomplish>",',
-    '  "interactionPatterns": ["<string: recurring interaction or workflow patterns observed>"],',
-    '  "codingPreferences": ["<string: coding preferences inferable from the session>"],',
+    '  "interactionPatterns": [{"key": "<topic key>", "value": "<short canonical value>"}],',
+    '  "codingPreferences": [{"key": "<topic key>", "value": "<short canonical value>"}],',
     '  "satisfactionSignals": {',
     '    "frustration": <boolean: did the user hit repeated errors or friction?>,',
     '    "satisfaction": <boolean: did the session conclude successfully?>,',
@@ -69,6 +88,12 @@ export function buildAnalysisPrompt(sessionLog: SessionLog): string {
     '  ]',
     '}',
     'No additional fields are allowed. "urgency" must be exactly "low", "medium", or "high".',
+    '',
+    'Key/value discipline (this is what makes preferences accumulate across sessions):',
+    '- "key" is a snake_case topic name of 1-3 words naming WHAT the preference is about: test_runner, docs_style, commit_format, error_handling. Never a generic word like "preference" or "pattern".',
+    '- "value" is a short canonical phrase (at most ~6 words) naming the preferred choice: "vitest", "negative_space_documentation", "tests in same commit". Never a full sentence.',
+    '- The same real-world preference must always produce the same key and the same value, so it reinforces instead of fragmenting.',
+    ...vocabularySection,
     '',
     'Corrections: ALSO extract corrections — moments where the user contradicted, overrode, or re-edited away a previously suggested or observed preference. The redacted user messages in the session log (the "userMessages" field) are the primary evidence source. Return an empty "corrections" array if there are none.',
     '',
@@ -222,10 +247,13 @@ export function parseAnalysisOutput(
 export async function analyzeSessionWithLlm(
   sessionLog: SessionLog,
   model: string,
-  options: { readonly timeoutMs?: number } = {}
+  options: {
+    readonly timeoutMs?: number
+    readonly vocabulary?: readonly VocabularyEntry[]
+  } = {}
 ): Promise<LlmAnalysisResult> {
   const timeoutMs = options.timeoutMs ?? LLM_ANALYSIS_TIMEOUT_MS
-  const prompt = buildAnalysisPrompt(sessionLog)
+  const prompt = buildAnalysisPrompt(sessionLog, options.vocabulary ?? [])
 
   return new Promise<LlmAnalysisResult>((resolve) => {
     let settled = false

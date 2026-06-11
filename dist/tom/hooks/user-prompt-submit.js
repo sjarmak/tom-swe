@@ -13896,16 +13896,24 @@ var CorrectionSchema = external_exports.strictObject({
   // Short evidence string (quote or paraphrase of the correcting moment).
   evidence: external_exports.string()
 });
+var PreferenceEntrySchema = external_exports.strictObject({
+  key: external_exports.string(),
+  value: external_exports.string()
+});
 var SessionModelSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   intent: external_exports.string(),
-  interactionPatterns: external_exports.array(external_exports.string()),
-  codingPreferences: external_exports.array(external_exports.string()),
+  interactionPatterns: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
+  codingPreferences: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
   satisfactionSignals: SatisfactionSignalsSchema,
   // Corrections extracted from the session. Optional for backward
   // compatibility with session models written before this field existed;
   // consumers treat absence as an empty array.
-  corrections: external_exports.array(CorrectionSchema).optional()
+  corrections: external_exports.array(CorrectionSchema).optional(),
+  // When the session's evidence applies (copied mechanically from the Tier 1
+  // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
+  // Optional for session models written before rebuilds existed.
+  endedAt: external_exports.string().datetime().optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),

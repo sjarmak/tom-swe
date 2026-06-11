@@ -33,9 +33,10 @@ export const DEFAULT_CORRECTION_PENALTY = 0.5
  */
 export function reinforcePreference(
   preferences: readonly PreferenceCluster[],
-  observation: PreferenceObservation
+  observation: PreferenceObservation,
+  asOf: Date = new Date()
 ): PreferenceCluster[] {
-  const now = new Date().toISOString()
+  const now = asOf.toISOString()
   const matchIndex = preferences.findIndex(
     (p) =>
       p.category === observation.category &&
@@ -118,9 +119,10 @@ export function decayPreferences(
 export function applyCorrections(
   preferences: readonly PreferenceCluster[],
   corrections: readonly Correction[],
-  penaltyFactor: number = DEFAULT_CORRECTION_PENALTY
+  penaltyFactor: number = DEFAULT_CORRECTION_PENALTY,
+  asOf: Date = new Date()
 ): PreferenceCluster[] {
-  const now = new Date().toISOString()
+  const now = asOf.toISOString()
   let result: readonly PreferenceCluster[] = preferences
 
   for (const correction of corrections) {
@@ -157,11 +159,15 @@ export function applyCorrections(
     })
 
     if (correction.correctedValue !== undefined) {
-      result = reinforcePreference(result, {
-        category: correction.category,
-        key: correction.key,
-        value: correction.correctedValue,
-      })
+      result = reinforcePreference(
+        result,
+        {
+          category: correction.category,
+          key: correction.key,
+          value: correction.correctedValue,
+        },
+        asOf
+      )
       // Stamp correction provenance on the corrected-to cluster.
       result = result.map((p) =>
         p.category === correction.category &&

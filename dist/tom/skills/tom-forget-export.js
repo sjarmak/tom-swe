@@ -13854,16 +13854,24 @@ var CorrectionSchema = external_exports.strictObject({
   // Short evidence string (quote or paraphrase of the correcting moment).
   evidence: external_exports.string()
 });
+var PreferenceEntrySchema = external_exports.strictObject({
+  key: external_exports.string(),
+  value: external_exports.string()
+});
 var SessionModelSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   intent: external_exports.string(),
-  interactionPatterns: external_exports.array(external_exports.string()),
-  codingPreferences: external_exports.array(external_exports.string()),
+  interactionPatterns: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
+  codingPreferences: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
   satisfactionSignals: SatisfactionSignalsSchema,
   // Corrections extracted from the session. Optional for backward
   // compatibility with session models written before this field existed;
   // consumers treat absence as an empty array.
-  corrections: external_exports.array(CorrectionSchema).optional()
+  corrections: external_exports.array(CorrectionSchema).optional(),
+  // When the session's evidence applies (copied mechanically from the Tier 1
+  // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
+  // Optional for session models written before rebuilds existed.
+  endedAt: external_exports.string().datetime().optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -14046,8 +14054,8 @@ var CONFIDENCE_MAX = 1;
 var CONFIDENCE_MIN_THRESHOLD = 0.01;
 var INITIAL_CONFIDENCE = 0.1;
 var DEFAULT_CORRECTION_PENALTY = 0.5;
-function reinforcePreference(preferences, observation) {
-  const now = (/* @__PURE__ */ new Date()).toISOString();
+function reinforcePreference(preferences, observation, asOf = /* @__PURE__ */ new Date()) {
+  const now = asOf.toISOString();
   const matchIndex = preferences.findIndex(
     (p) => p.category === observation.category && p.key === observation.key && p.value === observation.value
   );
@@ -14085,8 +14093,8 @@ function decayPreferences(preferences, halfLifeDays, now = /* @__PURE__ */ new D
     };
   }).filter((p) => p.confidence >= CONFIDENCE_MIN_THRESHOLD);
 }
-function applyCorrections(preferences, corrections, penaltyFactor = DEFAULT_CORRECTION_PENALTY) {
-  const now = (/* @__PURE__ */ new Date()).toISOString();
+function applyCorrections(preferences, corrections, penaltyFactor = DEFAULT_CORRECTION_PENALTY, asOf = /* @__PURE__ */ new Date()) {
+  const now = asOf.toISOString();
   let result = preferences;
   for (const correction of corrections) {
     const penalized = result.filter(
@@ -14106,11 +14114,15 @@ function applyCorrections(preferences, corrections, penaltyFactor = DEFAULT_CORR
       };
     });
     if (correction.correctedValue !== void 0) {
-      result = reinforcePreference(result, {
-        category: correction.category,
-        key: correction.key,
-        value: correction.correctedValue
-      });
+      result = reinforcePreference(
+        result,
+        {
+          category: correction.category,
+          key: correction.key,
+          value: correction.correctedValue
+        },
+        asOf
+      );
       result = result.map(
         (p) => p.category === correction.category && p.key === correction.key && p.value === correction.correctedValue ? {
           ...p,
@@ -14139,18 +14151,14 @@ var DEFAULT_DECAY_DAYS = 30;
 function extractObservations(session) {
   const observations = [];
   for (const pref of session.codingPreferences) {
-    observations.push({
-      category: "codingPreferences",
-      key: "preference",
-      value: pref
-    });
+    observations.push(
+      typeof pref === "string" ? { category: "codingPreferences", key: "preference", value: pref } : { category: "codingPreferences", key: pref.key, value: pref.value }
+    );
   }
   for (const pattern of session.interactionPatterns) {
-    observations.push({
-      category: "interactionStyle",
-      key: "pattern",
-      value: pattern
-    });
+    observations.push(
+      typeof pattern === "string" ? { category: "interactionStyle", key: "pattern", value: pattern } : { category: "interactionStyle", key: pattern.key, value: pattern.value }
+    );
   }
   const { frustration, satisfaction, urgency } = session.satisfactionSignals;
   observations.push({
@@ -14170,8 +14178,8 @@ function extractObservations(session) {
   });
   return observations;
 }
-function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DECAY_DAYS, correctionPenalty = DEFAULT_CORRECTION_PENALTY) {
-  const now = /* @__PURE__ */ new Date();
+function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DECAY_DAYS, correctionPenalty = DEFAULT_CORRECTION_PENALTY, asOf = /* @__PURE__ */ new Date()) {
+  const now = asOf;
   const decayed = decayPreferences(
     currentModel.preferencesClusters,
     decayDays,
@@ -14180,12 +14188,13 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
   const observations = extractObservations(session);
   let preferences = decayed;
   for (const observation of observations) {
-    preferences = reinforcePreference(preferences, observation);
+    preferences = reinforcePreference(preferences, observation, now);
   }
   const corrected = applyCorrections(
     preferences,
     session.corrections ?? [],
-    correctionPenalty
+    correctionPenalty,
+    now
   );
   const resolved = resolveConflicts(corrected);
   return {

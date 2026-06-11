@@ -13,10 +13,10 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type { SessionLog, SessionModel, UserModel } from '../schemas.js'
+import type { SessionLog, SessionModel } from '../schemas.js'
 import { SessionLogSchema } from '../schemas.js'
 import { readUserModel, writeSessionModel, writeUserModel, globalTomDir } from '../memory-io.js'
-import { aggregateSessionIntoModel } from '../aggregation.js'
+import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
 import { getModelForOperation, logUsage } from '../routing.js'
@@ -33,6 +33,12 @@ import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
 /** Logged when no model was spawned (heuristic fallback / error paths). */
 const NO_MODEL = 'none'
+
+/**
+ * Minimum age of a session's Tier 2 model before re-analysis. Stop fires
+ * per turn-end; without this, long sessions burn one LLM analysis per turn.
+ */
+const ANALYSIS_DEBOUNCE_MS = 90_000
 
 // --- Helpers ---
 
@@ -137,17 +143,52 @@ export async function analyzeCompletedSession(
     }
   }
 
+  // Debounce: Stop fires on every turn-end, not once per session. Skip
+  // re-analysis when this session was analyzed moments ago — the rebuild
+  // keeps Tier 3 idempotent, so the only loss is at most the debounce
+  // window's worth of tail content, replaced by the next qualifying fire.
+  const tier2Path = path.join(globalTomDir(), 'session-models', `${sessionId}.json`)
+  try {
+    const ageMs = Date.now() - fs.statSync(tier2Path).mtimeMs
+    if (ageMs < ANALYSIS_DEBOUNCE_MS) {
+      logUsage({
+        timestamp: new Date().toISOString(),
+        operation: 'analysis-debounced',
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        detail: { ageMs: Math.round(ageMs), debounceMs: ANALYSIS_DEBOUNCE_MS },
+      })
+      return {
+        success: true,
+        sessionId,
+        sessionModel: null,
+        userModelUpdated: false,
+        indexRebuilt: false,
+      }
+    }
+  } catch {
+    // No Tier 2 model yet — first analysis for this session, proceed.
+  }
+
   // Step 2: Extract Tier 2 session model — headless claude with the
   // configured memoryUpdate model, falling back loudly to the heuristic
   // extractor when the LLM path fails for any reason.
   const configuredModel = getModelForOperation('memoryUpdate')
+  // Vocabulary anchoring: pass the current model's keys/values so the
+  // analyzer reuses them — exact matches are what reinforcement needs.
+  const vocabulary = (readUserModel('global')?.preferencesClusters ?? []).map(
+    (p) => ({ category: p.category, key: p.key, value: p.value })
+  )
   const analysisStartedAt = Date.now()
-  const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel)
+  const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel, {
+    vocabulary,
+  })
   const analysisDurationMs = Date.now() - analysisStartedAt
 
-  let sessionModel: SessionModel
+  let extracted: SessionModel
   if (llmResult.ok) {
-    sessionModel = llmResult.model
+    extracted = llmResult.model
     logUsage({
       timestamp: new Date().toISOString(),
       operation: 'session-analysis',
@@ -168,25 +209,27 @@ export async function analyzeCompletedSession(
       reason: `${llmResult.reason}: ${llmResult.detail}`,
       detail: { path: 'heuristic', failure: llmResult.reason },
     })
-    sessionModel = extractSessionModel(sessionLog)
+    extracted = extractSessionModel(sessionLog)
   }
+  // endedAt is stamped mechanically from the Tier 1 log (never produced by
+  // the LLM): it grounds decay when Tier 3 is rebuilt from Tier 2.
+  const sessionModel: SessionModel = { ...extracted, endedAt: sessionLog.endedAt }
   writeSessionModel(sessionModel, 'global')
 
-  // Step 3: Aggregate into Tier 3 user model
-  const currentUserModel = readUserModel('global')
-  const emptyModel: UserModel = {
-    preferencesClusters: [],
-    interactionStyleSummary: '',
-    codingStyleSummary: '',
-    projectOverrides: {},
-  }
-
+  // Step 3: Rebuild Tier 3 from ALL Tier 2 models. Stop fires per turn-end,
+  // so incremental aggregation re-reinforced the same session every turn
+  // (confidence inflated ~2-3x in dogfooding). A rebuild is idempotent: the
+  // latest analysis of a session REPLACES its contribution.
+  const previousUserModel = readUserModel('global')
   const config = readTomConfig()
-  const aggregatedUserModel = aggregateSessionIntoModel(
-    currentUserModel ?? emptyModel,
-    sessionModel,
-    config.preferenceDecayDays,
-    config.correctionPenalty
+  const aggregatedUserModel = carryPromotedFlags(
+    rebuildUserModelFromTier2(
+      'global',
+      config.preferenceDecayDays,
+      config.correctionPenalty,
+      previousUserModel
+    ),
+    previousUserModel
   )
   writeUserModel(aggregatedUserModel, 'global')
 

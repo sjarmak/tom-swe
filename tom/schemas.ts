@@ -61,16 +61,31 @@ export const CorrectionSchema = z.strictObject({
   evidence: z.string(),
 })
 
+/**
+ * A keyed preference entry. Keys are short topic names (snake_case) so the
+ * same preference reinforces across sessions; a bare string is the legacy
+ * shape, folded under a generic key (which cannot reinforce or promote
+ * reliably — see extractObservations).
+ */
+export const PreferenceEntrySchema = z.strictObject({
+  key: z.string(),
+  value: z.string(),
+})
+
 export const SessionModelSchema = z.strictObject({
   sessionId: z.string(),
   intent: z.string(),
-  interactionPatterns: z.array(z.string()),
-  codingPreferences: z.array(z.string()),
+  interactionPatterns: z.array(z.union([z.string(), PreferenceEntrySchema])),
+  codingPreferences: z.array(z.union([z.string(), PreferenceEntrySchema])),
   satisfactionSignals: SatisfactionSignalsSchema,
   // Corrections extracted from the session. Optional for backward
   // compatibility with session models written before this field existed;
   // consumers treat absence as an empty array.
   corrections: z.array(CorrectionSchema).optional(),
+  // When the session's evidence applies (copied mechanically from the Tier 1
+  // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
+  // Optional for session models written before rebuilds existed.
+  endedAt: z.string().datetime().optional(),
 })
 
 // --- Tier 3: User Model ---

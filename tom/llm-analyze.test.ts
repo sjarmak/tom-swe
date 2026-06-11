@@ -106,6 +106,31 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toContain(JSON.stringify(log))
   })
 
+  it('demands keyed entries with topic keys and short canonical values', () => {
+    const prompt = buildAnalysisPrompt(makeSessionLog())
+
+    expect(prompt).toContain('Key/value discipline')
+    expect(prompt).toContain('snake_case topic name')
+    expect(prompt).toContain('Never a generic word like "preference" or "pattern"')
+    expect(prompt).toContain('{"key": "<topic key>", "value": "<short canonical value>"}')
+  })
+
+  it('anchors extraction to the existing preference vocabulary when provided', () => {
+    const prompt = buildAnalysisPrompt(makeSessionLog(), [
+      { category: 'codingPreferences', key: 'test_runner', value: 'vitest' },
+      { category: 'interactionStyle', key: 'verbosity', value: 'concise' },
+    ])
+
+    expect(prompt).toContain('Existing preference vocabulary')
+    expect(prompt).toContain('codingPreferences / test_runner = vitest')
+    expect(prompt).toContain('interactionStyle / verbosity = concise')
+
+    // Without vocabulary the section is omitted entirely.
+    expect(buildAnalysisPrompt(makeSessionLog())).not.toContain(
+      'Existing preference vocabulary'
+    )
+  })
+
   it('instructs the model to extract corrections from redacted user messages', () => {
     const prompt = buildAnalysisPrompt(makeSessionLog())
 
