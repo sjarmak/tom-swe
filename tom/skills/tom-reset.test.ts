@@ -206,6 +206,41 @@ describe('performReset', () => {
     )
   })
 
+  it('removes tom-swe marker blocks from both CLAUDE.md targets', () => {
+    const markerBlock =
+      '<!-- tom-swe:begin (managed by tom-swe; edits inside will be overwritten) -->\n' +
+      '- Prefers vitest (codingPreferences/testing; observed across 12 sessions)\n' +
+      '<!-- tom-swe:end -->\n'
+
+    const globalClaudeMd = path.join(tempDir, '.claude', 'CLAUDE.md')
+    fs.mkdirSync(path.dirname(globalClaudeMd), { recursive: true })
+    fs.writeFileSync(globalClaudeMd, '# Global rules\n' + markerBlock, 'utf-8')
+
+    const projectClaudeMd = path.join(process.cwd(), 'CLAUDE.md')
+    fs.writeFileSync(projectClaudeMd, '# Project rules\n' + markerBlock, 'utf-8')
+
+    const result = performReset()
+
+    expect(result.markerBlocksRemoved).toContain(globalClaudeMd)
+    expect(result.markerBlocksRemoved).toContain(projectClaudeMd)
+    // Managed content removed; user-owned content preserved
+    const globalContent = fs.readFileSync(globalClaudeMd, 'utf-8')
+    expect(globalContent).toBe('# Global rules\n')
+    const projectContent = fs.readFileSync(projectClaudeMd, 'utf-8')
+    expect(projectContent).toBe('# Project rules\n')
+  })
+
+  it('reports no marker removal when CLAUDE.md files carry no block', () => {
+    const globalClaudeMd = path.join(tempDir, '.claude', 'CLAUDE.md')
+    fs.mkdirSync(path.dirname(globalClaudeMd), { recursive: true })
+    fs.writeFileSync(globalClaudeMd, '# Untouched\n', 'utf-8')
+
+    const result = performReset()
+
+    expect(result.markerBlocksRemoved).toEqual([])
+    expect(fs.readFileSync(globalClaudeMd, 'utf-8')).toBe('# Untouched\n')
+  })
+
   it('handles overlapping global and project paths gracefully', () => {
     // When HOME and cwd point to same base, global and project paths are same
     process.cwd = () => tempDir
@@ -226,6 +261,7 @@ describe('formatResetResult', () => {
       projectDeleted: { fileCount: 0, totalBytes: 0 },
       totalFileCount: 0,
       totalBytes: 0,
+      markerBlocksRemoved: [],
     }
 
     const output = formatResetResult(result)
@@ -240,6 +276,7 @@ describe('formatResetResult', () => {
       projectDeleted: { fileCount: 0, totalBytes: 0 },
       totalFileCount: 6,
       totalBytes: 2048,
+      markerBlocksRemoved: [],
     }
 
     const output = formatResetResult(result)
@@ -256,6 +293,7 @@ describe('formatResetResult', () => {
       projectDeleted: { fileCount: 2, totalBytes: 512 },
       totalFileCount: 8,
       totalBytes: 2560,
+      markerBlocksRemoved: [],
     }
 
     const output = formatResetResult(result)
@@ -265,12 +303,28 @@ describe('formatResetResult', () => {
     expect(output).toContain('Project (.claude/tom/): 2 files')
   })
 
+  it('lists removed CLAUDE.md marker blocks', () => {
+    const result: ResetResult = {
+      globalDeleted: { fileCount: 1, totalBytes: 100 },
+      projectDeleted: { fileCount: 0, totalBytes: 0 },
+      totalFileCount: 1,
+      totalBytes: 100,
+      markerBlocksRemoved: ['/home/user/.claude/CLAUDE.md'],
+    }
+
+    const output = formatResetResult(result)
+
+    expect(output).toContain('## Removed CLAUDE.md Marker Blocks')
+    expect(output).toContain('- /home/user/.claude/CLAUDE.md')
+  })
+
   it('shows config preserved message', () => {
     const result: ResetResult = {
       globalDeleted: { fileCount: 1, totalBytes: 100 },
       projectDeleted: { fileCount: 0, totalBytes: 0 },
       totalFileCount: 1,
       totalBytes: 100,
+      markerBlocksRemoved: [],
     }
 
     const output = formatResetResult(result)

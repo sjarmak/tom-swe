@@ -7,9 +7,7 @@ import {
 
 function makeInput(overrides: Partial<DetectAmbiguityInput> = {}): DetectAmbiguityInput {
   return {
-    toolName: 'Read',
-    toolParameters: { file_path: '/src/index.ts' },
-    recentUserMessages: ['Please read the main entry file at /src/index.ts'],
+    prompt: 'Please read the main entry file at /src/index.ts',
     threshold: 'medium',
     hasUserModel: true,
     ...overrides,
@@ -33,19 +31,32 @@ describe('detectAmbiguity', () => {
 
     it('clamps score to 1.0 maximum', () => {
       const result = detectAmbiguity(makeInput({
-        toolName: 'Edit',
-        toolParameters: {},
-        recentUserMessages: ['fix style pattern architecture library framework convention approach'],
+        prompt: 'fix style pattern architecture library framework convention approach',
         hasUserModel: false,
       }))
       expect(result.score).toBeLessThanOrEqual(1.0)
     })
+
+    it('reports fired heuristics as typed triggers', () => {
+      const result = detectAmbiguity(makeInput({
+        prompt: 'refactor the architecture',
+        hasUserModel: false,
+      }))
+      expect(result.triggers).toContain('preference-sensitive')
+      expect(result.triggers).toContain('no-user-model')
+
+      const calm = detectAmbiguity(makeInput({
+        prompt: 'rename the variable maxRetries to maxAttempts in tom/consult.ts and update its three call sites',
+        hasUserModel: true,
+      }))
+      expect(calm.triggers).toEqual([])
+    })
   })
 
-  describe('heuristic 1: short/vague instructions', () => {
-    it('detects short vague instruction without file paths', () => {
+  describe('heuristic 1: short/vague prompts', () => {
+    it('detects short vague prompt without file paths', () => {
       const result = detectAmbiguity(makeInput({
-        recentUserMessages: ['fix this'],
+        prompt: 'fix this',
       }))
       expect(result.score).toBeGreaterThan(0)
       expect(result.reason).toContain('Short or vague')
@@ -53,115 +64,72 @@ describe('detectAmbiguity', () => {
 
     it('detects vague keywords', () => {
       const result = detectAmbiguity(makeInput({
-        recentUserMessages: ['improve and clean this'],
+        prompt: 'improve and clean this',
       }))
       expect(result.score).toBeGreaterThan(0)
       expect(result.reason).toContain('Short or vague')
     })
 
-    it('does not flag long specific instruction', () => {
+    it('does not flag long specific prompt', () => {
       const result = detectAmbiguity(makeInput({
-        recentUserMessages: [
+        prompt:
           'Please add a validateEmail function to /src/utils/validation.ts that uses a regex to check email format',
-        ],
       }))
       expect(result.reason).not.toContain('Short or vague')
     })
 
-    it('scores empty message', () => {
+    it('scores empty prompt', () => {
       const result = detectAmbiguity(makeInput({
-        recentUserMessages: [''],
+        prompt: '',
       }))
       expect(result.score).toBeGreaterThan(0)
     })
 
-    it('scores no messages', () => {
-      const result = detectAmbiguity(makeInput({
-        recentUserMessages: [],
+    it('reduces score for short prompt that names a file path', () => {
+      const withPath = detectAmbiguity(makeInput({
+        prompt: 'fix /src/app.ts',
       }))
-      expect(result.score).toBeGreaterThan(0)
+      const withoutPath = detectAmbiguity(makeInput({
+        prompt: 'fix the app',
+      }))
+      expect(withPath.score).toBeLessThan(withoutPath.score)
     })
   })
 
-  describe('heuristic 2: multiple file targets', () => {
-    it('flags Edit without file_path', () => {
-      const result = detectAmbiguity(makeInput({
-        toolName: 'Edit',
-        toolParameters: {},
-        recentUserMessages: ['Update the component to use React hooks instead of class syntax'],
-      }))
-      expect(result.reason).toContain('Edit tool used without a clear single file target')
-    })
-
-    it('flags Edit with file_path but no old_string', () => {
-      const result = detectAmbiguity(makeInput({
-        toolName: 'Edit',
-        toolParameters: { file_path: '/src/app.tsx' },
-        recentUserMessages: ['Update the component to use React hooks instead of class syntax'],
-      }))
-      expect(result.reason).toContain('Edit tool used without a clear single file target')
-    })
-
-    it('does not flag Edit with file_path and old_string', () => {
-      const result = detectAmbiguity(makeInput({
-        toolName: 'Edit',
-        toolParameters: { file_path: '/src/app.tsx', old_string: 'class App' },
-        recentUserMessages: ['Update the component to use React hooks instead of class syntax'],
-      }))
-      expect(result.reason).not.toContain('Edit tool used without a clear single file target')
-    })
-
-    it('does not flag non-edit tools', () => {
-      const result = detectAmbiguity(makeInput({
-        toolName: 'Read',
-        toolParameters: {},
-        recentUserMessages: ['Read the file at /src/index.ts and explain what it does in detail'],
-      }))
-      expect(result.reason).not.toContain('Edit tool')
-    })
-  })
-
-  describe('heuristic 3: preference-sensitive decisions', () => {
+  describe('heuristic 2: preference-sensitive vocabulary', () => {
     it('detects architecture keywords', () => {
       const result = detectAmbiguity(makeInput({
-        recentUserMessages: ['What architecture pattern should we use for the backend service layer?'],
+        prompt: 'What architecture pattern should we use for the backend service layer?',
       }))
       expect(result.reason).toContain('style, architecture, or library preferences')
     })
 
     it('detects library choice keywords', () => {
       const result = detectAmbiguity(makeInput({
-        recentUserMessages: ['Which library should we use for date formatting in our project?'],
+        prompt: 'Which library should we use for date formatting in our project?',
       }))
       expect(result.reason).toContain('style, architecture, or library preferences')
     })
 
-    it('adds score for style-sensitive tool', () => {
-      const withWriteTool = detectAmbiguity(makeInput({
-        toolName: 'Write',
-        toolParameters: { file_path: '/src/new.ts' },
-        recentUserMessages: ['Create a new utility file for string helpers with common functions'],
-      }))
-      const withReadTool = detectAmbiguity(makeInput({
-        toolName: 'Read',
-        toolParameters: { file_path: '/src/new.ts' },
-        recentUserMessages: ['Create a new utility file for string helpers with common functions'],
-      }))
-      expect(withWriteTool.score).toBeGreaterThan(withReadTool.score)
-    })
-
-    it('considers all recent messages, not just last', () => {
+    it('does not flag prompts without preference vocabulary', () => {
       const result = detectAmbiguity(makeInput({
-        recentUserMessages: [
-          'I want to refactor the authentication module to follow a clean architecture pattern',
-          'Go ahead',
-        ],
+        prompt: 'Read the test output and tell me which assertions failed and why exactly',
       }))
-      expect(result.reason).toContain('style, architecture, or library preferences')
+      expect(result.reason).not.toContain('style, architecture, or library preferences')
+    })
+
+    it('more preference keywords increase the score', () => {
+      const oneKeyword = detectAmbiguity(makeInput({
+        prompt: 'Refactor the user session handling so the login flow stays unchanged for everyone',
+      }))
+      const threeKeywords = detectAmbiguity(makeInput({
+        prompt: 'Refactor the architecture of the session handling and pick a naming style for it',
+      }))
+      expect(threeKeywords.score).toBeGreaterThan(oneKeyword.score)
     })
   })
 
-  describe('heuristic 4: no user model', () => {
+  describe('heuristic 3: no user model', () => {
     it('adds score when no user model exists', () => {
       const withModel = detectAmbiguity(makeInput({ hasUserModel: true }))
       const withoutModel = detectAmbiguity(makeInput({ hasUserModel: false }))
@@ -171,7 +139,7 @@ describe('detectAmbiguity', () => {
     it('includes reason when no user model', () => {
       const result = detectAmbiguity(makeInput({
         hasUserModel: false,
-        recentUserMessages: ['fix this'],
+        prompt: 'fix this',
       }))
       expect(result.reason).toContain('No user model exists')
     })
@@ -183,38 +151,36 @@ describe('detectAmbiguity', () => {
     it('low threshold (>0.3) is most sensitive', () => {
       const result = detectAmbiguity(makeInput({
         threshold: 'low',
-        recentUserMessages: ['fix and improve this'],
+        prompt: 'fix and improve this',
         hasUserModel: false,
       }))
-      // Short vague message + no user model should exceed 0.3
+      // Short vague prompt + no user model should exceed 0.3
       expect(result.isAmbiguous).toBe(true)
     })
 
     it('high threshold (>0.7) is least sensitive', () => {
       const result = detectAmbiguity(makeInput({
         threshold: 'high',
-        recentUserMessages: ['fix this'],
+        prompt: 'fix this',
       }))
-      // Short vague message alone should NOT exceed 0.7
+      // Short vague prompt alone should NOT exceed 0.7
       expect(result.isAmbiguous).toBe(false)
     })
 
     it('defaults to medium threshold when not specified', () => {
       const withDefault = detectAmbiguity({
-        toolName: 'Read',
-        toolParameters: {},
-        recentUserMessages: ['fix this'],
+        prompt: 'fix this',
       })
       const withMedium = detectAmbiguity(makeInput({
         threshold: 'medium',
-        recentUserMessages: ['fix this'],
+        prompt: 'fix this',
       }))
       expect(withDefault.isAmbiguous).toBe(withMedium.isAmbiguous)
       expect(withDefault.score).toBe(withMedium.score)
     })
 
     it('all thresholds produce consistent ordering', () => {
-      const input = makeInput({ recentUserMessages: ['fix this'] })
+      const input = makeInput({ prompt: 'fix this' })
       const results = thresholds.map((t) =>
         detectAmbiguity({ ...input, threshold: t })
       )
@@ -227,13 +193,9 @@ describe('detectAmbiguity', () => {
   describe('performance', () => {
     it('executes in <50ms', () => {
       const input = makeInput({
-        toolName: 'Edit',
-        toolParameters: { file_path: '/src/app.tsx' },
-        recentUserMessages: [
-          'refactor the architecture pattern to use clean design approach',
-          'also update the naming convention style',
-          'and organize the library structure',
-        ],
+        prompt:
+          'refactor the architecture pattern to use clean design approach, ' +
+          'also update the naming convention style and organize the library structure',
         hasUserModel: false,
       })
 
@@ -250,22 +212,18 @@ describe('detectAmbiguity', () => {
   })
 
   describe('combined heuristics', () => {
-    it('non-ambiguous: specific instruction with clear target and user model', () => {
+    it('non-ambiguous: specific prompt with clear target and user model', () => {
       const result = detectAmbiguity(makeInput({
-        toolName: 'Edit',
-        toolParameters: { file_path: '/src/utils.ts', old_string: 'function old()' },
-        recentUserMessages: ['Rename the function old() to newFunction() in /src/utils.ts'],
+        prompt: 'Rename the function old() to newFunction() in /src/utils.ts and run the tests',
         hasUserModel: true,
       }))
       expect(result.isAmbiguous).toBe(false)
       expect(result.score).toBeLessThan(0.5)
     })
 
-    it('highly ambiguous: vague instruction, style tool, no model', () => {
+    it('highly ambiguous: vague style prompt, no model', () => {
       const result = detectAmbiguity(makeInput({
-        toolName: 'Write',
-        toolParameters: { file_path: '/src/new.ts' },
-        recentUserMessages: ['make it better'],
+        prompt: 'make the style better',
         hasUserModel: false,
         threshold: 'low',
       }))
@@ -275,21 +233,17 @@ describe('detectAmbiguity', () => {
 
     it('reason includes all triggered heuristics', () => {
       const result = detectAmbiguity(makeInput({
-        toolName: 'Edit',
-        toolParameters: {},
-        recentUserMessages: ['fix style'],
+        prompt: 'fix style',
         hasUserModel: false,
       }))
       expect(result.reason).toContain('Short or vague')
-      expect(result.reason).toContain('Edit tool')
+      expect(result.reason).toContain('style, architecture, or library preferences')
       expect(result.reason).toContain('No user model')
     })
 
     it('reason is descriptive when no ambiguity detected', () => {
       const result = detectAmbiguity(makeInput({
-        toolName: 'Read',
-        toolParameters: { file_path: '/src/index.ts' },
-        recentUserMessages: ['Please read the main entry file at /src/index.ts and tell me what it exports'],
+        prompt: 'Please read the main entry file at /src/index.ts and tell me what it exports',
         hasUserModel: true,
       }))
       expect(result.reason).toBe('No ambiguity detected')

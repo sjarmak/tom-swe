@@ -113,6 +113,15 @@ describe('extractSessionModel', () => {
     expect(model.satisfactionSignals.urgency).toBe('low')
   })
 
+  it('never extracts corrections (heuristics cannot detect them reliably)', () => {
+    const log = createSessionLog('no-corrections', [
+      createInteraction('Edit', { file_path: 'src/app.ts' }, 'error: failed'),
+      createInteraction('Edit', { file_path: 'src/app.ts' }, 'success'),
+    ])
+    const model = extractSessionModel(log)
+    expect(model.corrections).toEqual([])
+  })
+
   it('returns a new object (immutable)', () => {
     const log = createSessionLog('immutable-test', [
       createInteraction('Edit', {}, 'success'),

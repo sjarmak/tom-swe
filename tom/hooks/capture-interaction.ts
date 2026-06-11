@@ -4,6 +4,7 @@ import * as os from 'node:os'
 
 import { readHookInput, getSessionId, isInternalInvocation, toRecord } from './hook-input.js'
 import { sanitizeValue, MAX_VALUE_LENGTH } from '../secrets.js'
+import { isTomEnabled } from '../config.js'
 
 // --- Sanitization ---
 
@@ -131,17 +132,6 @@ export function captureInteraction(
 }
 
 // --- CLI Entry Point ---
-
-function isTomEnabled(): boolean {
-  try {
-    const configPath = path.join(os.homedir(), '.claude', 'tom', 'config.json')
-    const content = fs.readFileSync(configPath, 'utf-8')
-    const config = JSON.parse(content) as Record<string, unknown>
-    return config['enabled'] === true
-  } catch {
-    return false
-  }
-}
 
 export async function main(
   stream: NodeJS.ReadableStream = process.stdin

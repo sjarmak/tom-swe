@@ -13825,19 +13825,40 @@ var SessionLogSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   startedAt: external_exports.string().datetime(),
   endedAt: external_exports.string().datetime(),
-  interactions: external_exports.array(InteractionSchema)
+  interactions: external_exports.array(InteractionSchema),
+  // Redacted user prompt text captured by the UserPromptSubmit hook.
+  // Optional for backward compatibility with logs written before capture.
+  userMessages: external_exports.array(external_exports.string()).optional()
 });
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
   urgency: external_exports.enum(["low", "medium", "high"])
 });
+var PreferenceCategorySchema = external_exports.enum([
+  "interactionStyle",
+  "codingPreferences",
+  "emotionalSignals"
+]);
+var CorrectionSchema = external_exports.strictObject({
+  category: PreferenceCategorySchema,
+  key: external_exports.string(),
+  // The value the user corrected TO, when one was expressed. Optional: a
+  // correction can be a pure rejection without a replacement value.
+  correctedValue: external_exports.string().optional(),
+  // Short evidence string (quote or paraphrase of the correcting moment).
+  evidence: external_exports.string()
+});
 var SessionModelSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   intent: external_exports.string(),
   interactionPatterns: external_exports.array(external_exports.string()),
   codingPreferences: external_exports.array(external_exports.string()),
-  satisfactionSignals: SatisfactionSignalsSchema
+  satisfactionSignals: SatisfactionSignalsSchema,
+  // Corrections extracted from the session. Optional for backward
+  // compatibility with session models written before this field existed;
+  // consumers treat absence as an empty array.
+  corrections: external_exports.array(CorrectionSchema).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13845,7 +13866,11 @@ var PreferenceClusterSchema = external_exports.strictObject({
   value: external_exports.string(),
   confidence: external_exports.number().min(0).max(1),
   lastUpdated: external_exports.string().datetime(),
-  sessionCount: external_exports.number().int().min(0)
+  sessionCount: external_exports.number().int().min(0),
+  // True when the preference has been promoted into a durable CLAUDE.md
+  // marker block and retired from per-session injection. Optional for
+  // backward compatibility with user models written before promotion existed.
+  promoted: external_exports.boolean().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13974,7 +13999,19 @@ var TomConfigSchema = external_exports.strictObject({
     consultation: external_exports.string().default("sonnet")
   }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
   preferenceDecayDays: external_exports.number().default(30),
-  maxSessionsRetained: external_exports.number().default(100)
+  maxSessionsRetained: external_exports.number().default(100),
+  // Confidence multiplier applied to a stored preference when a session
+  // correction contradicts it (post-action feedback). Corrections cut
+  // confidence faster than repetition builds it.
+  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
+  // Promotion lifecycle: stable high-confidence preferences graduate from
+  // per-session injection into durable CLAUDE.md marker blocks and are
+  // retired from injection (candidate → promoted → retired, simplified).
+  promotion: external_exports.strictObject({
+    enabled: external_exports.boolean().default(true),
+    threshold: external_exports.number().min(0).max(1).default(0.8),
+    minSessions: external_exports.number().int().min(1).default(5)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
 });
 function readTomConfig() {
   try {
@@ -13996,6 +14033,7 @@ var CONFIDENCE_INCREMENT = 0.1;
 var CONFIDENCE_MAX = 1;
 var CONFIDENCE_MIN_THRESHOLD = 0.01;
 var INITIAL_CONFIDENCE = 0.1;
+var DEFAULT_CORRECTION_PENALTY = 0.5;
 function reinforcePreference(preferences, observation) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const matchIndex = preferences.findIndex(
@@ -14035,12 +14073,38 @@ function decayPreferences(preferences, halfLifeDays, now = /* @__PURE__ */ new D
     };
   }).filter((p) => p.confidence >= CONFIDENCE_MIN_THRESHOLD);
 }
+function applyCorrections(preferences, corrections, penaltyFactor = DEFAULT_CORRECTION_PENALTY) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  let result = preferences;
+  for (const correction of corrections) {
+    result = result.map((p) => {
+      const matchesTarget = p.category === correction.category && p.key === correction.key;
+      const isCorrectedToValue = correction.correctedValue !== void 0 && p.value === correction.correctedValue;
+      if (!matchesTarget || isCorrectedToValue) {
+        return p;
+      }
+      return {
+        ...p,
+        confidence: p.confidence * penaltyFactor,
+        lastUpdated: now
+      };
+    });
+    if (correction.correctedValue !== void 0) {
+      result = reinforcePreference(result, {
+        category: correction.category,
+        key: correction.key,
+        value: correction.correctedValue
+      });
+    }
+  }
+  return [...result];
+}
 function resolveConflicts(preferences) {
   const winners = /* @__PURE__ */ new Map();
   for (const pref of preferences) {
     const groupKey = `${pref.category}::${pref.key}`;
     const existing = winners.get(groupKey);
-    if (!existing || pref.lastUpdated > existing.lastUpdated) {
+    if (!existing || pref.lastUpdated >= existing.lastUpdated) {
       winners.set(groupKey, pref);
     }
   }
@@ -14083,7 +14147,7 @@ function extractObservations(session) {
   });
   return observations;
 }
-function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DECAY_DAYS) {
+function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DECAY_DAYS, correctionPenalty = DEFAULT_CORRECTION_PENALTY) {
   const now = /* @__PURE__ */ new Date();
   const decayed = decayPreferences(
     currentModel.preferencesClusters,
@@ -14095,7 +14159,12 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
   for (const observation of observations) {
     preferences = reinforcePreference(preferences, observation);
   }
-  const resolved = resolveConflicts(preferences);
+  const corrected = applyCorrections(
+    preferences,
+    session.corrections ?? [],
+    correctionPenalty
+  );
+  const resolved = resolveConflicts(corrected);
   return {
     preferencesClusters: resolved,
     interactionStyleSummary: currentModel.interactionStyleSummary,

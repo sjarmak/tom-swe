@@ -71,6 +71,10 @@ export function extractSessionModel(sessionLog: SessionLog): SessionModel {
       satisfaction,
       urgency,
     },
+    // Heuristics cannot reliably detect corrections — contradiction requires
+    // semantic understanding of the user's messages. Only the LLM analysis
+    // path extracts corrections; the fallback never guesses.
+    corrections: [],
   }
 }
 

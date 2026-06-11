@@ -13820,19 +13820,40 @@ var SessionLogSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   startedAt: external_exports.string().datetime(),
   endedAt: external_exports.string().datetime(),
-  interactions: external_exports.array(InteractionSchema)
+  interactions: external_exports.array(InteractionSchema),
+  // Redacted user prompt text captured by the UserPromptSubmit hook.
+  // Optional for backward compatibility with logs written before capture.
+  userMessages: external_exports.array(external_exports.string()).optional()
 });
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
   urgency: external_exports.enum(["low", "medium", "high"])
 });
+var PreferenceCategorySchema = external_exports.enum([
+  "interactionStyle",
+  "codingPreferences",
+  "emotionalSignals"
+]);
+var CorrectionSchema = external_exports.strictObject({
+  category: PreferenceCategorySchema,
+  key: external_exports.string(),
+  // The value the user corrected TO, when one was expressed. Optional: a
+  // correction can be a pure rejection without a replacement value.
+  correctedValue: external_exports.string().optional(),
+  // Short evidence string (quote or paraphrase of the correcting moment).
+  evidence: external_exports.string()
+});
 var SessionModelSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   intent: external_exports.string(),
   interactionPatterns: external_exports.array(external_exports.string()),
   codingPreferences: external_exports.array(external_exports.string()),
-  satisfactionSignals: SatisfactionSignalsSchema
+  satisfactionSignals: SatisfactionSignalsSchema,
+  // Corrections extracted from the session. Optional for backward
+  // compatibility with session models written before this field existed;
+  // consumers treat absence as an empty array.
+  corrections: external_exports.array(CorrectionSchema).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13840,7 +13861,11 @@ var PreferenceClusterSchema = external_exports.strictObject({
   value: external_exports.string(),
   confidence: external_exports.number().min(0).max(1),
   lastUpdated: external_exports.string().datetime(),
-  sessionCount: external_exports.number().int().min(0)
+  sessionCount: external_exports.number().int().min(0),
+  // True when the preference has been promoted into a durable CLAUDE.md
+  // marker block and retired from per-session injection. Optional for
+  // backward compatibility with user models written before promotion existed.
+  promoted: external_exports.boolean().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13928,7 +13953,19 @@ var TomConfigSchema = external_exports.strictObject({
     consultation: external_exports.string().default("sonnet")
   }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
   preferenceDecayDays: external_exports.number().default(30),
-  maxSessionsRetained: external_exports.number().default(100)
+  maxSessionsRetained: external_exports.number().default(100),
+  // Confidence multiplier applied to a stored preference when a session
+  // correction contradicts it (post-action feedback). Corrections cut
+  // confidence faster than repetition builds it.
+  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
+  // Promotion lifecycle: stable high-confidence preferences graduate from
+  // per-session injection into durable CLAUDE.md marker blocks and are
+  // retired from injection (candidate → promoted → retired, simplified).
+  promotion: external_exports.strictObject({
+    enabled: external_exports.boolean().default(true),
+    threshold: external_exports.number().min(0).max(1).default(0.8),
+    minSessions: external_exports.number().int().min(1).default(5)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
 });
 function readTomConfig() {
   try {
@@ -13956,7 +13993,12 @@ var HookInputSchema = external_exports.looseObject({
   tool_input: external_exports.unknown().optional(),
   tool_response: external_exports.unknown().optional(),
   stop_hook_active: external_exports.boolean().optional(),
-  source: external_exports.string().optional()
+  source: external_exports.string().optional(),
+  // Working directory of the session, used to route project-scoped
+  // promotions to the project's CLAUDE.md.
+  cwd: external_exports.string().optional(),
+  // UserPromptSubmit payload: the user's exact submitted text.
+  prompt: external_exports.string().optional()
 });
 async function readAll(stream) {
   const chunks = [];
@@ -13992,7 +14034,7 @@ function isInternalInvocation() {
 var MIN_CONFIDENCE = 0.5;
 var MAX_PREFERENCE_LINES = 7;
 function buildModelSummary(model) {
-  const confidentPrefs = [...model.preferencesClusters].filter((p) => p.confidence >= MIN_CONFIDENCE).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
+  const confidentPrefs = [...model.preferencesClusters].filter((p) => p.confidence >= MIN_CONFIDENCE && p.promoted !== true).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
   const lines = [];
   if (confidentPrefs.length > 0) {
     lines.push("ToM user preferences (learned across sessions):");

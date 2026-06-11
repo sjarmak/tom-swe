@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest'
 import {
   reinforcePreference,
   decayPreferences,
+  applyCorrections,
   resolveConflicts,
+  DEFAULT_CORRECTION_PENALTY,
   type PreferenceCategory,
 } from './preferences.js'
-import type { PreferenceCluster } from './schemas.js'
+import type { Correction, PreferenceCluster } from './schemas.js'
 
 function makePreference(
   overrides: Partial<PreferenceCluster> = {}
@@ -158,6 +160,129 @@ describe('decayPreferences', () => {
   })
 })
 
+describe('applyCorrections', () => {
+  function makeCorrection(overrides: Partial<Correction> = {}): Correction {
+    return {
+      category: 'codingPreferences',
+      key: 'language',
+      evidence: 'user re-edited the change away',
+      ...overrides,
+    }
+  }
+
+  it('multiplies confidence by the penalty factor for matching category+key', () => {
+    const prefs = [makePreference({ confidence: 0.8 })]
+    const result = applyCorrections(prefs, [makeCorrection()], 0.5)
+    expect(result[0]?.confidence).toBeCloseTo(0.4)
+  })
+
+  it('defaults the penalty factor to 0.5', () => {
+    expect(DEFAULT_CORRECTION_PENALTY).toBe(0.5)
+    const prefs = [makePreference({ confidence: 0.6 })]
+    const result = applyCorrections(prefs, [makeCorrection()])
+    expect(result[0]?.confidence).toBeCloseTo(0.3)
+  })
+
+  it('updates lastUpdated on penalized preferences', () => {
+    const prefs = [makePreference({ lastUpdated: '2026-01-01T00:00:00.000Z' })]
+    const before = new Date().toISOString()
+    const result = applyCorrections(prefs, [makeCorrection()])
+    expect((result[0]?.lastUpdated ?? '') >= before).toBe(true)
+  })
+
+  it('leaves non-matching preferences untouched', () => {
+    const prefs = [
+      makePreference({ key: 'language', confidence: 0.8 }),
+      makePreference({ key: 'testingApproach', value: 'TDD', confidence: 0.6 }),
+      makePreference({
+        category: 'interactionStyle',
+        key: 'language',
+        value: 'concise',
+        confidence: 0.7,
+      }),
+    ]
+    const result = applyCorrections(prefs, [makeCorrection()])
+    expect(result.find((p) => p.key === 'testingApproach')?.confidence).toBe(0.6)
+    expect(
+      result.find((p) => p.category === 'interactionStyle')?.confidence
+    ).toBe(0.7)
+  })
+
+  it('one correction at 0.5 penalty outweighs five +0.1 reinforcements from ~0.8', () => {
+    const start = 0.8
+    const base = makePreference({ confidence: start })
+
+    let reinforced: readonly PreferenceCluster[] = [base]
+    for (let i = 0; i < 5; i++) {
+      reinforced = reinforcePreference(reinforced, {
+        category: 'codingPreferences' as PreferenceCategory,
+        key: 'language',
+        value: 'TypeScript',
+      })
+    }
+    const gain = (reinforced[0]?.confidence ?? 0) - start // capped at +0.2
+
+    const corrected = applyCorrections([base], [makeCorrection()], 0.5)
+    const drop = start - (corrected[0]?.confidence ?? 0) // -0.4
+
+    expect(drop).toBeGreaterThan(gain)
+  })
+
+  it('reinforces the corrected-to value as a new observation', () => {
+    const prefs = [makePreference({ value: 'JavaScript', confidence: 0.8 })]
+    const result = applyCorrections(prefs, [
+      makeCorrection({ correctedValue: 'TypeScript' }),
+    ])
+
+    const correctedTo = result.find((p) => p.value === 'TypeScript')
+    expect(correctedTo).toBeDefined()
+    expect(correctedTo?.confidence).toBeCloseTo(0.1)
+    expect(correctedTo?.sessionCount).toBe(1)
+
+    const old = result.find((p) => p.value === 'JavaScript')
+    expect(old?.confidence).toBeCloseTo(0.4)
+  })
+
+  it('does not penalize an existing preference matching the corrected-to value', () => {
+    const prefs = [
+      makePreference({ value: 'JavaScript', confidence: 0.8 }),
+      makePreference({ value: 'TypeScript', confidence: 0.3 }),
+    ]
+    const result = applyCorrections(prefs, [
+      makeCorrection({ correctedValue: 'TypeScript' }),
+    ])
+
+    const correctedTo = result.find((p) => p.value === 'TypeScript')
+    // Exempt from the penalty and reinforced (+0.1) instead
+    expect(correctedTo?.confidence).toBeCloseTo(0.4)
+    expect(result.find((p) => p.value === 'JavaScript')?.confidence).toBeCloseTo(0.4)
+  })
+
+  it('does not prune even when confidence drops below the floor (decay handles removal)', () => {
+    const prefs = [makePreference({ confidence: 0.015 })]
+    const result = applyCorrections(prefs, [makeCorrection()], 0.5)
+    expect(result).toHaveLength(1)
+    expect(result[0]?.confidence).toBeCloseTo(0.0075)
+  })
+
+  it('does not mutate the original array', () => {
+    const prefs = [makePreference({ confidence: 0.8, lastUpdated: '2026-01-01T00:00:00.000Z' })]
+    const result = applyCorrections(prefs, [
+      makeCorrection({ correctedValue: 'TypeScript' }),
+    ])
+    expect(result).not.toBe(prefs)
+    expect(prefs).toHaveLength(1)
+    expect(prefs[0]?.confidence).toBe(0.8)
+    expect(prefs[0]?.lastUpdated).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  it('returns an equal array when there are no corrections', () => {
+    const prefs = [makePreference()]
+    const result = applyCorrections(prefs, [])
+    expect(result).toEqual(prefs)
+  })
+})
+
 describe('resolveConflicts', () => {
   it('resolves conflicts by keeping most recently updated preference', () => {
     const prefs: PreferenceCluster[] = [
@@ -199,6 +324,17 @@ describe('resolveConflicts', () => {
     const result = resolveConflicts(prefs)
     expect(result).not.toBe(prefs)
     expect(prefs).toHaveLength(2)
+  })
+
+  it('breaks timestamp ties in favor of the later entry (corrected-to value wins)', () => {
+    const ts = '2026-06-10T00:00:00.000Z'
+    const prefs: PreferenceCluster[] = [
+      makePreference({ key: 'language', value: 'JavaScript', confidence: 0.4, lastUpdated: ts }),
+      makePreference({ key: 'language', value: 'TypeScript', confidence: 0.1, lastUpdated: ts }),
+    ]
+    const result = resolveConflicts(prefs)
+    expect(result).toHaveLength(1)
+    expect(result[0]?.value).toBe('TypeScript')
   })
 })
 

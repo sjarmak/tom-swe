@@ -17,6 +17,11 @@ export const HookInputSchema = z.looseObject({
   tool_response: z.unknown().optional(),
   stop_hook_active: z.boolean().optional(),
   source: z.string().optional(),
+  // Working directory of the session, used to route project-scoped
+  // promotions to the project's CLAUDE.md.
+  cwd: z.string().optional(),
+  // UserPromptSubmit payload: the user's exact submitted text.
+  prompt: z.string().optional(),
 })
 
 export type HookInput = z.infer<typeof HookInputSchema>

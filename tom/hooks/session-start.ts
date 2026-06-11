@@ -27,10 +27,13 @@ const MAX_PREFERENCE_LINES = 7
  * Builds a compact, human-readable summary of the user model.
  * Returns null when the model carries no confident preferences and
  * no style summaries (nothing worth injecting).
+ *
+ * Promoted preferences are excluded: they already ride along via their
+ * CLAUDE.md marker block, and double-injection wastes context budget.
  */
 export function buildModelSummary(model: UserModel): string | null {
   const confidentPrefs = [...model.preferencesClusters]
-    .filter(p => p.confidence >= MIN_CONFIDENCE)
+    .filter(p => p.confidence >= MIN_CONFIDENCE && p.promoted !== true)
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, MAX_PREFERENCE_LINES)
 

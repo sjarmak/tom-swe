@@ -1,16 +1,9 @@
-import type { PreferenceCluster } from './schemas.js'
+import type { Correction, PreferenceCategory, PreferenceCluster } from './schemas.js'
 
-/**
- * The three preference categories tracked by the ToM system.
- *
- * - interactionStyle: verbosity, questionTiming, responseLength
- * - codingPreferences: language, libraries, testingApproach, architecturePatterns, namingConventions
- * - emotionalSignals: frustration, satisfaction, urgency, mode
- */
-export type PreferenceCategory =
-  | 'interactionStyle'
-  | 'codingPreferences'
-  | 'emotionalSignals'
+// The three preference categories tracked by the ToM system — defined as a
+// Zod enum in schemas.ts (PreferenceCategorySchema) and re-exported here for
+// callers of the preference math.
+export type { PreferenceCategory } from './schemas.js'
 
 export interface PreferenceObservation {
   readonly category: PreferenceCategory
@@ -22,6 +15,8 @@ const CONFIDENCE_INCREMENT = 0.1
 const CONFIDENCE_MAX = 1.0
 const CONFIDENCE_MIN_THRESHOLD = 0.01
 const INITIAL_CONFIDENCE = 0.1
+
+export const DEFAULT_CORRECTION_PENALTY = 0.5
 
 /**
  * Reinforces an existing preference or adds a new observation.
@@ -104,8 +99,65 @@ export function decayPreferences(
 }
 
 /**
+ * Applies post-action corrections (PAHF-style negative feedback) to
+ * preferences. Corrections must cut confidence faster than repetition
+ * builds it: one 0.5-penalty correction removes more confidence than five
+ * +0.1 reinforcements can add.
+ *
+ * For each correction:
+ * - Every preference matching category+key has its confidence multiplied by
+ *   penaltyFactor and its lastUpdated set to now. (The existing floor-prune
+ *   in decayPreferences removes entries that fall below 0.01 — decay, don't
+ *   silently delete.)
+ * - If the correction carries a correctedValue, that value is exempt from the
+ *   penalty and is added/reinforced as a new observation, so the corrected-to
+ *   value starts accumulating confidence.
+ *
+ * Returns a new array (immutable).
+ */
+export function applyCorrections(
+  preferences: readonly PreferenceCluster[],
+  corrections: readonly Correction[],
+  penaltyFactor: number = DEFAULT_CORRECTION_PENALTY
+): PreferenceCluster[] {
+  const now = new Date().toISOString()
+  let result: readonly PreferenceCluster[] = preferences
+
+  for (const correction of corrections) {
+    result = result.map((p) => {
+      const matchesTarget =
+        p.category === correction.category && p.key === correction.key
+      const isCorrectedToValue =
+        correction.correctedValue !== undefined &&
+        p.value === correction.correctedValue
+      if (!matchesTarget || isCorrectedToValue) {
+        return p
+      }
+      return {
+        ...p,
+        confidence: p.confidence * penaltyFactor,
+        lastUpdated: now,
+      }
+    })
+
+    if (correction.correctedValue !== undefined) {
+      result = reinforcePreference(result, {
+        category: correction.category,
+        key: correction.key,
+        value: correction.correctedValue,
+      })
+    }
+  }
+
+  return [...result]
+}
+
+/**
  * Resolves conflicting preferences (same category+key, different values)
  * by recency-weighted voting: the most recently updated value wins.
+ * Timestamp ties go to the later entry in the array — newer observations
+ * (e.g. a corrected-to value appended by applyCorrections in the same pass)
+ * are appended after the entries they supersede.
  *
  * Returns a new array with at most one preference per category+key (immutable).
  */
@@ -118,7 +170,7 @@ export function resolveConflicts(
     const groupKey = `${pref.category}::${pref.key}`
     const existing = winners.get(groupKey)
 
-    if (!existing || pref.lastUpdated > existing.lastUpdated) {
+    if (!existing || pref.lastUpdated >= existing.lastUpdated) {
       winners.set(groupKey, pref)
     }
   }

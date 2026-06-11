@@ -12,7 +12,7 @@ const entryPoints = [
   // Hooks
   'tom/hooks/session-start.ts',
   'tom/hooks/capture-interaction.ts',
-  'tom/hooks/pre-tool-use.ts',
+  'tom/hooks/user-prompt-submit.ts',
   'tom/hooks/stop-analyze.ts',
   // Skills
   'tom/skills/tom-status.ts',

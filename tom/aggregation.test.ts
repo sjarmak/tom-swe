@@ -235,6 +235,131 @@ describe('aggregateSessionIntoModel', () => {
     expect(result.preferencesClusters).toBeDefined()
   })
 
+  it('applies corrections after reinforcement (decay → reinforce → correct)', () => {
+    // Existing pref at 0.5, reinforced by this session (+0.1 → 0.6), then a
+    // valueless correction halves it → 0.3. If corrections ran before
+    // reinforcement the result would be 0.5 * 0.5 + 0.1 = 0.35.
+    const now = new Date().toISOString()
+    const model = makeUserModel({
+      preferencesClusters: [
+        makePreference({
+          category: 'codingPreferences',
+          key: 'preference',
+          value: 'TypeScript',
+          confidence: 0.5,
+          lastUpdated: now,
+        }),
+      ],
+    })
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: ['TypeScript'],
+      corrections: [
+        {
+          category: 'codingPreferences',
+          key: 'preference',
+          evidence: 'user reverted the suggested approach',
+        },
+      ],
+    })
+
+    const result = aggregateSessionIntoModel(model, session)
+    const pref = result.preferencesClusters.find(
+      (p) => p.category === 'codingPreferences' && p.key === 'preference'
+    )
+    expect(pref?.confidence).toBeCloseTo(0.3, 2)
+  })
+
+  it('lets the corrected-to value win conflict resolution and start accumulating', () => {
+    const now = new Date().toISOString()
+    const model = makeUserModel({
+      preferencesClusters: [
+        makePreference({
+          category: 'codingPreferences',
+          key: 'preference',
+          value: 'jest',
+          confidence: 0.9,
+          lastUpdated: now,
+        }),
+      ],
+    })
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: [],
+      corrections: [
+        {
+          category: 'codingPreferences',
+          key: 'preference',
+          correctedValue: 'vitest',
+          evidence: 'user replaced jest setup with vitest',
+        },
+      ],
+    })
+
+    const result = aggregateSessionIntoModel(model, session)
+    const winner = result.preferencesClusters.find(
+      (p) => p.category === 'codingPreferences' && p.key === 'preference'
+    )
+    expect(winner?.value).toBe('vitest')
+    expect(winner?.confidence).toBeCloseTo(0.1)
+    expect(winner?.sessionCount).toBe(1)
+  })
+
+  it('respects a custom correctionPenalty parameter', () => {
+    const now = new Date().toISOString()
+    const model = makeUserModel({
+      preferencesClusters: [
+        makePreference({
+          category: 'interactionStyle',
+          key: 'verbosity',
+          value: 'verbose',
+          confidence: 0.8,
+          lastUpdated: now,
+        }),
+      ],
+    })
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: [],
+      corrections: [
+        {
+          category: 'interactionStyle',
+          key: 'verbosity',
+          evidence: 'user asked for shorter answers',
+        },
+      ],
+    })
+
+    const result = aggregateSessionIntoModel(model, session, 30, 0.25)
+    const pref = result.preferencesClusters.find(
+      (p) => p.category === 'interactionStyle' && p.key === 'verbosity'
+    )
+    expect(pref?.confidence).toBeCloseTo(0.2, 2)
+  })
+
+  it('handles session models without a corrections field (backward compatible)', () => {
+    const model = makeUserModel()
+    const session = makeSessionModel() // no corrections field
+    expect(session.corrections).toBeUndefined()
+    const result = aggregateSessionIntoModel(model, session)
+    expect(result.preferencesClusters.length).toBeGreaterThan(0)
+  })
+
+  it('does not mutate session corrections', () => {
+    const model = makeUserModel()
+    const corrections = [
+      {
+        category: 'codingPreferences' as const,
+        key: 'preference',
+        correctedValue: 'vitest',
+        evidence: 'switched test runner',
+      },
+    ]
+    const session = makeSessionModel({ corrections })
+    aggregateSessionIntoModel(model, session)
+    expect(session.corrections).toEqual(corrections)
+  })
+
   it('accepts optional decayDays parameter', () => {
     const oldPref = makePreference({
       confidence: 0.8,

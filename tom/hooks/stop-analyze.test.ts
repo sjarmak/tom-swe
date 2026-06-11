@@ -4,7 +4,6 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { Readable } from 'node:stream'
 import {
-  isTomEnabled,
   readRawSessionLog,
   analyzeCompletedSession,
   main,
@@ -57,58 +56,8 @@ function createInteraction(
   }
 }
 
-describe('isTomEnabled', () => {
-  let originalHome: string | undefined
-  let tempDir: string
-
-  beforeEach(() => {
-    originalHome = process.env['HOME']
-    tempDir = createTempDir()
-    process.env['HOME'] = tempDir
-  })
-
-  afterEach(() => {
-    process.env['HOME'] = originalHome
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  })
-
-  it('returns false when settings file does not exist', () => {
-    expect(isTomEnabled()).toBe(false)
-  })
-
-  it('returns false when tom.enabled is false', () => {
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    fs.mkdirSync(tomDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(tomDir, 'config.json'),
-      JSON.stringify({ enabled: false }),
-      'utf-8'
-    )
-    expect(isTomEnabled()).toBe(false)
-  })
-
-  it('returns true when tom.enabled is true', () => {
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    fs.mkdirSync(tomDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(tomDir, 'config.json'),
-      JSON.stringify({ enabled: true }),
-      'utf-8'
-    )
-    expect(isTomEnabled()).toBe(true)
-  })
-
-  it('returns false when config JSON is invalid', () => {
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    fs.mkdirSync(tomDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(tomDir, 'config.json'),
-      'not json',
-      'utf-8'
-    )
-    expect(isTomEnabled()).toBe(false)
-  })
-})
+// isTomEnabled coverage lives in tom/config.test.ts; stop-analyze now uses
+// the validated guard exported by config.ts instead of a local duplicate.
 
 describe('readRawSessionLog', () => {
   let originalHome: string | undefined
@@ -410,6 +359,288 @@ describe('analyzeCompletedSession', () => {
     const entry = entries[0] ?? {}
     expect(entry['operation']).toBe('session-analysis')
     expect(entry['tokenCount']).toBe(0)
+  })
+
+  it('logs a preference-correction batch entry when the LLM model carries corrections', async () => {
+    writeSessionFile('correction-telemetry-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'correction-telemetry-test',
+        intent: 'swap test runner',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [
+          {
+            category: 'codingPreferences',
+            key: 'preference',
+            correctedValue: 'vitest',
+            evidence: 'user replaced jest with vitest',
+          },
+          {
+            category: 'interactionStyle',
+            key: 'verbosity',
+            evidence: 'user asked for shorter answers',
+          },
+        ],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('correction-telemetry-test')
+
+    const entries = readUsageEntries()
+    const correctionEntries = entries.filter(
+      (e) => e['operation'] === 'preference-correction'
+    )
+    // One entry per correction batch, not per correction
+    expect(correctionEntries).toHaveLength(1)
+    const entry = correctionEntries[0] ?? {}
+    expect(entry['model']).toBe('none')
+    expect(entry['sessionId']).toBe('correction-telemetry-test')
+    const reason = JSON.parse(String(entry['reason'])) as Record<string, unknown>
+    expect(reason['corrections']).toEqual([
+      'codingPreferences:preference',
+      'interactionStyle:verbosity',
+    ])
+    expect(reason['penalty']).toBe(0.5)
+  })
+
+  it('uses the configured correctionPenalty in correction telemetry', async () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(tomDir, 'config.json'),
+      JSON.stringify({ enabled: true, correctionPenalty: 0.25 }),
+      'utf-8'
+    )
+    writeSessionFile('penalty-config-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'penalty-config-test',
+        intent: 'quick fix',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [
+          {
+            category: 'codingPreferences',
+            key: 'preference',
+            evidence: 'user reverted the change',
+          },
+        ],
+      },
+      tokensUsed: 50,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('penalty-config-test')
+
+    const entries = readUsageEntries()
+    const entry = entries.find((e) => e['operation'] === 'preference-correction') ?? {}
+    const reason = JSON.parse(String(entry['reason'])) as Record<string, unknown>
+    expect(reason['penalty']).toBe(0.25)
+  })
+
+  it('logs no preference-correction entry when the session has no corrections', async () => {
+    writeSessionFile('no-corrections-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'no-corrections-test',
+        intent: 'quick read',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [],
+      },
+      tokensUsed: 10,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('no-corrections-test')
+
+    const entries = readUsageEntries()
+    expect(
+      entries.some((e) => e['operation'] === 'preference-correction')
+    ).toBe(false)
+  })
+
+  it('applies corrections to the persisted user model', async () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(tomDir, 'user-model.json'),
+      JSON.stringify({
+        preferencesClusters: [
+          {
+            category: 'codingPreferences',
+            key: 'preference',
+            value: 'jest',
+            confidence: 0.8,
+            lastUpdated: new Date().toISOString(),
+            sessionCount: 8,
+          },
+        ],
+        interactionStyleSummary: '',
+        codingStyleSummary: '',
+        projectOverrides: {},
+      }),
+      'utf-8'
+    )
+    writeSessionFile('apply-corrections-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'apply-corrections-test',
+        intent: 'migrate tests',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [
+          {
+            category: 'codingPreferences',
+            key: 'preference',
+            correctedValue: 'vitest',
+            evidence: 'user replaced jest with vitest',
+          },
+        ],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('apply-corrections-test')
+
+    const userModel = JSON.parse(
+      fs.readFileSync(path.join(tomDir, 'user-model.json'), 'utf-8')
+    ) as { preferencesClusters: Array<Record<string, unknown>> }
+    const winner = userModel.preferencesClusters.find(
+      (p) => p['category'] === 'codingPreferences' && p['key'] === 'preference'
+    )
+    // The corrected-to value wins conflict resolution and starts accumulating
+    expect(winner?.['value']).toBe('vitest')
+    expect(winner?.['confidence']).toBeCloseTo(0.1)
+  })
+
+  function writeUserModelFile(clusters: readonly object[]): string {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    const modelPath = path.join(tomDir, 'user-model.json')
+    fs.writeFileSync(
+      modelPath,
+      JSON.stringify({
+        preferencesClusters: clusters,
+        interactionStyleSummary: '',
+        codingStyleSummary: '',
+        projectOverrides: {},
+      }),
+      'utf-8'
+    )
+    return modelPath
+  }
+
+  function stableCluster(overrides: Record<string, unknown> = {}): object {
+    return {
+      category: 'interactionStyle',
+      key: 'verbosity',
+      value: 'concise',
+      confidence: 0.9,
+      lastUpdated: new Date().toISOString(),
+      sessionCount: 10,
+      ...overrides,
+    }
+  }
+
+  it('promotes stable preferences into the global CLAUDE.md and persists promoted flags', async () => {
+    const modelPath = writeUserModelFile([stableCluster()])
+    writeSessionFile('promotion-test')
+
+    const result = await analyzeCompletedSession('promotion-test')
+    expect(result.success).toBe(true)
+
+    // Block written to the global memory file (created since ~/.claude exists)
+    const globalClaudeMd = path.join(tempDir, '.claude', 'CLAUDE.md')
+    expect(fs.existsSync(globalClaudeMd)).toBe(true)
+    const content = fs.readFileSync(globalClaudeMd, 'utf-8')
+    expect(content).toContain('<!-- tom-swe:begin')
+    expect(content).toContain('Prefers concise')
+    expect(content).toContain('<!-- tom-swe:end -->')
+
+    // Promoted flag persisted in the user model
+    const persisted = JSON.parse(fs.readFileSync(modelPath, 'utf-8')) as {
+      preferencesClusters: Array<Record<string, unknown>>
+    }
+    const promoted = persisted.preferencesClusters.find(
+      (p) => p['key'] === 'verbosity'
+    )
+    expect(promoted?.['promoted']).toBe(true)
+
+    // One preference-promotion usage entry listing pairs and targets
+    const entries = readUsageEntries()
+    const promotionEntry = entries.find(
+      (e) => e['operation'] === 'preference-promotion'
+    )
+    expect(promotionEntry).toBeDefined()
+    const reason = JSON.parse(String(promotionEntry?.['reason'])) as Record<string, unknown>
+    expect(reason['promoted']).toEqual(['interactionStyle:verbosity'])
+    expect(reason['targets']).toContain(globalClaudeMd)
+    // File creation is logged too — no silent resource creation
+    expect(
+      entries.some((e) => e['operation'] === 'promotion-file-created')
+    ).toBe(true)
+  })
+
+  it('routes stable coding preferences to an existing project CLAUDE.md', async () => {
+    // cwd is tempDir (chdir in beforeEach); the project memory file exists
+    const projectClaudeMd = path.join(tempDir, 'CLAUDE.md')
+    fs.writeFileSync(projectClaudeMd, '# Project rules\n', 'utf-8')
+    writeUserModelFile([
+      stableCluster({
+        category: 'codingPreferences',
+        key: 'testing',
+        value: 'vitest',
+      }),
+    ])
+    writeSessionFile('project-promotion-test')
+
+    await analyzeCompletedSession('project-promotion-test')
+
+    const content = fs.readFileSync(projectClaudeMd, 'utf-8')
+    expect(content).toContain('# Project rules')
+    expect(content).toContain('Prefers vitest')
+  })
+
+  it('does not promote preferences below the promotion thresholds', async () => {
+    writeUserModelFile([stableCluster({ confidence: 0.5 })])
+    writeSessionFile('no-promotion-test')
+
+    await analyzeCompletedSession('no-promotion-test')
+
+    expect(fs.existsSync(path.join(tempDir, '.claude', 'CLAUDE.md'))).toBe(false)
+    const entries = readUsageEntries()
+    expect(
+      entries.some((e) => e['operation'] === 'preference-promotion')
+    ).toBe(false)
+  })
+
+  it('logs promotion-error and completes the pipeline when promotion fails', async () => {
+    // A directory at the global CLAUDE.md path makes the block write throw
+    fs.mkdirSync(path.join(tempDir, '.claude', 'CLAUDE.md'), { recursive: true })
+    writeUserModelFile([stableCluster()])
+    writeSessionFile('promotion-error-test')
+
+    const result = await analyzeCompletedSession('promotion-error-test')
+
+    expect(result.success).toBe(true)
+    expect(result.indexRebuilt).toBe(true)
+    const entries = readUsageEntries()
+    const errorEntry = entries.find((e) => e['operation'] === 'promotion-error')
+    expect(errorEntry).toBeDefined()
+    expect(errorEntry?.['sessionId']).toBe('promotion-error-test')
   })
 
   it('aggregates into existing user model', async () => {

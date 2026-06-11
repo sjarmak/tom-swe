@@ -27,19 +27,24 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// tom/hooks/pre-tool-use.ts
-var pre_tool_use_exports = {};
-__export(pre_tool_use_exports, {
+// tom/hooks/user-prompt-submit.ts
+var user_prompt_submit_exports = {};
+__export(user_prompt_submit_exports, {
+  FRAMING_PREFIX: () => FRAMING_PREFIX,
+  appendUserMessage: () => appendUserMessage,
   buildHookOutput: () => buildHookOutput,
-  consultToM: () => consultToM,
-  isTomEnabled: () => isTomEnabled,
   main: () => main,
-  readTomSettings: () => readTomSettings
+  redactPrompt: () => redactPrompt
 });
-module.exports = __toCommonJS(pre_tool_use_exports);
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
-var os3 = __toESM(require("node:os"));
+module.exports = __toCommonJS(user_prompt_submit_exports);
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
+var os4 = __toESM(require("node:os"));
+
+// tom/config.ts
+var fs = __toESM(require("node:fs"));
+var path = __toESM(require("node:path"));
+var os = __toESM(require("node:os"));
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -808,10 +813,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1194,11 +1199,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1381,7 +1386,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path4 = []) => {
+  const processError = (error49, path6 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1391,7 +1396,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1423,8 +1428,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path4) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13401,13 +13406,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path4 = ref.slice(1).split("/").filter(Boolean);
-  if (path4.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path4[0] === defsKey) {
-    const key = path4[1];
+  if (path6[0] === defsKey) {
+    const key = path6[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13809,6 +13814,48 @@ function date4(params) {
 // node_modules/zod/v4/classic/external.js
 config(en_default());
 
+// tom/config.ts
+var TomConfigSchema = external_exports.strictObject({
+  enabled: external_exports.boolean().default(false),
+  consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
+  models: external_exports.strictObject({
+    memoryUpdate: external_exports.string().default("haiku"),
+    consultation: external_exports.string().default("sonnet")
+  }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
+  preferenceDecayDays: external_exports.number().default(30),
+  maxSessionsRetained: external_exports.number().default(100),
+  // Confidence multiplier applied to a stored preference when a session
+  // correction contradicts it (post-action feedback). Corrections cut
+  // confidence faster than repetition builds it.
+  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
+  // Promotion lifecycle: stable high-confidence preferences graduate from
+  // per-session injection into durable CLAUDE.md marker blocks and are
+  // retired from injection (candidate → promoted → retired, simplified).
+  promotion: external_exports.strictObject({
+    enabled: external_exports.boolean().default(true),
+    threshold: external_exports.number().min(0).max(1).default(0.8),
+    minSessions: external_exports.number().int().min(1).default(5)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
+});
+function readTomConfig() {
+  try {
+    const configPath = path.join(os.homedir(), ".claude", "tom", "config.json");
+    const content = fs.readFileSync(configPath, "utf-8");
+    const raw = JSON.parse(content);
+    const result = TomConfigSchema.safeParse(raw);
+    if (result.success) {
+      return result.data;
+    }
+    return TomConfigSchema.parse({});
+  } catch {
+    return TomConfigSchema.parse({});
+  }
+}
+
+// tom/consult.ts
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+
 // tom/schemas.ts
 var InteractionSchema = external_exports.strictObject({
   toolName: external_exports.string(),
@@ -13820,19 +13867,40 @@ var SessionLogSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   startedAt: external_exports.string().datetime(),
   endedAt: external_exports.string().datetime(),
-  interactions: external_exports.array(InteractionSchema)
+  interactions: external_exports.array(InteractionSchema),
+  // Redacted user prompt text captured by the UserPromptSubmit hook.
+  // Optional for backward compatibility with logs written before capture.
+  userMessages: external_exports.array(external_exports.string()).optional()
 });
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
   urgency: external_exports.enum(["low", "medium", "high"])
 });
+var PreferenceCategorySchema = external_exports.enum([
+  "interactionStyle",
+  "codingPreferences",
+  "emotionalSignals"
+]);
+var CorrectionSchema = external_exports.strictObject({
+  category: PreferenceCategorySchema,
+  key: external_exports.string(),
+  // The value the user corrected TO, when one was expressed. Optional: a
+  // correction can be a pure rejection without a replacement value.
+  correctedValue: external_exports.string().optional(),
+  // Short evidence string (quote or paraphrase of the correcting moment).
+  evidence: external_exports.string()
+});
 var SessionModelSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   intent: external_exports.string(),
   interactionPatterns: external_exports.array(external_exports.string()),
   codingPreferences: external_exports.array(external_exports.string()),
-  satisfactionSignals: SatisfactionSignalsSchema
+  satisfactionSignals: SatisfactionSignalsSchema,
+  // Corrections extracted from the session. Optional for backward
+  // compatibility with session models written before this field existed;
+  // consumers treat absence as an empty array.
+  corrections: external_exports.array(CorrectionSchema).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13840,7 +13908,11 @@ var PreferenceClusterSchema = external_exports.strictObject({
   value: external_exports.string(),
   confidence: external_exports.number().min(0).max(1),
   lastUpdated: external_exports.string().datetime(),
-  sessionCount: external_exports.number().int().min(0)
+  sessionCount: external_exports.number().int().min(0),
+  // True when the preference has been promoted into a durable CLAUDE.md
+  // marker block and retired from per-session injection. Optional for
+  // backward compatibility with user models written before promotion existed.
+  promoted: external_exports.boolean().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13863,11 +13935,6 @@ var THRESHOLD_VALUES = {
 };
 var FILE_PATH_PATTERN = /(?:\/[\w.-]+)+(?:\.\w+)?/;
 var SHORT_MESSAGE_WORD_LIMIT = 10;
-var STYLE_SENSITIVE_TOOLS = /* @__PURE__ */ new Set([
-  "Write",
-  "Edit",
-  "NotebookEdit"
-]);
 var PREFERENCE_KEYWORDS = [
   "style",
   "pattern",
@@ -13899,96 +13966,81 @@ function detectAmbiguity(input) {
   const threshold = input.threshold ?? "medium";
   const thresholdValue = THRESHOLD_VALUES[threshold];
   const reasons = [];
+  const triggers = [];
   let totalScore = 0;
-  const lastMessage = input.recentUserMessages.length > 0 ? input.recentUserMessages[input.recentUserMessages.length - 1] ?? "" : "";
-  const shortVagueScore = scoreShortVagueInstruction(lastMessage);
+  const shortVagueScore = scoreShortVagueInstruction(input.prompt);
   if (shortVagueScore > 0) {
     totalScore += shortVagueScore;
     reasons.push("Short or vague user instruction without specific file paths");
+    triggers.push("short-vague");
   }
-  const multiTargetScore = scoreMultipleFileTargets(input.toolName, input.toolParameters);
-  if (multiTargetScore > 0) {
-    totalScore += multiTargetScore;
-    reasons.push("Edit tool used without a clear single file target");
-  }
-  const preferenceScore = scorePreferenceSensitive(input.toolName, input.recentUserMessages);
+  const preferenceScore = scorePreferenceSensitive(input.prompt);
   if (preferenceScore > 0) {
     totalScore += preferenceScore;
     reasons.push("Decision involves style, architecture, or library preferences");
+    triggers.push("preference-sensitive");
   }
   const noModelScore = scoreNoUserModel(input.hasUserModel ?? true);
   if (noModelScore > 0) {
     totalScore += noModelScore;
     reasons.push("No user model exists for this project");
+    triggers.push("no-user-model");
   }
   const clampedScore = Math.min(totalScore, 1);
   const reason = reasons.length > 0 ? reasons.join("; ") : "No ambiguity detected";
   return {
     isAmbiguous: clampedScore > thresholdValue,
     score: Math.round(clampedScore * 100) / 100,
-    reason
+    reason,
+    triggers
   };
 }
-function scoreShortVagueInstruction(message) {
-  if (message.length === 0) return 0.2;
-  const words = message.trim().split(/\s+/);
+function scoreShortVagueInstruction(prompt) {
+  if (prompt.length === 0) return 0.2;
+  const words = prompt.trim().split(/\s+/);
   const wordCount = words.length;
-  const hasFilePath = FILE_PATH_PATTERN.test(message);
+  const hasFilePath = FILE_PATH_PATTERN.test(prompt);
   if (wordCount >= SHORT_MESSAGE_WORD_LIMIT) return 0;
   let score = 0;
   if (!hasFilePath) {
     score += 0.15;
   }
-  const lowerMessage = message.toLowerCase();
-  const vagueCount = VAGUE_KEYWORDS.filter((kw) => lowerMessage.includes(kw)).length;
+  const lowerPrompt = prompt.toLowerCase();
+  const vagueCount = VAGUE_KEYWORDS.filter((kw) => lowerPrompt.includes(kw)).length;
   if (vagueCount > 0) {
     score += Math.min(vagueCount * 0.1, 0.2);
   }
   return score;
 }
-function scoreMultipleFileTargets(toolName, toolParameters) {
-  if (!STYLE_SENSITIVE_TOOLS.has(toolName)) return 0;
-  const filePath = toolParameters["file_path"];
-  const oldString = toolParameters["old_string"];
-  if (!filePath || filePath.length === 0) return 0.3;
-  if (toolName === "Edit" && (!oldString || oldString.length === 0)) return 0.15;
-  return 0;
-}
-function scorePreferenceSensitive(toolName, allMessages) {
-  let score = 0;
-  if (STYLE_SENSITIVE_TOOLS.has(toolName)) {
-    score += 0.1;
-  }
-  const combinedMessages = allMessages.join(" ").toLowerCase();
-  const matchCount = PREFERENCE_KEYWORDS.filter((kw) => combinedMessages.includes(kw)).length;
-  if (matchCount > 0) {
-    score += Math.min(matchCount * 0.08, 0.25);
-  }
-  return score;
+function scorePreferenceSensitive(prompt) {
+  const lowerPrompt = prompt.toLowerCase();
+  const matchCount = PREFERENCE_KEYWORDS.filter((kw) => lowerPrompt.includes(kw)).length;
+  if (matchCount === 0) return 0;
+  return Math.min(matchCount * 0.08, 0.25);
 }
 function scoreNoUserModel(hasUserModel) {
   return hasUserModel ? 0 : 0.25;
 }
 
 // tom/memory-io.ts
-var fs = __toESM(require("node:fs"));
-var path = __toESM(require("node:path"));
-var os = __toESM(require("node:os"));
+var fs2 = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
+var os2 = __toESM(require("node:os"));
 function globalTomDir() {
-  return path.join(os.homedir(), ".claude", "tom");
+  return path2.join(os2.homedir(), ".claude", "tom");
 }
 function projectTomDir() {
-  return path.join(process.cwd(), ".claude", "tom");
+  return path2.join(process.cwd(), ".claude", "tom");
 }
 function globalUserModelPath() {
-  return path.join(globalTomDir(), "user-model.json");
+  return path2.join(globalTomDir(), "user-model.json");
 }
 function projectUserModelPath() {
-  return path.join(projectTomDir(), "user-model.json");
+  return path2.join(projectTomDir(), "user-model.json");
 }
 function readJsonFile(filePath) {
   try {
-    const content = fs.readFileSync(filePath, "utf-8");
+    const content = fs2.readFileSync(filePath, "utf-8");
     return JSON.parse(content);
   } catch {
     return null;
@@ -14077,17 +14129,169 @@ function search(index, query, k = 3) {
 }
 
 // tom/routing.ts
-var fs2 = __toESM(require("node:fs"));
-var path2 = __toESM(require("node:path"));
-var os2 = __toESM(require("node:os"));
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
 function logUsage(entry) {
-  const logPath = path2.join(globalTomDir(), "usage.log");
-  const dir = path2.dirname(logPath);
-  if (!fs2.existsSync(dir)) {
-    fs2.mkdirSync(dir, { recursive: true });
+  const logPath = path3.join(globalTomDir(), "usage.log");
+  const dir = path3.dirname(logPath);
+  if (!fs3.existsSync(dir)) {
+    fs3.mkdirSync(dir, { recursive: true });
   }
   const line = JSON.stringify(entry) + "\n";
-  fs2.appendFileSync(logPath, line, "utf-8");
+  fs3.appendFileSync(logPath, line, "utf-8");
+}
+
+// tom/consult.ts
+var DEFAULT_CONSULTATION_MODEL = "sonnet";
+function loadCachedIndex() {
+  try {
+    const indexPath = path4.join(globalTomDir(), "bm25-index.json");
+    const content = fs4.readFileSync(indexPath, "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+function buildSuggestionFromSearch(searchResults, ambiguityResult) {
+  if (searchResults.length === 0) {
+    return null;
+  }
+  const topResults = searchResults.slice(0, 3);
+  const sourceSessions = topResults.map((r) => r.id).filter((id) => id.startsWith("session:") || id.startsWith("model:")).map((id) => id.replace(/^(session|model):/, ""));
+  const preferenceHints = topResults.map((r) => r.id.startsWith("user-model") ? "user model preferences" : `session ${r.id.replace(/^(session|model):/, "")}`).join(", ");
+  const content = `Based on past interactions (${preferenceHints}), the user may have preferences relevant to this request. Ambiguity reason: ${ambiguityResult.reason}.`;
+  const suggestion = {
+    type: ambiguityResult.triggers.includes("preference-sensitive") ? "style" : "disambiguation",
+    content,
+    confidence: Math.round(ambiguityResult.score * 100) / 100,
+    sourceSessions
+  };
+  const parseResult = ToMSuggestionSchema.safeParse(suggestion);
+  return parseResult.success ? parseResult.data : null;
+}
+function buildSuggestionFromUserModel(ambiguityResult) {
+  const userModel = readUserModel("merged");
+  if (!userModel || userModel.preferencesClusters.length === 0) {
+    return null;
+  }
+  const unpromoted = userModel.preferencesClusters.filter(
+    (p) => p.promoted !== true
+  );
+  if (unpromoted.length === 0) {
+    return null;
+  }
+  const topPrefs = [...unpromoted].sort((a, b) => b.confidence - a.confidence).slice(0, 5);
+  const prefSummary = topPrefs.map((p) => `${p.key}=${p.value} (${Math.round(p.confidence * 100)}%)`).join(", ");
+  const content = `User preferences: ${prefSummary}. Consider these for the current request. Ambiguity reason: ${ambiguityResult.reason}.`;
+  const suggestion = {
+    type: "preference",
+    content,
+    confidence: Math.round(ambiguityResult.score * 100) / 100,
+    sourceSessions: []
+  };
+  const parseResult = ToMSuggestionSchema.safeParse(suggestion);
+  return parseResult.success ? parseResult.data : null;
+}
+function consultToM(prompt, threshold, sessionId) {
+  const hasUserModel = readUserModel("global") !== null;
+  const ambiguityResult = detectAmbiguity({
+    prompt,
+    threshold,
+    hasUserModel
+  });
+  if (!ambiguityResult.isAmbiguous) {
+    return {
+      consulted: false,
+      ambiguityResult,
+      suggestion: null,
+      source: null
+    };
+  }
+  const cachedIndex = loadCachedIndex();
+  let suggestion = null;
+  let source = null;
+  if (cachedIndex) {
+    const results = search(cachedIndex, prompt, 3);
+    suggestion = buildSuggestionFromSearch(results, ambiguityResult);
+    if (suggestion) {
+      source = "bm25";
+    }
+  }
+  if (!suggestion) {
+    suggestion = buildSuggestionFromUserModel(ambiguityResult);
+    if (suggestion) {
+      source = "user-model";
+    }
+  }
+  logUsage({
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    operation: "ambiguity-consultation",
+    model: DEFAULT_CONSULTATION_MODEL,
+    tokenCount: 0,
+    sessionId,
+    reason: JSON.stringify({
+      score: ambiguityResult.score,
+      threshold,
+      source: source ?? "none"
+    })
+  });
+  return {
+    consulted: true,
+    ambiguityResult,
+    suggestion,
+    source
+  };
+}
+
+// tom/secrets.ts
+var SECRET_PATTERNS = [
+  /^sk-[a-zA-Z0-9_-]+$/,
+  // OpenAI-style keys
+  /^ghp_[a-zA-Z0-9]+$/,
+  // GitHub personal tokens
+  /^gho_[a-zA-Z0-9]+$/,
+  // GitHub OAuth tokens
+  /^ghs_[a-zA-Z0-9]+$/,
+  // GitHub server tokens
+  /^github_pat_[a-zA-Z0-9_]+$/,
+  // GitHub fine-grained PATs
+  /^Bearer\s+.+/i,
+  // Bearer tokens
+  /^Basic\s+.+/i,
+  // Basic auth
+  /^token\s+.+/i,
+  // Generic token prefix
+  /^xox[bposa]-[a-zA-Z0-9-]+$/,
+  // Slack tokens
+  /^AKIA[A-Z0-9]{16}$/,
+  // AWS access keys
+  /^eyJ[a-zA-Z0-9_-]+\.eyJ/,
+  // JWT tokens
+  /password[=:].+/i,
+  // password= or password:
+  /^[a-f0-9]{40}$/,
+  // 40-char hex (git hashes, some tokens)
+  /^npm_[a-zA-Z0-9]+$/,
+  // npm tokens
+  /^pypi-[a-zA-Z0-9]+$/,
+  // PyPI tokens
+  /[A-Z_]+=sk-[a-zA-Z0-9_-]+/,
+  // ENV_VAR=secret patterns
+  /[A-Z_]+_KEY=[^\s]+/i
+  // API_KEY=value patterns
+];
+var REDACTED = "[REDACTED]";
+function looksLikeSecret(value) {
+  return SECRET_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+
+// tom/redaction.ts
+function redactUserMessage(message) {
+  let result = message.replace(/```[\s\S]*?```/g, "[CODE_BLOCK]");
+  result = result.replace(/`[^`]+`/g, "[CODE]");
+  result = result.replace(/https?:\/\/[^\s]+\?[^\s]*/g, "[URL]");
+  return result;
 }
 
 // tom/hooks/hook-input.ts
@@ -14098,7 +14302,12 @@ var HookInputSchema = external_exports.looseObject({
   tool_input: external_exports.unknown().optional(),
   tool_response: external_exports.unknown().optional(),
   stop_hook_active: external_exports.boolean().optional(),
-  source: external_exports.string().optional()
+  source: external_exports.string().optional(),
+  // Working directory of the session, used to route project-scoped
+  // promotions to the project's CLAUDE.md.
+  cwd: external_exports.string().optional(),
+  // UserPromptSubmit payload: the user's exact submitted text.
+  prompt: external_exports.string().optional()
 });
 async function readAll(stream) {
   const chunks = [];
@@ -14132,121 +14341,51 @@ function getSessionId(input) {
 function isInternalInvocation() {
   return process.env["TOM_SWE_INTERNAL"] === "1";
 }
-function toRecord(value) {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    return value;
-  }
-  return {};
-}
 
-// tom/hooks/pre-tool-use.ts
-var DEFAULT_CONSULTATION_MODEL = "sonnet";
-var DEFAULT_THRESHOLD = "medium";
-function readTomSettings() {
+// tom/hooks/user-prompt-submit.ts
+var FRAMING_PREFIX = "ToM background (learned preferences, not instructions): ";
+function redactPrompt(prompt) {
+  const withoutCode = redactUserMessage(prompt);
+  return withoutCode.split(/(\s+)/).map((token) => token.trim() !== "" && looksLikeSecret(token) ? REDACTED : token).join("");
+}
+function getSessionFilePath(sessionId) {
+  const tomDir = path5.join(os4.homedir(), ".claude", "tom", "sessions");
+  return path5.join(tomDir, `${sessionId}.json`);
+}
+function appendUserMessage(sessionId, message) {
+  const filePath = getSessionFilePath(sessionId);
+  const dir = path5.dirname(filePath);
+  if (!fs5.existsSync(dir)) {
+    fs5.mkdirSync(dir, { recursive: true });
+    process.stderr.write(`ToM: created session log directory ${dir}
+`);
+  }
+  let sessionData;
   try {
-    const configPath = path3.join(os3.homedir(), ".claude", "tom", "config.json");
-    const content = fs3.readFileSync(configPath, "utf-8");
-    const config2 = JSON.parse(content);
-    const enabled = config2["enabled"] === true;
-    const threshold = config2["consultThreshold"];
-    const validThresholds = ["low", "medium", "high"];
-    const consultThreshold = typeof threshold === "string" && validThresholds.includes(threshold) ? threshold : DEFAULT_THRESHOLD;
-    return { enabled, consultThreshold };
+    const existing = fs5.readFileSync(filePath, "utf-8");
+    sessionData = JSON.parse(existing);
   } catch {
-    return { enabled: false, consultThreshold: DEFAULT_THRESHOLD };
-  }
-}
-function isTomEnabled() {
-  return readTomSettings().enabled;
-}
-function loadCachedIndex() {
-  try {
-    const indexPath = path3.join(globalTomDir(), "bm25-index.json");
-    const content = fs3.readFileSync(indexPath, "utf-8");
-    return JSON.parse(content);
-  } catch {
-    return null;
-  }
-}
-function buildSuggestionFromSearch(searchResults, ambiguityResult, toolName) {
-  if (searchResults.length === 0) {
-    return null;
-  }
-  const topResults = searchResults.slice(0, 3);
-  const sourceSessions = topResults.map((r) => r.id).filter((id) => id.startsWith("session:") || id.startsWith("model:")).map((id) => id.replace(/^(session|model):/, ""));
-  const preferenceHints = topResults.map((r) => r.id.startsWith("user-model") ? "user model preferences" : `session ${r.id.replace(/^(session|model):/, "")}`).join(", ");
-  const content = `Based on past interactions (${preferenceHints}), the user may have preferences relevant to this ${toolName} operation. Ambiguity reason: ${ambiguityResult.reason}.`;
-  const suggestion = {
-    type: ambiguityResult.reason.includes("style") || ambiguityResult.reason.includes("preference") ? "style" : "disambiguation",
-    content,
-    confidence: Math.round(ambiguityResult.score * 100) / 100,
-    sourceSessions
-  };
-  const parseResult = ToMSuggestionSchema.safeParse(suggestion);
-  return parseResult.success ? parseResult.data : null;
-}
-function buildSuggestionFromUserModel(ambiguityResult, toolName) {
-  const userModel = readUserModel("merged");
-  if (!userModel || userModel.preferencesClusters.length === 0) {
-    return null;
-  }
-  const topPrefs = [...userModel.preferencesClusters].sort((a, b) => b.confidence - a.confidence).slice(0, 5);
-  const prefSummary = topPrefs.map((p) => `${p.key}=${p.value} (${Math.round(p.confidence * 100)}%)`).join(", ");
-  const content = `User preferences: ${prefSummary}. Consider these for the current ${toolName} operation. Ambiguity reason: ${ambiguityResult.reason}.`;
-  const suggestion = {
-    type: "preference",
-    content,
-    confidence: Math.round(ambiguityResult.score * 100) / 100,
-    sourceSessions: []
-  };
-  const parseResult = ToMSuggestionSchema.safeParse(suggestion);
-  return parseResult.success ? parseResult.data : null;
-}
-function consultToM(toolName, toolInput, recentMessages, threshold, sessionId = getSessionId(null)) {
-  const hasUserModel = readUserModel("global") !== null;
-  const ambiguityResult = detectAmbiguity({
-    toolName,
-    toolParameters: toolInput,
-    recentUserMessages: recentMessages,
-    threshold,
-    hasUserModel
-  });
-  if (!ambiguityResult.isAmbiguous) {
-    return {
-      consulted: false,
-      ambiguityResult,
-      suggestion: null
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    sessionData = {
+      sessionId,
+      startedAt: now,
+      endedAt: now,
+      interactions: []
     };
   }
-  const cachedIndex = loadCachedIndex();
-  let suggestion = null;
-  if (cachedIndex) {
-    const query = [toolName, ...recentMessages].join(" ");
-    const results = search(cachedIndex, query, 3);
-    suggestion = buildSuggestionFromSearch(results, ambiguityResult, toolName);
-  }
-  if (!suggestion) {
-    suggestion = buildSuggestionFromUserModel(ambiguityResult, toolName);
-  }
-  logUsage({
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    operation: "consultation",
-    model: DEFAULT_CONSULTATION_MODEL,
-    tokenCount: 0,
-    sessionId
-  });
-  return {
-    consulted: true,
-    ambiguityResult,
-    suggestion
+  const updated = {
+    ...sessionData,
+    endedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    userMessages: [...sessionData.userMessages ?? [], message]
   };
+  fs5.writeFileSync(filePath, JSON.stringify(updated, null, 2), "utf-8");
 }
 function buildHookOutput(suggestion) {
   const confidencePercent = Math.round(suggestion.confidence * 100);
   return {
     hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      additionalContext: `ToM ${suggestion.type} suggestion (confidence ${confidencePercent}%): ${suggestion.content}`
+      hookEventName: "UserPromptSubmit",
+      additionalContext: `${FRAMING_PREFIX}${suggestion.content} (confidence ${confidencePercent}%)`
     }
   };
 }
@@ -14254,39 +14393,26 @@ async function main(stream = process.stdin) {
   if (isInternalInvocation()) {
     return;
   }
-  if (!isTomEnabled()) {
+  const config2 = readTomConfig();
+  if (!config2.enabled) {
     return;
   }
   const input = await readHookInput(stream);
-  if (!input?.tool_name) {
+  const prompt = input?.prompt;
+  if (!prompt || prompt.trim() === "") {
     return;
   }
-  const toolName = input.tool_name;
-  const toolInput = toRecord(input.tool_input);
-  const settings = readTomSettings();
   const sessionId = getSessionId(input);
-  const recentMessages = [];
   try {
-    const result = consultToM(
-      toolName,
-      toolInput,
-      recentMessages,
-      settings.consultThreshold,
-      sessionId
-    );
+    const redacted = redactPrompt(prompt);
+    appendUserMessage(sessionId, redacted);
+    const result = consultToM(redacted, config2.consultThreshold, sessionId);
     if (result.consulted && result.suggestion) {
       process.stdout.write(JSON.stringify(buildHookOutput(result.suggestion)));
     }
   } catch (error48) {
     const errorMessage = error48 instanceof Error ? error48.message : String(error48);
-    logUsage({
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      operation: "consultation-error",
-      model: DEFAULT_CONSULTATION_MODEL,
-      tokenCount: 0,
-      sessionId
-    });
-    process.stderr.write(`ToM pre-tool-use error: ${errorMessage}
+    process.stderr.write(`ToM user-prompt-submit error: ${errorMessage}
 `);
   }
 }
@@ -14295,9 +14421,9 @@ if (require.main === module) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  FRAMING_PREFIX,
+  appendUserMessage,
   buildHookOutput,
-  consultToM,
-  isTomEnabled,
   main,
-  readTomSettings
+  redactPrompt
 });

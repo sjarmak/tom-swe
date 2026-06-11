@@ -22,6 +22,18 @@ export const TomConfigSchema = z.strictObject({
   }).default({ memoryUpdate: 'haiku', consultation: 'sonnet' }),
   preferenceDecayDays: z.number().default(30),
   maxSessionsRetained: z.number().default(100),
+  // Confidence multiplier applied to a stored preference when a session
+  // correction contradicts it (post-action feedback). Corrections cut
+  // confidence faster than repetition builds it.
+  correctionPenalty: z.number().min(0).max(1).default(0.5),
+  // Promotion lifecycle: stable high-confidence preferences graduate from
+  // per-session injection into durable CLAUDE.md marker blocks and are
+  // retired from injection (candidate → promoted → retired, simplified).
+  promotion: z.strictObject({
+    enabled: z.boolean().default(true),
+    threshold: z.number().min(0).max(1).default(0.8),
+    minSessions: z.number().int().min(1).default(5),
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5 }),
 })
 
 export type TomConfig = z.infer<typeof TomConfigSchema>

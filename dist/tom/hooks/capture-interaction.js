@@ -36,9 +36,9 @@ __export(capture_interaction_exports, {
   summarizeToolResponse: () => summarizeToolResponse
 });
 module.exports = __toCommonJS(capture_interaction_exports);
-var fs = __toESM(require("node:fs"));
-var path = __toESM(require("node:path"));
-var os = __toESM(require("node:os"));
+var fs2 = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
+var os2 = __toESM(require("node:os"));
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -807,10 +807,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path2) {
-  if (!path2)
+function getElementAtPath(obj, path3) {
+  if (!path3)
     return obj;
-  return path2.reduce((acc, key) => acc?.[key], obj);
+  return path3.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1193,11 +1193,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path2, issues) {
+function prefixIssues(path3, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path2);
+    iss.path.unshift(path3);
     return iss;
   });
 }
@@ -1380,7 +1380,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path2 = []) => {
+  const processError = (error49, path3 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1390,7 +1390,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path2, ...issue2.path];
+        const fullpath = [...path3, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1422,8 +1422,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path2 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path2) {
+  const path3 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path3) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13400,13 +13400,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path2 = ref.slice(1).split("/").filter(Boolean);
-  if (path2.length === 0) {
+  const path3 = ref.slice(1).split("/").filter(Boolean);
+  if (path3.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path2[0] === defsKey) {
-    const key = path2[1];
+  if (path3[0] === defsKey) {
+    const key = path3[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13816,7 +13816,12 @@ var HookInputSchema = external_exports.looseObject({
   tool_input: external_exports.unknown().optional(),
   tool_response: external_exports.unknown().optional(),
   stop_hook_active: external_exports.boolean().optional(),
-  source: external_exports.string().optional()
+  source: external_exports.string().optional(),
+  // Working directory of the session, used to route project-scoped
+  // promotions to the project's CLAUDE.md.
+  cwd: external_exports.string().optional(),
+  // UserPromptSubmit payload: the user's exact submitted text.
+  prompt: external_exports.string().optional()
 });
 async function readAll(stream) {
   const chunks = [];
@@ -13909,6 +13914,50 @@ function sanitizeValue(value) {
   return value;
 }
 
+// tom/config.ts
+var fs = __toESM(require("node:fs"));
+var path = __toESM(require("node:path"));
+var os = __toESM(require("node:os"));
+var TomConfigSchema = external_exports.strictObject({
+  enabled: external_exports.boolean().default(false),
+  consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
+  models: external_exports.strictObject({
+    memoryUpdate: external_exports.string().default("haiku"),
+    consultation: external_exports.string().default("sonnet")
+  }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
+  preferenceDecayDays: external_exports.number().default(30),
+  maxSessionsRetained: external_exports.number().default(100),
+  // Confidence multiplier applied to a stored preference when a session
+  // correction contradicts it (post-action feedback). Corrections cut
+  // confidence faster than repetition builds it.
+  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
+  // Promotion lifecycle: stable high-confidence preferences graduate from
+  // per-session injection into durable CLAUDE.md marker blocks and are
+  // retired from injection (candidate → promoted → retired, simplified).
+  promotion: external_exports.strictObject({
+    enabled: external_exports.boolean().default(true),
+    threshold: external_exports.number().min(0).max(1).default(0.8),
+    minSessions: external_exports.number().int().min(1).default(5)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
+});
+function readTomConfig() {
+  try {
+    const configPath = path.join(os.homedir(), ".claude", "tom", "config.json");
+    const content = fs.readFileSync(configPath, "utf-8");
+    const raw = JSON.parse(content);
+    const result = TomConfigSchema.safeParse(raw);
+    if (result.success) {
+      return result.data;
+    }
+    return TomConfigSchema.parse({});
+  } catch {
+    return TomConfigSchema.parse({});
+  }
+}
+function isTomEnabled() {
+  return readTomConfig().enabled;
+}
+
 // tom/hooks/capture-interaction.ts
 function extractParameterShape(toolInput) {
   const shape = {};
@@ -13945,13 +13994,13 @@ function summarizeToolResponse(toolResponse) {
   return JSON.stringify(toolResponse);
 }
 function getSessionFilePath(sessionId) {
-  const tomDir = path.join(os.homedir(), ".claude", "tom", "sessions");
-  return path.join(tomDir, `${sessionId}.json`);
+  const tomDir = path2.join(os2.homedir(), ".claude", "tom", "sessions");
+  return path2.join(tomDir, `${sessionId}.json`);
 }
 function ensureDirectoryExists(filePath) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  const dir = path2.dirname(filePath);
+  if (!fs2.existsSync(dir)) {
+    fs2.mkdirSync(dir, { recursive: true });
   }
 }
 function captureInteraction(sessionId, toolName, toolInput, toolOutput) {
@@ -13960,7 +14009,7 @@ function captureInteraction(sessionId, toolName, toolInput, toolOutput) {
   ensureDirectoryExists(filePath);
   let sessionData;
   try {
-    const existing = fs.readFileSync(filePath, "utf-8");
+    const existing = fs2.readFileSync(filePath, "utf-8");
     sessionData = JSON.parse(existing);
   } catch {
     sessionData = {
@@ -13975,22 +14024,12 @@ function captureInteraction(sessionId, toolName, toolInput, toolOutput) {
     endedAt: (/* @__PURE__ */ new Date()).toISOString(),
     interactions: [...sessionData.interactions, entry]
   };
-  fs.writeFile(filePath, JSON.stringify(updated, null, 2), "utf-8", (err) => {
+  fs2.writeFile(filePath, JSON.stringify(updated, null, 2), "utf-8", (err) => {
     if (err) {
       process.stderr.write(`ToM capture-interaction write error: ${err.message}
 `);
     }
   });
-}
-function isTomEnabled() {
-  try {
-    const configPath = path.join(os.homedir(), ".claude", "tom", "config.json");
-    const content = fs.readFileSync(configPath, "utf-8");
-    const config2 = JSON.parse(content);
-    return config2["enabled"] === true;
-  } catch {
-    return false;
-  }
 }
 async function main(stream = process.stdin) {
   if (isInternalInvocation()) {

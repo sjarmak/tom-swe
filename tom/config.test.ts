@@ -45,6 +45,12 @@ describe('TomConfigSchema', () => {
       },
       preferenceDecayDays: 30,
       maxSessionsRetained: 100,
+      correctionPenalty: 0.5,
+      promotion: {
+        enabled: true,
+        threshold: 0.8,
+        minSessions: 5,
+      },
     })
   })
 
@@ -58,9 +64,52 @@ describe('TomConfigSchema', () => {
       },
       preferenceDecayDays: 60,
       maxSessionsRetained: 200,
+      correctionPenalty: 0.25,
+      promotion: {
+        enabled: false,
+        threshold: 0.9,
+        minSessions: 10,
+      },
     }
     const result = TomConfigSchema.parse(input)
     expect(result).toEqual(input)
+  })
+
+  it('should default the promotion object when absent', () => {
+    const result = TomConfigSchema.parse({ enabled: true })
+    expect(result.promotion).toEqual({
+      enabled: true,
+      threshold: 0.8,
+      minSessions: 5,
+    })
+  })
+
+  it('should fill promotion defaults for partial promotion config', () => {
+    const result = TomConfigSchema.parse({ promotion: { threshold: 0.95 } })
+    expect(result.promotion.threshold).toBe(0.95)
+    expect(result.promotion.enabled).toBe(true)
+    expect(result.promotion.minSessions).toBe(5)
+  })
+
+  it('should reject invalid promotion values', () => {
+    expect(() => TomConfigSchema.parse({ promotion: { threshold: 1.5 } })).toThrow()
+    expect(() => TomConfigSchema.parse({ promotion: { minSessions: 0 } })).toThrow()
+    expect(() => TomConfigSchema.parse({ promotion: { minSessions: 2.5 } })).toThrow()
+  })
+
+  it('should default correctionPenalty to 0.5', () => {
+    const result = TomConfigSchema.parse({ enabled: true })
+    expect(result.correctionPenalty).toBe(0.5)
+  })
+
+  it('should accept correctionPenalty at the 0 and 1 boundaries', () => {
+    expect(TomConfigSchema.parse({ correctionPenalty: 0 }).correctionPenalty).toBe(0)
+    expect(TomConfigSchema.parse({ correctionPenalty: 1 }).correctionPenalty).toBe(1)
+  })
+
+  it('should reject correctionPenalty outside 0-1', () => {
+    expect(() => TomConfigSchema.parse({ correctionPenalty: 1.5 })).toThrow()
+    expect(() => TomConfigSchema.parse({ correctionPenalty: -0.1 })).toThrow()
   })
 
   it('should parse partial config with defaults filling in', () => {
@@ -166,6 +215,13 @@ describe('readTomConfig', () => {
     expect(config.models.memoryUpdate).toBe('haiku')
     expect(config.preferenceDecayDays).toBe(30)
     expect(config.maxSessionsRetained).toBe(100)
+    expect(config.correctionPenalty).toBe(0.5)
+  })
+
+  it('should read a configured correctionPenalty', () => {
+    writeSettings({ enabled: true, correctionPenalty: 0.3 })
+    const config = readTomConfig()
+    expect(config.correctionPenalty).toBe(0.3)
   })
 
   it('should return defaults when tom key fails validation', () => {

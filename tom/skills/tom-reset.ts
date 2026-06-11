@@ -4,12 +4,21 @@
  * Deletes all files in ~/.claude/tom/ and .claude/tom/ (sessions,
  * session-models, user-model.json, usage.log, BM25 index) but
  * does NOT delete config from settings.json.
+ *
+ * Also removes tom-swe marker blocks from the CLAUDE.md promotion targets
+ * (~/.claude/CLAUDE.md and the project CLAUDE.md): managed content must
+ * not outlive the store it projects.
  */
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { globalTomDir, projectTomDir } from '../memory-io.js'
+import {
+  globalMemoryFilePath,
+  findProjectMemoryFile,
+  removePromotionBlock,
+} from '../promotion.js'
 
 // --- Types ---
 
@@ -23,6 +32,8 @@ export interface ResetResult {
   readonly projectDeleted: DeletedSummary
   readonly totalFileCount: number
   readonly totalBytes: number
+  /** CLAUDE.md files whose tom-swe marker blocks were removed. */
+  readonly markerBlocksRemoved: readonly string[]
 }
 
 // --- Helpers ---
@@ -73,6 +84,27 @@ function deleteDirectory(dirPath: string): DeletedSummary {
 
 // --- Main ---
 
+/**
+ * Removes tom-swe marker blocks from both promotion targets (global
+ * ~/.claude/CLAUDE.md and the project CLAUDE.md). Only the marker-bounded
+ * section is removed; all other file content stays untouched.
+ */
+function removeMarkerBlocks(): readonly string[] {
+  const candidates = new Set<string>([globalMemoryFilePath()])
+  const projectFile = findProjectMemoryFile(process.cwd())
+  if (projectFile !== null) {
+    candidates.add(projectFile)
+  }
+
+  const removed: string[] = []
+  for (const filePath of candidates) {
+    if (removePromotionBlock(filePath)) {
+      removed.push(filePath)
+    }
+  }
+  return removed
+}
+
 export function performReset(): ResetResult {
   const globalDir = globalTomDir()
   const projectDir = projectTomDir()
@@ -83,11 +115,14 @@ export function performReset(): ResetResult {
       ? { fileCount: 0, totalBytes: 0 }
       : deleteDirectory(projectDir)
 
+  const markerBlocksRemoved = removeMarkerBlocks()
+
   return {
     globalDeleted,
     projectDeleted,
     totalFileCount: globalDeleted.fileCount + projectDeleted.fileCount,
     totalBytes: globalDeleted.totalBytes + projectDeleted.totalBytes,
+    markerBlocksRemoved,
   }
 }
 
@@ -104,7 +139,7 @@ export function formatResetResult(result: ResetResult): string {
   lines.push('# ToM Reset Complete')
   lines.push('')
 
-  if (result.totalFileCount === 0) {
+  if (result.totalFileCount === 0 && result.markerBlocksRemoved.length === 0) {
     lines.push('No ToM data found to delete.')
     return lines.join('\n')
   }
@@ -126,6 +161,14 @@ export function formatResetResult(result: ResetResult): string {
     )
   }
 
+  if (result.markerBlocksRemoved.length > 0) {
+    lines.push('')
+    lines.push('## Removed CLAUDE.md Marker Blocks')
+    for (const filePath of result.markerBlocksRemoved) {
+      lines.push(`- ${filePath}`)
+    }
+  }
+
   lines.push('')
   lines.push('Configuration in settings.json was preserved.')
   lines.push('ToM will begin learning again from your next session.')
@@ -144,6 +187,7 @@ export function formatConfirmationPrompt(): string {
   lines.push('- User model (Tier 3)')
   lines.push('- Usage log')
   lines.push('- BM25 search index')
+  lines.push('- tom-swe marker blocks in CLAUDE.md promotion targets')
   lines.push('')
   lines.push('Configuration in settings.json will be preserved.')
   lines.push('')

@@ -12,16 +12,17 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import * as os from 'node:os'
 
 import type { SessionLog, SessionModel, UserModel } from '../schemas.js'
 import { SessionLogSchema } from '../schemas.js'
 import { readUserModel, writeSessionModel, writeUserModel, globalTomDir } from '../memory-io.js'
 import { aggregateSessionIntoModel } from '../aggregation.js'
+import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
 import { getModelForOperation, logUsage } from '../routing.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { extractSessionModel } from '../session-extract.js'
+import { runPromotion } from '../promotion.js'
 import { readHookInput, getSessionId, isInternalInvocation } from './hook-input.js'
 
 // --- Configuration ---
@@ -30,17 +31,6 @@ import { readHookInput, getSessionId, isInternalInvocation } from './hook-input.
 const NO_MODEL = 'none'
 
 // --- Helpers ---
-
-export function isTomEnabled(): boolean {
-  try {
-    const configPath = path.join(os.homedir(), '.claude', 'tom', 'config.json')
-    const content = fs.readFileSync(configPath, 'utf-8')
-    const config = JSON.parse(content) as Record<string, unknown>
-    return config['enabled'] === true
-  } catch {
-    return false
-  }
-}
 
 function getSessionFilePath(sessionId: string): string {
   return path.join(globalTomDir(), 'sessions', `${sessionId}.json`)
@@ -80,9 +70,16 @@ export interface AnalysisResult {
  * 2. Extract Tier 2 session model (LLM first, heuristic fallback) and log
  *    which path ran to usage.log
  * 3. Aggregate into Tier 3 user model
- * 4. Rebuild BM25 index
+ * 4. Promote stable high-confidence preferences into CLAUDE.md marker blocks
+ * 5. Rebuild BM25 index
+ *
+ * @param cwd - Session working directory (from the hook payload), used to
+ *   route project-scoped promotions to the project's CLAUDE.md.
  */
-export async function analyzeCompletedSession(sessionId: string): Promise<AnalysisResult> {
+export async function analyzeCompletedSession(
+  sessionId: string,
+  cwd: string = process.cwd()
+): Promise<AnalysisResult> {
   // Step 1: Read Tier 1 session log
   const sessionLog = readRawSessionLog(sessionId)
   if (!sessionLog) {
@@ -134,13 +131,67 @@ export async function analyzeCompletedSession(sessionId: string): Promise<Analys
     projectOverrides: {},
   }
 
-  const updatedUserModel = aggregateSessionIntoModel(
+  const config = readTomConfig()
+  const aggregatedUserModel = aggregateSessionIntoModel(
     currentUserModel ?? emptyModel,
-    sessionModel
+    sessionModel,
+    config.preferenceDecayDays,
+    config.correctionPenalty
   )
-  writeUserModel(updatedUserModel, 'global')
+  writeUserModel(aggregatedUserModel, 'global')
 
-  // Step 4: Rebuild BM25 index
+  // Telemetry for the external memory-eval harness: one entry per
+  // correction batch, listing category:key pairs and the applied penalty.
+  const corrections = sessionModel.corrections ?? []
+  if (corrections.length > 0) {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'preference-correction',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      reason: JSON.stringify({
+        corrections: corrections.map((c) => `${c.category}:${c.key}`),
+        penalty: config.correctionPenalty,
+      }),
+    })
+  }
+
+  // Step 4: Promote stable high-confidence preferences into CLAUDE.md
+  // marker blocks and retire them from injection. Promotion failures must
+  // never break the analysis pipeline (catch, log, continue).
+  try {
+    const promotion = runPromotion(aggregatedUserModel, config.promotion, cwd)
+    // runPromotion returns the same reference when promotion is disabled;
+    // otherwise persist the updated promoted/retired flags.
+    if (promotion.model !== aggregatedUserModel) {
+      writeUserModel(promotion.model, 'global')
+    }
+    if (promotion.promoted.length > 0) {
+      logUsage({
+        timestamp: new Date().toISOString(),
+        operation: 'preference-promotion',
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        reason: JSON.stringify({
+          promoted: promotion.promoted.map((p) => `${p.category}:${p.key}`),
+          targets: promotion.targets,
+        }),
+      })
+    }
+  } catch (error) {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'promotion-error',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      reason: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  // Step 5: Rebuild BM25 index
   const index = buildMemoryIndex('global')
   const indexPath = path.join(globalTomDir(), 'bm25-index.json')
   const indexDir = path.dirname(indexPath)
@@ -181,7 +232,7 @@ export async function main(
   const sessionId = getSessionId(input)
 
   try {
-    await analyzeCompletedSession(sessionId)
+    await analyzeCompletedSession(sessionId, input?.cwd ?? process.cwd())
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     logUsage({

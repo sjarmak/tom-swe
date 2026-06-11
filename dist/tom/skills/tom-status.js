@@ -35,8 +35,8 @@ __export(tom_status_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(tom_status_exports);
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 
 // tom/memory-io.ts
 var fs = __toESM(require("node:fs"));
@@ -810,10 +810,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1196,11 +1196,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1383,7 +1383,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path4 = []) => {
+  const processError = (error49, path6 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1393,7 +1393,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1425,8 +1425,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path4) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13403,13 +13403,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path4 = ref.slice(1).split("/").filter(Boolean);
-  if (path4.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path4[0] === defsKey) {
-    const key = path4[1];
+  if (path6[0] === defsKey) {
+    const key = path6[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13822,19 +13822,40 @@ var SessionLogSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   startedAt: external_exports.string().datetime(),
   endedAt: external_exports.string().datetime(),
-  interactions: external_exports.array(InteractionSchema)
+  interactions: external_exports.array(InteractionSchema),
+  // Redacted user prompt text captured by the UserPromptSubmit hook.
+  // Optional for backward compatibility with logs written before capture.
+  userMessages: external_exports.array(external_exports.string()).optional()
 });
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
   urgency: external_exports.enum(["low", "medium", "high"])
 });
+var PreferenceCategorySchema = external_exports.enum([
+  "interactionStyle",
+  "codingPreferences",
+  "emotionalSignals"
+]);
+var CorrectionSchema = external_exports.strictObject({
+  category: PreferenceCategorySchema,
+  key: external_exports.string(),
+  // The value the user corrected TO, when one was expressed. Optional: a
+  // correction can be a pure rejection without a replacement value.
+  correctedValue: external_exports.string().optional(),
+  // Short evidence string (quote or paraphrase of the correcting moment).
+  evidence: external_exports.string()
+});
 var SessionModelSchema = external_exports.strictObject({
   sessionId: external_exports.string(),
   intent: external_exports.string(),
   interactionPatterns: external_exports.array(external_exports.string()),
   codingPreferences: external_exports.array(external_exports.string()),
-  satisfactionSignals: SatisfactionSignalsSchema
+  satisfactionSignals: SatisfactionSignalsSchema,
+  // Corrections extracted from the session. Optional for backward
+  // compatibility with session models written before this field existed;
+  // consumers treat absence as an empty array.
+  corrections: external_exports.array(CorrectionSchema).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13842,7 +13863,11 @@ var PreferenceClusterSchema = external_exports.strictObject({
   value: external_exports.string(),
   confidence: external_exports.number().min(0).max(1),
   lastUpdated: external_exports.string().datetime(),
-  sessionCount: external_exports.number().int().min(0)
+  sessionCount: external_exports.number().int().min(0),
+  // True when the preference has been promoted into a durable CLAUDE.md
+  // marker block and retired from per-session injection. Optional for
+  // backward compatibility with user models written before promotion existed.
+  promoted: external_exports.boolean().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13930,7 +13955,19 @@ var TomConfigSchema = external_exports.strictObject({
     consultation: external_exports.string().default("sonnet")
   }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
   preferenceDecayDays: external_exports.number().default(30),
-  maxSessionsRetained: external_exports.number().default(100)
+  maxSessionsRetained: external_exports.number().default(100),
+  // Confidence multiplier applied to a stored preference when a session
+  // correction contradicts it (post-action feedback). Corrections cut
+  // confidence faster than repetition builds it.
+  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
+  // Promotion lifecycle: stable high-confidence preferences graduate from
+  // per-session injection into durable CLAUDE.md marker blocks and are
+  // retired from injection (candidate → promoted → retired, simplified).
+  promotion: external_exports.strictObject({
+    enabled: external_exports.boolean().default(true),
+    threshold: external_exports.number().min(0).max(1).default(0.8),
+    minSessions: external_exports.number().int().min(1).default(5)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
 });
 function readTomConfig() {
   try {
@@ -13947,10 +13984,36 @@ function readTomConfig() {
   }
 }
 
+// tom/promotion.ts
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+var os4 = __toESM(require("node:os"));
+
+// tom/routing.ts
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
+
+// tom/promotion.ts
+function globalMemoryFilePath() {
+  return path4.join(os4.homedir(), ".claude", "CLAUDE.md");
+}
+function findProjectMemoryFile(cwd) {
+  const rootCandidate = path4.join(cwd, "CLAUDE.md");
+  if (fs4.existsSync(rootCandidate)) {
+    return rootCandidate;
+  }
+  const dotClaudeCandidate = path4.join(cwd, ".claude", "CLAUDE.md");
+  if (fs4.existsSync(dotClaudeCandidate)) {
+    return dotClaudeCandidate;
+  }
+  return null;
+}
+
 // tom/skills/tom-status.ts
 function countJsonFiles(dirPath) {
   try {
-    const entries = fs3.readdirSync(dirPath);
+    const entries = fs5.readdirSync(dirPath);
     return entries.filter((e) => e.endsWith(".json")).length;
   } catch {
     return 0;
@@ -13958,19 +14021,19 @@ function countJsonFiles(dirPath) {
 }
 function getFileSize(filePath) {
   try {
-    const stat = fs3.statSync(filePath);
+    const stat = fs5.statSync(filePath);
     return stat.size;
   } catch {
     return 0;
   }
 }
 function getStorageStats() {
-  const globalSessions = path3.join(globalTomDir(), "sessions");
-  const projectSessions = path3.join(projectTomDir(), "sessions");
-  const globalModels = path3.join(globalTomDir(), "session-models");
-  const projectModels = path3.join(projectTomDir(), "session-models");
-  const globalUserModelFile = path3.join(globalTomDir(), "user-model.json");
-  const projectUserModelFile = path3.join(projectTomDir(), "user-model.json");
+  const globalSessions = path5.join(globalTomDir(), "sessions");
+  const projectSessions = path5.join(projectTomDir(), "sessions");
+  const globalModels = path5.join(globalTomDir(), "session-models");
+  const projectModels = path5.join(projectTomDir(), "session-models");
+  const globalUserModelFile = path5.join(globalTomDir(), "user-model.json");
+  const projectUserModelFile = path5.join(projectTomDir(), "user-model.json");
   return {
     tier1SessionCount: countJsonFiles(globalSessions) + countJsonFiles(projectSessions),
     tier2ModelCount: countJsonFiles(globalModels) + countJsonFiles(projectModels),
@@ -13978,10 +14041,15 @@ function getStorageStats() {
   };
 }
 function getTopPreferences(model, limit = 10) {
-  const sorted = [...model.preferencesClusters].sort(
-    (a, b) => b.confidence - a.confidence
-  );
+  const sorted = model.preferencesClusters.filter((p) => p.promoted !== true).sort((a, b) => b.confidence - a.confidence);
   return sorted.slice(0, limit);
+}
+function getPromotedPreferences(model) {
+  const projectFile = findProjectMemoryFile(process.cwd());
+  return model.preferencesClusters.filter((p) => p.promoted === true).map((preference) => ({
+    preference,
+    targetFile: preference.category === "codingPreferences" ? projectFile ?? "(project CLAUDE.md not found)" : globalMemoryFilePath()
+  }));
 }
 function getStatus() {
   const config2 = readTomConfig();
@@ -14002,6 +14070,7 @@ function getStatus() {
       },
       storage,
       topPreferences: [],
+      promotedPreferences: [],
       interactionStyleSummary: "",
       codingStyleSummary: ""
     };
@@ -14020,6 +14089,7 @@ function getStatus() {
     },
     storage,
     topPreferences: getTopPreferences(userModel),
+    promotedPreferences: getPromotedPreferences(userModel),
     interactionStyleSummary: userModel.interactionStyleSummary,
     codingStyleSummary: userModel.codingStyleSummary
   };
@@ -14059,6 +14129,17 @@ function formatStatus(status) {
       const confidence = (pref.confidence * 100).toFixed(0);
       lines.push(
         `- [${pref.category}] ${pref.key}: ${pref.value} (${confidence}% confidence, ${pref.sessionCount} sessions)`
+      );
+    }
+    lines.push("");
+  }
+  if (status.promotedPreferences.length > 0) {
+    lines.push("## Promoted Preferences (in CLAUDE.md)");
+    for (const entry of status.promotedPreferences) {
+      const pref = entry.preference;
+      const confidence = (pref.confidence * 100).toFixed(0);
+      lines.push(
+        `- [${pref.category}] ${pref.key}: ${pref.value} (${confidence}% confidence, ${pref.sessionCount} sessions) \u2192 ${entry.targetFile}`
       );
     }
     lines.push("");

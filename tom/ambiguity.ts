@@ -1,21 +1,27 @@
 /**
- * Lightweight heuristics for detecting ambiguity in user instructions.
+ * Lightweight heuristics for detecting ambiguity in user prompt text.
  *
  * Pure functions — no I/O, no model calls. Executes in <50ms.
+ * Operates on the actual prompt the user submitted (UserPromptSubmit
+ * payload), not on tool parameters.
  */
 
 export type AmbiguityThreshold = 'low' | 'medium' | 'high'
+
+export type AmbiguityTrigger =
+  | 'short-vague'
+  | 'preference-sensitive'
+  | 'no-user-model'
 
 export interface AmbiguityResult {
   readonly isAmbiguous: boolean
   readonly score: number
   readonly reason: string
+  readonly triggers: readonly AmbiguityTrigger[]
 }
 
 export interface DetectAmbiguityInput {
-  readonly toolName: string
-  readonly toolParameters: Readonly<Record<string, unknown>>
-  readonly recentUserMessages: readonly string[]
+  readonly prompt: string
   readonly threshold?: AmbiguityThreshold
   readonly hasUserModel?: boolean
 }
@@ -28,13 +34,6 @@ const THRESHOLD_VALUES: Readonly<Record<AmbiguityThreshold, number>> = {
 
 const FILE_PATH_PATTERN = /(?:\/[\w.-]+)+(?:\.\w+)?/
 const SHORT_MESSAGE_WORD_LIMIT = 10
-
-/** Tools where style/preference choices are common */
-const STYLE_SENSITIVE_TOOLS = new Set([
-  'Write',
-  'Edit',
-  'NotebookEdit',
-])
 
 /** Keywords that indicate preference-sensitive decisions */
 const PREFERENCE_KEYWORDS = [
@@ -68,14 +67,13 @@ const VAGUE_KEYWORDS = [
 ]
 
 /**
- * Detects whether user instructions are ambiguous enough to warrant
+ * Detects whether a user prompt is ambiguous enough to warrant
  * ToM consultation.
  *
  * Heuristics:
- * 1. Short/vague user instruction (<10 words, no file paths)
- * 2. Multiple valid file targets for an edit
- * 3. Preference-sensitive decisions (style, architecture, library choice)
- * 4. First interaction in new project with no user model
+ * 1. Short/vague prompt (<10 words, vague keywords, no explicit file paths)
+ * 2. Preference-sensitive vocabulary (style, architecture, library choice)
+ * 3. No user model exists yet (first interactions)
  *
  * Returns { isAmbiguous, score (0-1), reason }.
  */
@@ -83,38 +81,31 @@ export function detectAmbiguity(input: DetectAmbiguityInput): AmbiguityResult {
   const threshold = input.threshold ?? 'medium'
   const thresholdValue = THRESHOLD_VALUES[threshold]
   const reasons: string[] = []
+  const triggers: AmbiguityTrigger[] = []
   let totalScore = 0
 
-  const lastMessage = input.recentUserMessages.length > 0
-    ? input.recentUserMessages[input.recentUserMessages.length - 1] ?? ''
-    : ''
-
-  // Heuristic 1: Short/vague user instruction
-  const shortVagueScore = scoreShortVagueInstruction(lastMessage)
+  // Heuristic 1: Short/vague prompt
+  const shortVagueScore = scoreShortVagueInstruction(input.prompt)
   if (shortVagueScore > 0) {
     totalScore += shortVagueScore
     reasons.push('Short or vague user instruction without specific file paths')
+    triggers.push('short-vague')
   }
 
-  // Heuristic 2: Multiple valid file targets
-  const multiTargetScore = scoreMultipleFileTargets(input.toolName, input.toolParameters)
-  if (multiTargetScore > 0) {
-    totalScore += multiTargetScore
-    reasons.push('Edit tool used without a clear single file target')
-  }
-
-  // Heuristic 3: Preference-sensitive decisions
-  const preferenceScore = scorePreferenceSensitive(input.toolName, input.recentUserMessages)
+  // Heuristic 2: Preference-sensitive vocabulary
+  const preferenceScore = scorePreferenceSensitive(input.prompt)
   if (preferenceScore > 0) {
     totalScore += preferenceScore
     reasons.push('Decision involves style, architecture, or library preferences')
+    triggers.push('preference-sensitive')
   }
 
-  // Heuristic 4: No user model (first interaction in new project)
+  // Heuristic 3: No user model (first interactions)
   const noModelScore = scoreNoUserModel(input.hasUserModel ?? true)
   if (noModelScore > 0) {
     totalScore += noModelScore
     reasons.push('No user model exists for this project')
+    triggers.push('no-user-model')
   }
 
   const clampedScore = Math.min(totalScore, 1.0)
@@ -126,32 +117,34 @@ export function detectAmbiguity(input: DetectAmbiguityInput): AmbiguityResult {
     isAmbiguous: clampedScore > thresholdValue,
     score: Math.round(clampedScore * 100) / 100,
     reason,
+    triggers,
   }
 }
 
 /**
- * Scores short/vague instructions: <10 words without specific file paths.
+ * Scores short/vague prompts: <10 words without explicit file paths,
+ * plus vague keywords ("fix", "improve", ...).
  * Returns 0-0.35 contribution to ambiguity score.
  */
-function scoreShortVagueInstruction(message: string): number {
-  if (message.length === 0) return 0.2
+function scoreShortVagueInstruction(prompt: string): number {
+  if (prompt.length === 0) return 0.2
 
-  const words = message.trim().split(/\s+/)
+  const words = prompt.trim().split(/\s+/)
   const wordCount = words.length
-  const hasFilePath = FILE_PATH_PATTERN.test(message)
+  const hasFilePath = FILE_PATH_PATTERN.test(prompt)
 
   if (wordCount >= SHORT_MESSAGE_WORD_LIMIT) return 0
 
   let score = 0
 
-  // Short message without file path
+  // Short prompt without an explicit file path
   if (!hasFilePath) {
     score += 0.15
   }
 
   // Check for vague keywords
-  const lowerMessage = message.toLowerCase()
-  const vagueCount = VAGUE_KEYWORDS.filter((kw) => lowerMessage.includes(kw)).length
+  const lowerPrompt = prompt.toLowerCase()
+  const vagueCount = VAGUE_KEYWORDS.filter((kw) => lowerPrompt.includes(kw)).length
   if (vagueCount > 0) {
     score += Math.min(vagueCount * 0.1, 0.2)
   }
@@ -160,52 +153,17 @@ function scoreShortVagueInstruction(message: string): number {
 }
 
 /**
- * Scores whether an edit targets multiple files or has ambiguous targeting.
- * Returns 0-0.3 contribution to ambiguity score.
+ * Scores preference-sensitive vocabulary in the prompt
+ * (style, architecture, library, framework, ...).
+ * Returns 0-0.25 contribution to ambiguity score.
  */
-function scoreMultipleFileTargets(
-  toolName: string,
-  toolParameters: Readonly<Record<string, unknown>>
-): number {
-  if (!STYLE_SENSITIVE_TOOLS.has(toolName)) return 0
+function scorePreferenceSensitive(prompt: string): number {
+  const lowerPrompt = prompt.toLowerCase()
+  const matchCount = PREFERENCE_KEYWORDS.filter((kw) => lowerPrompt.includes(kw)).length
 
-  const filePath = toolParameters['file_path'] as string | undefined
-  const oldString = toolParameters['old_string'] as string | undefined
+  if (matchCount === 0) return 0
 
-  // Edit without a specific file path
-  if (!filePath || filePath.length === 0) return 0.3
-
-  // Edit with a file path but no old_string (full file write — more ambiguous)
-  if (toolName === 'Edit' && (!oldString || oldString.length === 0)) return 0.15
-
-  return 0
-}
-
-/**
- * Scores preference-sensitive decisions based on keywords in messages
- * and the tool being used.
- * Returns 0-0.35 contribution to ambiguity score.
- */
-function scorePreferenceSensitive(
-  toolName: string,
-  allMessages: readonly string[]
-): number {
-  let score = 0
-
-  // Style-sensitive tool usage
-  if (STYLE_SENSITIVE_TOOLS.has(toolName)) {
-    score += 0.1
-  }
-
-  // Check all recent messages for preference keywords
-  const combinedMessages = allMessages.join(' ').toLowerCase()
-  const matchCount = PREFERENCE_KEYWORDS.filter((kw) => combinedMessages.includes(kw)).length
-
-  if (matchCount > 0) {
-    score += Math.min(matchCount * 0.08, 0.25)
-  }
-
-  return score
+  return Math.min(matchCount * 0.08, 0.25)
 }
 
 /**

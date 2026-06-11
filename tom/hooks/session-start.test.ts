@@ -99,6 +99,30 @@ describe('buildModelSummary', () => {
     expect(lines.length).toBeLessThanOrEqual(10)
   })
 
+  it('excludes promoted preferences from the injected summary', () => {
+    const promotedPref = { ...pref('testing', 'vitest', 0.95), promoted: true }
+    const model = createUserModel({
+      preferencesClusters: [
+        promotedPref,
+        pref('language', 'typescript', 0.9),
+      ],
+    })
+
+    const summary = buildModelSummary(model) ?? ''
+    // The promoted preference already rides along via CLAUDE.md
+    expect(summary).not.toContain('vitest')
+    expect(summary).toContain('typescript')
+  })
+
+  it('returns null when every confident preference is promoted and no summaries exist', () => {
+    const model = createUserModel({
+      preferencesClusters: [
+        { ...pref('testing', 'vitest', 0.95), promoted: true },
+      ],
+    })
+    expect(buildModelSummary(model)).toBeNull()
+  })
+
   it('includes interaction and coding style summaries when present', () => {
     const model = createUserModel({
       interactionStyleSummary: 'prefers concise replies',

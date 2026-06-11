@@ -232,6 +232,44 @@ describe('getStatus', () => {
     expect(status.storage.tier3SizeBytes).toBe(0)
   })
 
+  it('separates promoted preferences from top preferences with target files', () => {
+    const modelWithPromoted: UserModel = {
+      ...sampleUserModel,
+      preferencesClusters: [
+        {
+          category: 'interactionStyle',
+          key: 'verbosity',
+          value: 'concise',
+          confidence: 0.9,
+          lastUpdated: '2026-01-15T00:00:00.000Z',
+          sessionCount: 10,
+          promoted: true,
+        },
+        {
+          category: 'codingPreferences',
+          key: 'language',
+          value: 'TypeScript',
+          confidence: 0.7,
+          lastUpdated: '2026-01-15T00:00:00.000Z',
+          sessionCount: 4,
+        },
+      ],
+    }
+    createSettings({ enabled: true })
+    createUserModel(modelWithPromoted, 'global')
+
+    const status = getStatus()
+
+    expect(status.topPreferences).toHaveLength(1)
+    expect(status.topPreferences[0]?.value).toBe('TypeScript')
+    expect(status.promotedPreferences).toHaveLength(1)
+    expect(status.promotedPreferences[0]?.preference.value).toBe('concise')
+    // interactionStyle promotions target the global user memory file
+    expect(status.promotedPreferences[0]?.targetFile).toBe(
+      path.join(tempDir, '.claude', 'CLAUDE.md')
+    )
+  })
+
   it('limits top preferences to 10', () => {
     const manyPrefs: UserModel = {
       ...sampleUserModel,
@@ -266,6 +304,7 @@ describe('formatStatus', () => {
       },
       storage: { tier1SessionCount: 0, tier2ModelCount: 0, tier3SizeBytes: 0 },
       topPreferences: [],
+      promotedPreferences: [],
       interactionStyleSummary: '',
       codingStyleSummary: '',
     }
@@ -289,6 +328,7 @@ describe('formatStatus', () => {
       },
       storage: { tier1SessionCount: 0, tier2ModelCount: 0, tier3SizeBytes: 0 },
       topPreferences: [],
+      promotedPreferences: [],
       interactionStyleSummary: '',
       codingStyleSummary: '',
     }
@@ -319,6 +359,7 @@ describe('formatStatus', () => {
         tier3SizeBytes: 2048,
       },
       topPreferences: [],
+      promotedPreferences: [],
       interactionStyleSummary: '',
       codingStyleSummary: '',
     }
@@ -355,6 +396,7 @@ describe('formatStatus', () => {
           sessionCount: 5,
         },
       ],
+      promotedPreferences: [],
       interactionStyleSummary: 'Prefers concise responses',
       codingStyleSummary: 'TypeScript-first TDD',
     }
@@ -364,6 +406,44 @@ describe('formatStatus', () => {
     expect(output).toContain('Top Preferences (by confidence)')
     expect(output).toContain(
       '[codingPreferences] language: TypeScript (90% confidence, 5 sessions)'
+    )
+  })
+
+  it('shows promoted preferences with their target file', () => {
+    const status: StatusOutput = {
+      hasModel: true,
+      config: {
+        enabled: true,
+        consultThreshold: 'medium',
+        models: { memoryUpdate: 'haiku', consultation: 'sonnet' },
+        preferenceDecayDays: 30,
+        maxSessionsRetained: 100,
+      },
+      storage: { tier1SessionCount: 1, tier2ModelCount: 1, tier3SizeBytes: 100 },
+      topPreferences: [],
+      promotedPreferences: [
+        {
+          preference: {
+            category: 'interactionStyle',
+            key: 'verbosity',
+            value: 'concise',
+            confidence: 0.9,
+            lastUpdated: '2026-01-15T00:00:00.000Z',
+            sessionCount: 10,
+            promoted: true,
+          },
+          targetFile: '/home/user/.claude/CLAUDE.md',
+        },
+      ],
+      interactionStyleSummary: '',
+      codingStyleSummary: '',
+    }
+
+    const output = formatStatus(status)
+
+    expect(output).toContain('## Promoted Preferences (in CLAUDE.md)')
+    expect(output).toContain(
+      '[interactionStyle] verbosity: concise (90% confidence, 10 sessions) → /home/user/.claude/CLAUDE.md'
     )
   })
 
@@ -383,6 +463,7 @@ describe('formatStatus', () => {
         tier3SizeBytes: 512,
       },
       topPreferences: [],
+      promotedPreferences: [],
       interactionStyleSummary: 'Prefers concise, direct responses',
       codingStyleSummary: 'TypeScript-first with TDD approach',
     }
@@ -411,6 +492,7 @@ describe('formatStatus', () => {
         tier3SizeBytes: 512,
       },
       topPreferences: [],
+      promotedPreferences: [],
       interactionStyleSummary: '',
       codingStyleSummary: '',
     }
@@ -433,6 +515,7 @@ describe('formatStatus', () => {
       },
       storage: { tier1SessionCount: 0, tier2ModelCount: 0, tier3SizeBytes: bytes },
       topPreferences: [],
+      promotedPreferences: [],
       interactionStyleSummary: '',
       codingStyleSummary: '',
     })

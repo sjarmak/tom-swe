@@ -59,6 +59,17 @@ describe('readHookInput', () => {
     expect(input?.source).toBe('startup')
   })
 
+  it('parses the UserPromptSubmit prompt field', async () => {
+    const payload = {
+      session_id: 's3',
+      hook_event_name: 'UserPromptSubmit',
+      prompt: 'fix the failing tests',
+    }
+    const input = await readHookInput(streamOf(JSON.stringify(payload)))
+
+    expect(input?.prompt).toBe('fix the failing tests')
+  })
+
   it('returns null on empty stdin', async () => {
     expect(await readHookInput(streamOf(''))).toBeNull()
   })

@@ -25,13 +25,12 @@
         ]
       }
     ],
-    "PreToolUse": [
+    "UserPromptSubmit": [
       {
-        "matcher": "Write|Edit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/tom/hooks/pre-tool-use.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/tom/hooks/user-prompt-submit.js",
             "statusMessage": "ToM: checking preferences"
           }
         ]

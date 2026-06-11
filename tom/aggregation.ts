@@ -3,7 +3,9 @@ import type { PreferenceObservation } from './preferences.js'
 import {
   reinforcePreference,
   decayPreferences,
+  applyCorrections,
   resolveConflicts,
+  DEFAULT_CORRECTION_PENALTY,
 } from './preferences.js'
 
 const DEFAULT_DECAY_DAYS = 30
@@ -61,18 +63,22 @@ function extractObservations(session: SessionModel): PreferenceObservation[] {
  * 1. Apply decay to all existing preferences
  * 2. Extract observations from the session
  * 3. Reinforce existing or add new preferences for each observation
- * 4. Resolve conflicts (same category+key, different values → most recent wins)
- * 5. Return a new UserModel (immutable)
+ * 4. Apply corrections (penalize contradicted preferences; corrected-to
+ *    values start accumulating as new observations)
+ * 5. Resolve conflicts (same category+key, different values → most recent wins)
+ * 6. Return a new UserModel (immutable)
  *
  * @param currentModel - The existing UserModel
  * @param session - The new SessionModel to merge in
  * @param decayDays - Half-life in days for preference decay (default 30)
+ * @param correctionPenalty - Confidence multiplier for corrected preferences (default 0.5)
  * @returns A new UserModel with updated preferences
  */
 export function aggregateSessionIntoModel(
   currentModel: UserModel,
   session: SessionModel,
-  decayDays: number = DEFAULT_DECAY_DAYS
+  decayDays: number = DEFAULT_DECAY_DAYS,
+  correctionPenalty: number = DEFAULT_CORRECTION_PENALTY
 ): UserModel {
   const now = new Date()
 
@@ -92,10 +98,17 @@ export function aggregateSessionIntoModel(
     preferences = reinforcePreference(preferences, observation)
   }
 
-  // Step 4: Resolve conflicts
-  const resolved = resolveConflicts(preferences)
+  // Step 4: Apply corrections (absent field on older session models → none)
+  const corrected = applyCorrections(
+    preferences,
+    session.corrections ?? [],
+    correctionPenalty
+  )
 
-  // Step 5: Return new UserModel
+  // Step 5: Resolve conflicts
+  const resolved = resolveConflicts(corrected)
+
+  // Step 6: Return new UserModel
   return {
     preferencesClusters: resolved,
     interactionStyleSummary: currentModel.interactionStyleSummary,
