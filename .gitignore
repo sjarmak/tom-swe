@@ -4,3 +4,4 @@ node_modules/
 progress.txt
 prd.json
 archive/
+.claude/brains/
