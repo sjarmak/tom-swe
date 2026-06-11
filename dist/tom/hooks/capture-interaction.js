@@ -13821,7 +13821,10 @@ var HookInputSchema = external_exports.looseObject({
   // promotions to the project's CLAUDE.md.
   cwd: external_exports.string().optional(),
   // UserPromptSubmit payload: the user's exact submitted text.
-  prompt: external_exports.string().optional()
+  prompt: external_exports.string().optional(),
+  // Path to the session transcript JSONL; the Stop hook parses it for
+  // host-session token usage (the cost-overhead denominator).
+  transcript_path: external_exports.string().optional()
 });
 async function readAll(stream) {
   const chunks = [];

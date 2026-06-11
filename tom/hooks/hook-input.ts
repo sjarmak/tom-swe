@@ -22,6 +22,9 @@ export const HookInputSchema = z.looseObject({
   cwd: z.string().optional(),
   // UserPromptSubmit payload: the user's exact submitted text.
   prompt: z.string().optional(),
+  // Path to the session transcript JSONL; the Stop hook parses it for
+  // host-session token usage (the cost-overhead denominator).
+  transcript_path: z.string().optional(),
 })
 
 export type HookInput = z.infer<typeof HookInputSchema>

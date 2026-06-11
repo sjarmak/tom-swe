@@ -20,6 +20,7 @@ import { aggregateSessionIntoModel } from '../aggregation.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
 import { getModelForOperation, logUsage } from '../routing.js'
+import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { extractSessionModel } from '../session-extract.js'
 import { runPromotion } from '../promotion.js'
@@ -75,11 +76,46 @@ export interface AnalysisResult {
  *
  * @param cwd - Session working directory (from the hook payload), used to
  *   route project-scoped promotions to the project's CLAUDE.md.
+ * @param transcriptPath - Path to the session transcript JSONL (from the
+ *   hook payload); when present, host-session token usage is parsed from it
+ *   and logged as the cost-overhead denominator.
  */
 export async function analyzeCompletedSession(
   sessionId: string,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  transcriptPath?: string
 ): Promise<AnalysisResult> {
+  // Host-session usage first: it must land even if analysis fails, and its
+  // own failure must not break the pipeline (typed log entry, continue).
+  if (transcriptPath) {
+    const usage = readTranscriptUsage(transcriptPath)
+    if (usage) {
+      logUsage({
+        timestamp: new Date().toISOString(),
+        operation: 'session-usage',
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        detail: {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cacheCreationTokens: usage.cacheCreationTokens,
+          cacheReadTokens: usage.cacheReadTokens,
+          assistantMessages: usage.assistantMessages,
+        },
+      })
+    } else {
+      logUsage({
+        timestamp: new Date().toISOString(),
+        operation: 'session-usage-error',
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        reason: `transcript unreadable: ${transcriptPath}`,
+      })
+    }
+  }
+
   // Step 1: Read Tier 1 session log
   const sessionLog = readRawSessionLog(sessionId)
   if (!sessionLog) {
@@ -97,7 +133,9 @@ export async function analyzeCompletedSession(
   // configured memoryUpdate model, falling back loudly to the heuristic
   // extractor when the LLM path fails for any reason.
   const configuredModel = getModelForOperation('memoryUpdate')
+  const analysisStartedAt = Date.now()
   const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel)
+  const analysisDurationMs = Date.now() - analysisStartedAt
 
   let sessionModel: SessionModel
   if (llmResult.ok) {
@@ -108,6 +146,8 @@ export async function analyzeCompletedSession(
       model: configuredModel,
       tokenCount: llmResult.tokensUsed ?? 0,
       sessionId,
+      durationMs: analysisDurationMs,
+      detail: { path: 'llm' },
     })
   } else {
     logUsage({
@@ -116,7 +156,9 @@ export async function analyzeCompletedSession(
       model: NO_MODEL,
       tokenCount: 0,
       sessionId,
+      durationMs: analysisDurationMs,
       reason: `${llmResult.reason}: ${llmResult.detail}`,
+      detail: { path: 'heuristic', failure: llmResult.reason },
     })
     sessionModel = extractSessionModel(sessionLog)
   }
@@ -150,10 +192,10 @@ export async function analyzeCompletedSession(
       model: NO_MODEL,
       tokenCount: 0,
       sessionId,
-      reason: JSON.stringify({
+      detail: {
         corrections: corrections.map((c) => `${c.category}:${c.key}`),
         penalty: config.correctionPenalty,
-      }),
+      },
     })
   }
 
@@ -174,10 +216,10 @@ export async function analyzeCompletedSession(
         model: NO_MODEL,
         tokenCount: 0,
         sessionId,
-        reason: JSON.stringify({
+        detail: {
           promoted: promotion.promoted.map((p) => `${p.category}:${p.key}`),
           targets: promotion.targets,
-        }),
+        },
       })
     }
   } catch (error) {
@@ -232,7 +274,11 @@ export async function main(
   const sessionId = getSessionId(input)
 
   try {
-    await analyzeCompletedSession(sessionId, input?.cwd ?? process.cwd())
+    await analyzeCompletedSession(
+      sessionId,
+      input?.cwd ?? process.cwd(),
+      input?.transcript_path
+    )
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     logUsage({

@@ -11,7 +11,8 @@
 import type { UserModel } from '../schemas.js'
 import { readUserModel } from '../memory-io.js'
 import { isTomEnabled } from '../config.js'
-import { readHookInput, isInternalInvocation } from './hook-input.js'
+import { logUsage } from '../routing.js'
+import { readHookInput, getSessionId, isInternalInvocation } from './hook-input.js'
 
 // --- Configuration ---
 
@@ -91,8 +92,7 @@ export async function main(
     return
   }
 
-  // Consume the payload; no fields are needed beyond confirming the contract.
-  await readHookInput(stream)
+  const input = await readHookInput(stream)
 
   const model = readUserModel('merged')
   if (!model) {
@@ -105,6 +105,22 @@ export async function main(
   }
 
   process.stdout.write(JSON.stringify(buildHookOutput(summary)))
+
+  // Injected-context volume is a first-class metric (over-injection is a
+  // failure mode): record what this injection cost in context budget.
+  const summaryLines = summary.split('\n')
+  logUsage({
+    timestamp: new Date().toISOString(),
+    operation: 'session-start-injection',
+    model: 'none',
+    tokenCount: 0,
+    sessionId: getSessionId(input),
+    detail: {
+      chars: summary.length,
+      lines: summaryLines.length,
+      preferences: summaryLines.filter(l => l.startsWith('- ')).length,
+    },
+  })
 }
 
 // Run if executed directly

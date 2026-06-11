@@ -134,6 +134,39 @@ All skills are namespaced under `tom-swe:` when installed as a plugin.
 - Use `/tom-forget` to selectively remove individual preferences
 - Disable the system entirely by setting `"enabled": false` in config
 
+## Telemetry
+
+Every ToM operation appends one JSON line to `~/.claude/tom/usage.log`. The format is versioned (`v: 1`) and designed for external consumers — evaluation harnesses, analysis agents, or `jq` — in addition to the `/tom-status` rollup. Telemetry never leaves your machine.
+
+Entry shape (validated by `UsageLogEntrySchema`, exported from `tom/routing.ts`; read with `readUsageLog()`, aggregate with `computeTelemetrySummary()` from `tom/telemetry.ts`):
+
+```json
+{"v": 1, "timestamp": "...", "operation": "...", "model": "...", "tokenCount": 0,
+ "sessionId": "...", "durationMs": 12, "reason": "human-readable", "detail": {"machine": "fields"}}
+```
+
+| Operation | When | `detail` fields |
+|-----------|------|-----------------|
+| `prompt-hook` | Every prompt submission (this hook blocks the prompt, so its latency matters) | `consulted`, `injected`, `promptChars` |
+| `ambiguity-consultation` | Prompt scored above the ambiguity threshold | `score`, `threshold`, `triggers`, `source` (`bm25`\|`user-model`\|`none`), `suggestionType`, `suggestionKeys`, `suggestionChars` |
+| `session-start-injection` | User-model summary injected at session start | `chars`, `lines`, `preferences` |
+| `session-analysis` | LLM session analysis succeeded (real model + token usage) | `path: "llm"` |
+| `session-analysis-fallback` | LLM path failed; heuristic extractor ran | `path: "heuristic"`, `failure` (typed reason) |
+| `session-usage` | Host session's own token usage, parsed from the transcript at Stop (deduplicated by message id; sidechains included) | `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`, `assistantMessages` |
+| `session-usage-error` | Transcript missing or unreadable | — |
+| `preference-correction` | Corrections applied during aggregation | `corrections` (`category:key` list), `penalty` |
+| `preference-promotion` | Preferences promoted to CLAUDE.md | `promoted` (`category:key` list), `targets` (files) |
+| `promotion-file-created` | Global memory file created (no silent resource creation) | `path` |
+| `promotion-error` / `session-analysis-error` | Pipeline failures (never silent) | — |
+
+The acceptance loop joins on preference keys: an `ambiguity-consultation` whose `suggestionKeys` contains `category:key`, followed by a `preference-correction` listing the same key, is a rejected suggestion; absence of a correction while the preference's confidence grows is acceptance.
+
+Cost overhead joins `session-analysis` against `session-usage` on `sessionId`. The four usage buckets are reported raw: cache reads are far cheaper than uncached input, so any collapsed "overhead %" is a pricing judgment — `/tom-status` shows an unweighted in+out share and labels it as such; weight the buckets per-model for cost-true numbers. Example:
+
+```bash
+jq -s '[.[] | select(.operation == "session-analysis-fallback")] | group_by(.detail.failure) | map({failure: .[0].detail.failure, n: length})' ~/.claude/tom/usage.log
+```
+
 ## Development
 
 ```bash

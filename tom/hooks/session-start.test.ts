@@ -279,4 +279,43 @@ describe('main', () => {
     const output = JSON.parse(stdoutData)
     expect(output.hookSpecificOutput.hookEventName).toBe('SessionStart')
   })
+
+  it('logs the injection volume to usage.log', async () => {
+    enableTom()
+    writeUserModel(createUserModel({
+      preferencesClusters: [
+        pref('language', 'typescript', 0.9),
+        pref('framework', 'react', 0.8),
+      ],
+      interactionStyleSummary: 'prefers concise replies',
+    }))
+
+    await main(payloadStream({ session_id: 'inject-log', hook_event_name: 'SessionStart', source: 'startup' }))
+
+    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
+    const entries = fs
+      .readFileSync(logPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l))
+    const injection = entries.find(
+      (e) => e.operation === 'session-start-injection'
+    )
+    expect(injection).toBeDefined()
+    expect(injection.sessionId).toBe('inject-log')
+    expect(injection.detail.preferences).toBe(2)
+    expect(injection.detail.lines).toBeGreaterThanOrEqual(3)
+    expect(injection.detail.chars).toBe(
+      JSON.parse(stdoutData).hookSpecificOutput.additionalContext.length
+    )
+  })
+
+  it('logs nothing when no injection happens', async () => {
+    enableTom()
+
+    await main(payloadStream({ session_id: 'no-model', hook_event_name: 'SessionStart', source: 'startup' }))
+
+    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
+    expect(fs.existsSync(logPath)).toBe(false)
+  })
 })

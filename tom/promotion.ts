@@ -263,6 +263,7 @@ export function runPromotion(
       model: 'none',
       tokenCount: 0,
       reason: globalFile,
+      detail: { path: globalFile },
     })
     globalFileAvailable = true
   }

@@ -224,13 +224,19 @@ describe('consultToM', () => {
     const content = fs.readFileSync(logPath, 'utf-8').trim()
     const entry = JSON.parse(content)
     expect(entry.operation).toBe('ambiguity-consultation')
-    expect(entry.model).toBe('sonnet')
+    expect(entry.model).toBe('none')
     expect(entry.sessionId).toBe('log-session')
+    expect(entry.v).toBe(1)
+    expect(typeof entry.durationMs).toBe('number')
 
-    const reason = JSON.parse(entry.reason)
-    expect(reason.score).toBe(result.ambiguityResult.score)
-    expect(reason.threshold).toBe('low')
-    expect(reason.source).toBe('user-model')
+    const detail = entry.detail
+    expect(detail.score).toBe(result.ambiguityResult.score)
+    expect(detail.threshold).toBe('low')
+    expect(detail.source).toBe('user-model')
+    expect(detail.triggers).toContain('preference-sensitive')
+    expect(detail.suggestionType).toBe('preference')
+    expect(detail.suggestionKeys).toContain('codingPreferences:framework')
+    expect(detail.suggestionChars).toBeGreaterThan(0)
   })
 
   it('logs source none when consulted but no memory exists', () => {
@@ -239,8 +245,9 @@ describe('consultToM', () => {
 
     const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
     const entry = JSON.parse(fs.readFileSync(logPath, 'utf-8').trim())
-    const reason = JSON.parse(entry.reason)
-    expect(reason.source).toBe('none')
+    expect(entry.detail.source).toBe('none')
+    expect(entry.detail.suggestionType).toBeNull()
+    expect(entry.detail.suggestionKeys).toEqual([])
   })
 
   it('does not log when ambiguity is below threshold', () => {

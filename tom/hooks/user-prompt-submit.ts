@@ -25,6 +25,7 @@ import { readTomConfig } from '../config.js'
 import { consultToM } from '../consult.js'
 import { redactUserMessage } from '../redaction.js'
 import { looksLikeSecret, REDACTED } from '../secrets.js'
+import { logUsage } from '../routing.js'
 import { readHookInput, getSessionId, isInternalInvocation } from './hook-input.js'
 
 // --- Injection Framing ---
@@ -149,6 +150,7 @@ export async function main(
   }
 
   const sessionId = getSessionId(input)
+  const startedAt = Date.now()
 
   try {
     const redacted = redactPrompt(prompt)
@@ -158,6 +160,22 @@ export async function main(
     if (result.consulted && result.suggestion) {
       process.stdout.write(JSON.stringify(buildHookOutput(result.suggestion)))
     }
+
+    // This hook blocks every prompt submission, so its latency distribution
+    // is a first-class dogfooding metric: one timing entry per prompt.
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'prompt-hook',
+      model: 'none',
+      tokenCount: 0,
+      sessionId,
+      durationMs: Date.now() - startedAt,
+      detail: {
+        consulted: result.consulted,
+        injected: result.consulted && result.suggestion !== null,
+        promptChars: prompt.length,
+      },
+    })
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     process.stderr.write(`ToM user-prompt-submit error: ${errorMessage}\n`)

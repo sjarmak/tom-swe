@@ -8,6 +8,9 @@ import * as path from 'node:path'
 
 import { readUserModel, globalTomDir, projectTomDir } from '../memory-io.js'
 import { readTomConfig } from '../config.js'
+import { readUsageLog } from '../routing.js'
+import { computeTelemetrySummary, formatTelemetry } from '../telemetry.js'
+import type { TelemetrySummary } from '../telemetry.js'
 import { globalMemoryFilePath, findProjectMemoryFile } from '../promotion.js'
 import type { UserModel, PreferenceCluster } from '../schemas.js'
 
@@ -41,6 +44,7 @@ export interface StatusOutput {
   readonly promotedPreferences: readonly PromotedPreferenceEntry[]
   readonly interactionStyleSummary: string
   readonly codingStyleSummary: string
+  readonly telemetry?: TelemetrySummary
 }
 
 // --- Helpers ---
@@ -115,6 +119,8 @@ export function getStatus(): StatusOutput {
   const config = readTomConfig()
   const userModel = readUserModel('merged')
   const storage = getStorageStats()
+  const usage = readUsageLog()
+  const telemetry = computeTelemetrySummary(usage.entries, usage.invalidLines)
 
   if (userModel === null) {
     return {
@@ -134,6 +140,7 @@ export function getStatus(): StatusOutput {
       promotedPreferences: [],
       interactionStyleSummary: '',
       codingStyleSummary: '',
+      telemetry,
     }
   }
 
@@ -154,6 +161,7 @@ export function getStatus(): StatusOutput {
     promotedPreferences: getPromotedPreferences(userModel),
     interactionStyleSummary: userModel.interactionStyleSummary,
     codingStyleSummary: userModel.codingStyleSummary,
+    telemetry,
   }
 }
 
@@ -188,6 +196,10 @@ export function formatStatus(status: StatusOutput): string {
     lines.push(
       'No user model found. ToM will begin learning after your first session.'
     )
+    if (status.telemetry && status.telemetry.totalEntries > 0) {
+      lines.push('')
+      lines.push(...formatTelemetry(status.telemetry))
+    }
     return lines.join('\n')
   }
 
@@ -231,6 +243,10 @@ export function formatStatus(status: StatusOutput): string {
     lines.push('## Coding Style')
     lines.push(status.codingStyleSummary)
     lines.push('')
+  }
+
+  if (status.telemetry) {
+    lines.push(...formatTelemetry(status.telemetry))
   }
 
   return lines.join('\n')

@@ -14132,18 +14132,31 @@ function search(index, query, k = 3) {
 var fs3 = __toESM(require("node:fs"));
 var path3 = __toESM(require("node:path"));
 var os3 = __toESM(require("node:os"));
+var TELEMETRY_SCHEMA_VERSION = 1;
+var UsageLogEntrySchema = external_exports.looseObject({
+  v: external_exports.number().optional(),
+  timestamp: external_exports.string(),
+  operation: external_exports.string(),
+  model: external_exports.string(),
+  tokenCount: external_exports.number(),
+  sessionId: external_exports.string().optional(),
+  durationMs: external_exports.number().optional(),
+  reason: external_exports.string().optional(),
+  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
 function logUsage(entry) {
   const logPath = path3.join(globalTomDir(), "usage.log");
   const dir = path3.dirname(logPath);
   if (!fs3.existsSync(dir)) {
     fs3.mkdirSync(dir, { recursive: true });
   }
-  const line = JSON.stringify(entry) + "\n";
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
   fs3.appendFileSync(logPath, line, "utf-8");
 }
 
 // tom/consult.ts
-var DEFAULT_CONSULTATION_MODEL = "sonnet";
+var NO_MODEL = "none";
 function loadCachedIndex() {
   try {
     const indexPath = path4.join(globalTomDir(), "bm25-index.json");
@@ -14168,7 +14181,7 @@ function buildSuggestionFromSearch(searchResults, ambiguityResult) {
     sourceSessions
   };
   const parseResult = ToMSuggestionSchema.safeParse(suggestion);
-  return parseResult.success ? parseResult.data : null;
+  return parseResult.success ? { suggestion: parseResult.data, keys: topResults.map((r) => r.id) } : null;
 }
 function buildSuggestionFromUserModel(ambiguityResult) {
   const userModel = readUserModel("merged");
@@ -14191,9 +14204,13 @@ function buildSuggestionFromUserModel(ambiguityResult) {
     sourceSessions: []
   };
   const parseResult = ToMSuggestionSchema.safeParse(suggestion);
-  return parseResult.success ? parseResult.data : null;
+  return parseResult.success ? {
+    suggestion: parseResult.data,
+    keys: topPrefs.map((p) => `${p.category}:${p.key}`)
+  } : null;
 }
 function consultToM(prompt, threshold, sessionId) {
+  const startedAt = Date.now();
   const hasUserModel = readUserModel("global") !== null;
   const ambiguityResult = detectAmbiguity({
     prompt,
@@ -14209,37 +14226,42 @@ function consultToM(prompt, threshold, sessionId) {
     };
   }
   const cachedIndex = loadCachedIndex();
-  let suggestion = null;
+  let built = null;
   let source = null;
   if (cachedIndex) {
     const results = search(cachedIndex, prompt, 3);
-    suggestion = buildSuggestionFromSearch(results, ambiguityResult);
-    if (suggestion) {
+    built = buildSuggestionFromSearch(results, ambiguityResult);
+    if (built) {
       source = "bm25";
     }
   }
-  if (!suggestion) {
-    suggestion = buildSuggestionFromUserModel(ambiguityResult);
-    if (suggestion) {
+  if (!built) {
+    built = buildSuggestionFromUserModel(ambiguityResult);
+    if (built) {
       source = "user-model";
     }
   }
   logUsage({
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     operation: "ambiguity-consultation",
-    model: DEFAULT_CONSULTATION_MODEL,
+    model: NO_MODEL,
     tokenCount: 0,
     sessionId,
-    reason: JSON.stringify({
+    durationMs: Date.now() - startedAt,
+    detail: {
       score: ambiguityResult.score,
       threshold,
-      source: source ?? "none"
-    })
+      triggers: ambiguityResult.triggers,
+      source: source ?? "none",
+      suggestionType: built?.suggestion.type ?? null,
+      suggestionKeys: built?.keys ?? [],
+      suggestionChars: built?.suggestion.content.length ?? 0
+    }
   });
   return {
     consulted: true,
     ambiguityResult,
-    suggestion,
+    suggestion: built?.suggestion ?? null,
     source
   };
 }
@@ -14307,7 +14329,10 @@ var HookInputSchema = external_exports.looseObject({
   // promotions to the project's CLAUDE.md.
   cwd: external_exports.string().optional(),
   // UserPromptSubmit payload: the user's exact submitted text.
-  prompt: external_exports.string().optional()
+  prompt: external_exports.string().optional(),
+  // Path to the session transcript JSONL; the Stop hook parses it for
+  // host-session token usage (the cost-overhead denominator).
+  transcript_path: external_exports.string().optional()
 });
 async function readAll(stream) {
   const chunks = [];
@@ -14403,6 +14428,7 @@ async function main(stream = process.stdin) {
     return;
   }
   const sessionId = getSessionId(input);
+  const startedAt = Date.now();
   try {
     const redacted = redactPrompt(prompt);
     appendUserMessage(sessionId, redacted);
@@ -14410,6 +14436,19 @@ async function main(stream = process.stdin) {
     if (result.consulted && result.suggestion) {
       process.stdout.write(JSON.stringify(buildHookOutput(result.suggestion)));
     }
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "prompt-hook",
+      model: "none",
+      tokenCount: 0,
+      sessionId,
+      durationMs: Date.now() - startedAt,
+      detail: {
+        consulted: result.consulted,
+        injected: result.consulted && result.suggestion !== null,
+        promptChars: prompt.length
+      }
+    });
   } catch (error48) {
     const errorMessage = error48 instanceof Error ? error48.message : String(error48);
     process.stderr.write(`ToM user-prompt-submit error: ${errorMessage}

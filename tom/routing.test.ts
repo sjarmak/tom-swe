@@ -3,7 +3,12 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
-import { getModelForOperation, logUsage } from './routing.js'
+import {
+  getModelForOperation,
+  logUsage,
+  readUsageLog,
+  TELEMETRY_SCHEMA_VERSION,
+} from './routing.js'
 
 describe('routing', () => {
   let tmpDir: string
@@ -142,6 +147,39 @@ describe('routing', () => {
       expect(parsed['tokenCount']).toBe(150)
     })
 
+    it('stamps the telemetry schema version on every entry', () => {
+      logUsage({
+        timestamp: '2026-01-15T10:00:00.000Z',
+        operation: 'session-analysis',
+        model: 'haiku',
+        tokenCount: 150,
+      })
+
+      const logPath = path.join(tmpDir, '.claude', 'tom', 'usage.log')
+      const parsed = JSON.parse(
+        fs.readFileSync(logPath, 'utf-8').trim()
+      ) as Record<string, unknown>
+      expect(parsed['v']).toBe(TELEMETRY_SCHEMA_VERSION)
+    })
+
+    it('preserves durationMs and structured detail fields', () => {
+      logUsage({
+        timestamp: '2026-01-15T10:00:00.000Z',
+        operation: 'prompt-hook',
+        model: 'none',
+        tokenCount: 0,
+        durationMs: 42,
+        detail: { consulted: true, promptChars: 17 },
+      })
+
+      const logPath = path.join(tmpDir, '.claude', 'tom', 'usage.log')
+      const parsed = JSON.parse(
+        fs.readFileSync(logPath, 'utf-8').trim()
+      ) as Record<string, unknown>
+      expect(parsed['durationMs']).toBe(42)
+      expect(parsed['detail']).toEqual({ consulted: true, promptChars: 17 })
+    })
+
     it('creates directories if they do not exist', () => {
       logUsage({
         timestamp: '2026-01-15T10:00:00.000Z',
@@ -215,6 +253,54 @@ describe('routing', () => {
       expect(Object.keys(parsed)).toEqual(
         expect.arrayContaining(['timestamp', 'operation', 'model', 'tokenCount'])
       )
+    })
+  })
+
+  describe('readUsageLog', () => {
+    it('returns empty results when the log does not exist', () => {
+      const result = readUsageLog()
+      expect(result.entries).toEqual([])
+      expect(result.invalidLines).toBe(0)
+    })
+
+    it('round-trips entries written by logUsage', () => {
+      logUsage({
+        timestamp: '2026-01-15T10:00:00.000Z',
+        operation: 'prompt-hook',
+        model: 'none',
+        tokenCount: 0,
+        durationMs: 12,
+        detail: { consulted: false },
+      })
+      logUsage({
+        timestamp: '2026-01-15T11:00:00.000Z',
+        operation: 'session-analysis',
+        model: 'haiku',
+        tokenCount: 900,
+      })
+
+      const result = readUsageLog()
+      expect(result.entries).toHaveLength(2)
+      expect(result.invalidLines).toBe(0)
+      expect(result.entries[0]?.operation).toBe('prompt-hook')
+      expect(result.entries[0]?.detail).toEqual({ consulted: false })
+      expect(result.entries[1]?.tokenCount).toBe(900)
+    })
+
+    it('counts malformed and schema-invalid lines instead of dropping them silently', () => {
+      logUsage({
+        timestamp: '2026-01-15T10:00:00.000Z',
+        operation: 'prompt-hook',
+        model: 'none',
+        tokenCount: 0,
+      })
+      const logPath = path.join(tmpDir, '.claude', 'tom', 'usage.log')
+      fs.appendFileSync(logPath, 'not json at all\n', 'utf-8')
+      fs.appendFileSync(logPath, JSON.stringify({ operation: 42 }) + '\n', 'utf-8')
+
+      const result = readUsageLog()
+      expect(result.entries).toHaveLength(1)
+      expect(result.invalidLines).toBe(2)
     })
   })
 })

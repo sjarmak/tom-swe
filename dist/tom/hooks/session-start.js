@@ -808,10 +808,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path3) {
-  if (!path3)
+function getElementAtPath(obj, path4) {
+  if (!path4)
     return obj;
-  return path3.reduce((acc, key) => acc?.[key], obj);
+  return path4.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1194,11 +1194,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path3, issues) {
+function prefixIssues(path4, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path3);
+    iss.path.unshift(path4);
     return iss;
   });
 }
@@ -1381,7 +1381,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path3 = []) => {
+  const processError = (error49, path4 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1391,7 +1391,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path3, ...issue2.path];
+        const fullpath = [...path4, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1423,8 +1423,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path3 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path3) {
+  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path4) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13401,13 +13401,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path3 = ref.slice(1).split("/").filter(Boolean);
-  if (path3.length === 0) {
+  const path4 = ref.slice(1).split("/").filter(Boolean);
+  if (path4.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path3[0] === defsKey) {
-    const key = path3[1];
+  if (path4[0] === defsKey) {
+    const key = path4[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13985,6 +13985,33 @@ function isTomEnabled() {
   return readTomConfig().enabled;
 }
 
+// tom/routing.ts
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
+var TELEMETRY_SCHEMA_VERSION = 1;
+var UsageLogEntrySchema = external_exports.looseObject({
+  v: external_exports.number().optional(),
+  timestamp: external_exports.string(),
+  operation: external_exports.string(),
+  model: external_exports.string(),
+  tokenCount: external_exports.number(),
+  sessionId: external_exports.string().optional(),
+  durationMs: external_exports.number().optional(),
+  reason: external_exports.string().optional(),
+  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+function logUsage(entry) {
+  const logPath = path3.join(globalTomDir(), "usage.log");
+  const dir = path3.dirname(logPath);
+  if (!fs3.existsSync(dir)) {
+    fs3.mkdirSync(dir, { recursive: true });
+  }
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
+  fs3.appendFileSync(logPath, line, "utf-8");
+}
+
 // tom/hooks/hook-input.ts
 var HookInputSchema = external_exports.looseObject({
   session_id: external_exports.string().optional(),
@@ -13998,7 +14025,10 @@ var HookInputSchema = external_exports.looseObject({
   // promotions to the project's CLAUDE.md.
   cwd: external_exports.string().optional(),
   // UserPromptSubmit payload: the user's exact submitted text.
-  prompt: external_exports.string().optional()
+  prompt: external_exports.string().optional(),
+  // Path to the session transcript JSONL; the Stop hook parses it for
+  // host-session token usage (the cost-overhead denominator).
+  transcript_path: external_exports.string().optional()
 });
 async function readAll(stream) {
   const chunks = [];
@@ -14025,6 +14055,9 @@ async function readHookInput(stream = process.stdin) {
   }
   const result = HookInputSchema.safeParse(parsed);
   return result.success ? result.data : null;
+}
+function getSessionId(input) {
+  return input?.session_id ?? process.env["CLAUDE_SESSION_ID"] ?? `pid-${process.pid}`;
 }
 function isInternalInvocation() {
   return process.env["TOM_SWE_INTERNAL"] === "1";
@@ -14066,7 +14099,7 @@ async function main(stream = process.stdin) {
   if (!isTomEnabled()) {
     return;
   }
-  await readHookInput(stream);
+  const input = await readHookInput(stream);
   const model = readUserModel("merged");
   if (!model) {
     return;
@@ -14076,6 +14109,19 @@ async function main(stream = process.stdin) {
     return;
   }
   process.stdout.write(JSON.stringify(buildHookOutput(summary)));
+  const summaryLines = summary.split("\n");
+  logUsage({
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    operation: "session-start-injection",
+    model: "none",
+    tokenCount: 0,
+    sessionId: getSessionId(input),
+    detail: {
+      chars: summary.length,
+      lines: summaryLines.length,
+      preferences: summaryLines.filter((l) => l.startsWith("- ")).length
+    }
+  });
 }
 if (require.main === module) {
   void main();

@@ -244,6 +244,85 @@ describe('analyzeCompletedSession', () => {
       .map(line => JSON.parse(line) as Record<string, unknown>)
   }
 
+  it('logs host-session usage from the transcript with deduplicated buckets', async () => {
+    writeSessionFile('usage-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'spawn-error',
+      detail: 'claude not found',
+    })
+
+    const transcriptPath = path.join(tempDir, 'transcript.jsonl')
+    const usage = {
+      input_tokens: 100,
+      output_tokens: 40,
+      cache_creation_input_tokens: 300,
+      cache_read_input_tokens: 5000,
+    }
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        // Same message id twice (one line per content block) — counted once.
+        JSON.stringify({ type: 'assistant', message: { id: 'msg_1', usage } }),
+        JSON.stringify({ type: 'assistant', message: { id: 'msg_1', usage } }),
+        JSON.stringify({ type: 'user', message: { role: 'user' } }),
+      ].join('\n'),
+      'utf-8'
+    )
+
+    await analyzeCompletedSession('usage-test', process.cwd(), transcriptPath)
+
+    const entries = readUsageEntries()
+    const usageEntry = entries.find((e) => e['operation'] === 'session-usage')
+    expect(usageEntry).toBeDefined()
+    expect(usageEntry?.['sessionId']).toBe('usage-test')
+    const detail = (usageEntry?.['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['inputTokens']).toBe(100)
+    expect(detail['outputTokens']).toBe(40)
+    expect(detail['cacheCreationTokens']).toBe(300)
+    expect(detail['cacheReadTokens']).toBe(5000)
+    expect(detail['assistantMessages']).toBe(1)
+  })
+
+  it('logs a typed session-usage-error when the transcript is unreadable', async () => {
+    writeSessionFile('usage-error-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'spawn-error',
+      detail: 'claude not found',
+    })
+
+    const missingPath = path.join(tempDir, 'missing.jsonl')
+    const result = await analyzeCompletedSession(
+      'usage-error-test',
+      process.cwd(),
+      missingPath
+    )
+    // Usage failure must not break the analysis pipeline.
+    expect(result.success).toBe(true)
+
+    const entries = readUsageEntries()
+    const errorEntry = entries.find(
+      (e) => e['operation'] === 'session-usage-error'
+    )
+    expect(errorEntry).toBeDefined()
+    expect(String(errorEntry?.['reason'])).toContain(missingPath)
+  })
+
+  it('logs no session-usage entry when no transcript path is provided', async () => {
+    writeSessionFile('no-transcript-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'spawn-error',
+      detail: 'claude not found',
+    })
+
+    await analyzeCompletedSession('no-transcript-test')
+
+    const entries = readUsageEntries()
+    expect(entries.some((e) => String(e['operation']).startsWith('session-usage'))).toBe(false)
+  })
+
   it('logs the fallback with its reason when the LLM path fails', async () => {
     writeSessionFile('log-test')
     mockAnalyzeWithLlm.mockResolvedValue({
@@ -400,12 +479,12 @@ describe('analyzeCompletedSession', () => {
     const entry = correctionEntries[0] ?? {}
     expect(entry['model']).toBe('none')
     expect(entry['sessionId']).toBe('correction-telemetry-test')
-    const reason = JSON.parse(String(entry['reason'])) as Record<string, unknown>
-    expect(reason['corrections']).toEqual([
+    const detail = entry['detail'] as Record<string, unknown>
+    expect(detail['corrections']).toEqual([
       'codingPreferences:preference',
       'interactionStyle:verbosity',
     ])
-    expect(reason['penalty']).toBe(0.5)
+    expect(detail['penalty']).toBe(0.5)
   })
 
   it('uses the configured correctionPenalty in correction telemetry', async () => {
@@ -441,8 +520,8 @@ describe('analyzeCompletedSession', () => {
 
     const entries = readUsageEntries()
     const entry = entries.find((e) => e['operation'] === 'preference-correction') ?? {}
-    const reason = JSON.parse(String(entry['reason'])) as Record<string, unknown>
-    expect(reason['penalty']).toBe(0.25)
+    const detail = (entry['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['penalty']).toBe(0.25)
   })
 
   it('logs no preference-correction entry when the session has no corrections', async () => {
@@ -585,9 +664,9 @@ describe('analyzeCompletedSession', () => {
       (e) => e['operation'] === 'preference-promotion'
     )
     expect(promotionEntry).toBeDefined()
-    const reason = JSON.parse(String(promotionEntry?.['reason'])) as Record<string, unknown>
-    expect(reason['promoted']).toEqual(['interactionStyle:verbosity'])
-    expect(reason['targets']).toContain(globalClaudeMd)
+    const detail = (promotionEntry?.['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['promoted']).toEqual(['interactionStyle:verbosity'])
+    expect(detail['targets']).toContain(globalClaudeMd)
     // File creation is logged too — no silent resource creation
     expect(
       entries.some((e) => e['operation'] === 'promotion-file-created')

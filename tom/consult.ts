@@ -23,7 +23,8 @@ import { logUsage } from './routing.js'
 
 // --- Configuration ---
 
-const DEFAULT_CONSULTATION_MODEL = 'sonnet'
+/** Consultation is fully local; no model is ever spawned on this path. */
+const NO_MODEL = 'none'
 
 // --- BM25 Index Loading ---
 
@@ -39,10 +40,21 @@ function loadCachedIndex(): BM25Index | null {
 
 // --- Suggestion Generation ---
 
+/**
+ * A built suggestion plus the preference keys (category:key) or memory ids
+ * that fed it. The keys are logged with the consultation so a later
+ * preference-correction on the same key can be joined against the
+ * suggestion that preceded it (the acceptance signal).
+ */
+interface BuiltSuggestion {
+  readonly suggestion: ToMSuggestion
+  readonly keys: readonly string[]
+}
+
 function buildSuggestionFromSearch(
   searchResults: readonly BM25SearchResult[],
   ambiguityResult: AmbiguityResult
-): ToMSuggestion | null {
+): BuiltSuggestion | null {
   if (searchResults.length === 0) {
     return null
   }
@@ -73,12 +85,14 @@ function buildSuggestionFromSearch(
   }
 
   const parseResult = ToMSuggestionSchema.safeParse(suggestion)
-  return parseResult.success ? parseResult.data : null
+  return parseResult.success
+    ? { suggestion: parseResult.data, keys: topResults.map(r => r.id) }
+    : null
 }
 
 function buildSuggestionFromUserModel(
   ambiguityResult: AmbiguityResult
-): ToMSuggestion | null {
+): BuiltSuggestion | null {
   const userModel = readUserModel('merged')
   if (!userModel || userModel.preferencesClusters.length === 0) {
     return null
@@ -113,7 +127,12 @@ function buildSuggestionFromUserModel(
   }
 
   const parseResult = ToMSuggestionSchema.safeParse(suggestion)
-  return parseResult.success ? parseResult.data : null
+  return parseResult.success
+    ? {
+        suggestion: parseResult.data,
+        keys: topPrefs.map(p => `${p.category}:${p.key}`),
+      }
+    : null
 }
 
 // --- Consultation Pipeline ---
@@ -139,6 +158,7 @@ export function consultToM(
   threshold: AmbiguityThreshold,
   sessionId: string
 ): ConsultationResult {
+  const startedAt = Date.now()
   const hasUserModel = readUserModel('global') !== null
 
   const ambiguityResult = detectAmbiguity({
@@ -158,21 +178,21 @@ export function consultToM(
 
   // Try BM25 search first
   const cachedIndex = loadCachedIndex()
-  let suggestion: ToMSuggestion | null = null
+  let built: BuiltSuggestion | null = null
   let source: ConsultationSource | null = null
 
   if (cachedIndex) {
     const results = search(cachedIndex, prompt, 3)
-    suggestion = buildSuggestionFromSearch(results, ambiguityResult)
-    if (suggestion) {
+    built = buildSuggestionFromSearch(results, ambiguityResult)
+    if (built) {
       source = 'bm25'
     }
   }
 
   // Fall back to direct user model reading if no BM25 results
-  if (!suggestion) {
-    suggestion = buildSuggestionFromUserModel(ambiguityResult)
-    if (suggestion) {
+  if (!built) {
+    built = buildSuggestionFromUserModel(ambiguityResult)
+    if (built) {
       source = 'user-model'
     }
   }
@@ -180,20 +200,25 @@ export function consultToM(
   logUsage({
     timestamp: new Date().toISOString(),
     operation: 'ambiguity-consultation',
-    model: DEFAULT_CONSULTATION_MODEL,
+    model: NO_MODEL,
     tokenCount: 0,
     sessionId,
-    reason: JSON.stringify({
+    durationMs: Date.now() - startedAt,
+    detail: {
       score: ambiguityResult.score,
       threshold,
+      triggers: ambiguityResult.triggers,
       source: source ?? 'none',
-    }),
+      suggestionType: built?.suggestion.type ?? null,
+      suggestionKeys: built?.keys ?? [],
+      suggestionChars: built?.suggestion.content.length ?? 0,
+    },
   })
 
   return {
     consulted: true,
     ambiguityResult,
-    suggestion,
+    suggestion: built?.suggestion ?? null,
     source,
   }
 }

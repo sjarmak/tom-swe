@@ -370,14 +370,48 @@ describe('main', () => {
 
     const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
     expect(fs.existsSync(logPath)).toBe(true)
-    const content = fs.readFileSync(logPath, 'utf-8').trim()
-    const entry = JSON.parse(content)
-    expect(entry.operation).toBe('ambiguity-consultation')
-    expect(entry.sessionId).toBe('log-test-session')
-    const reason = JSON.parse(entry.reason)
-    expect(typeof reason.score).toBe('number')
-    expect(reason.threshold).toBe('low')
-    expect(reason.source).toBe('user-model')
+    const lines = fs.readFileSync(logPath, 'utf-8').trim().split('\n')
+    const entries = lines.map((l) => JSON.parse(l))
+
+    const consultation = entries.find(
+      (e) => e.operation === 'ambiguity-consultation'
+    )
+    expect(consultation).toBeDefined()
+    expect(consultation.sessionId).toBe('log-test-session')
+    expect(typeof consultation.detail.score).toBe('number')
+    expect(consultation.detail.threshold).toBe('low')
+    expect(consultation.detail.source).toBe('user-model')
+
+    // Every prompt gets a timing entry: this hook blocks prompt submission.
+    const promptHook = entries.find((e) => e.operation === 'prompt-hook')
+    expect(promptHook).toBeDefined()
+    expect(typeof promptHook.durationMs).toBe('number')
+    expect(promptHook.detail.consulted).toBe(true)
+    expect(promptHook.detail.injected).toBe(true)
+    expect(promptHook.detail.promptChars).toBe('improve the style'.length)
+  })
+
+  it('logs a prompt-hook timing entry even when not consulted', async () => {
+    enableTom(tempDir, { consultThreshold: 'high' })
+
+    await main(payloadStream({
+      session_id: 'quiet-session',
+      hook_event_name: 'UserPromptSubmit',
+      prompt:
+        'Read the file at /src/app.ts and explain what the main function does in detail',
+    }))
+
+    const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
+    const entries = fs
+      .readFileSync(logPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l))
+    expect(entries.some((e) => e.operation === 'ambiguity-consultation')).toBe(false)
+    const promptHook = entries.find((e) => e.operation === 'prompt-hook')
+    expect(promptHook).toBeDefined()
+    expect(promptHook.detail.consulted).toBe(false)
+    expect(promptHook.detail.injected).toBe(false)
   })
 
   it('does not emit output when consulted but no memory exists', async () => {

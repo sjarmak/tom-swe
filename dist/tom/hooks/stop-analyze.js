@@ -35,7 +35,7 @@ __export(stop_analyze_exports, {
   readRawSessionLog: () => readRawSessionLog
 });
 module.exports = __toCommonJS(stop_analyze_exports);
-var fs6 = __toESM(require("node:fs"));
+var fs7 = __toESM(require("node:fs"));
 var path6 = __toESM(require("node:path"));
 
 // node_modules/zod/v4/classic/external.js
@@ -14343,6 +14343,18 @@ function buildMemoryIndex(scope = "global") {
 var fs4 = __toESM(require("node:fs"));
 var path4 = __toESM(require("node:path"));
 var os3 = __toESM(require("node:os"));
+var TELEMETRY_SCHEMA_VERSION = 1;
+var UsageLogEntrySchema = external_exports.looseObject({
+  v: external_exports.number().optional(),
+  timestamp: external_exports.string(),
+  operation: external_exports.string(),
+  model: external_exports.string(),
+  tokenCount: external_exports.number(),
+  sessionId: external_exports.string().optional(),
+  durationMs: external_exports.number().optional(),
+  reason: external_exports.string().optional(),
+  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
 var DEFAULT_MODELS = {
   memoryUpdate: "haiku",
   consultation: "sonnet",
@@ -14376,8 +14388,82 @@ function logUsage(entry) {
   if (!fs4.existsSync(dir)) {
     fs4.mkdirSync(dir, { recursive: true });
   }
-  const line = JSON.stringify(entry) + "\n";
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
   fs4.appendFileSync(logPath, line, "utf-8");
+}
+
+// tom/transcript-usage.ts
+var fs5 = __toESM(require("node:fs"));
+function asNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+function extractBuckets(line) {
+  let obj;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof obj !== "object" || obj === null) {
+    return null;
+  }
+  const record2 = obj;
+  const message = record2["message"];
+  if (typeof message !== "object" || message === null) {
+    return null;
+  }
+  const messageRecord = message;
+  const usage = messageRecord["usage"];
+  if (typeof usage !== "object" || usage === null) {
+    return null;
+  }
+  const usageRecord = usage;
+  const id = messageRecord["id"];
+  return {
+    id: typeof id === "string" ? id : null,
+    buckets: {
+      input: asNumber(usageRecord["input_tokens"]),
+      output: asNumber(usageRecord["output_tokens"]),
+      cacheCreation: asNumber(usageRecord["cache_creation_input_tokens"]),
+      cacheRead: asNumber(usageRecord["cache_read_input_tokens"])
+    }
+  };
+}
+function parseTranscriptUsage(content) {
+  const byId = /* @__PURE__ */ new Map();
+  const anonymous = [];
+  for (const line of content.split("\n")) {
+    if (line.trim() === "") {
+      continue;
+    }
+    const extracted = extractBuckets(line);
+    if (!extracted) {
+      continue;
+    }
+    if (extracted.id !== null) {
+      byId.set(extracted.id, extracted.buckets);
+    } else {
+      anonymous.push(extracted.buckets);
+    }
+  }
+  const all = [...byId.values(), ...anonymous];
+  return {
+    inputTokens: all.reduce((sum, b) => sum + b.input, 0),
+    outputTokens: all.reduce((sum, b) => sum + b.output, 0),
+    cacheCreationTokens: all.reduce((sum, b) => sum + b.cacheCreation, 0),
+    cacheReadTokens: all.reduce((sum, b) => sum + b.cacheRead, 0),
+    assistantMessages: all.length
+  };
+}
+function readTranscriptUsage(transcriptPath) {
+  let content;
+  try {
+    content = fs5.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return null;
+  }
+  return parseTranscriptUsage(content);
 }
 
 // tom/llm-analyze.ts
@@ -14582,7 +14668,7 @@ async function analyzeSessionWithLlm(sessionLog, model, options = {}) {
 }
 
 // tom/promotion.ts
-var fs5 = __toESM(require("node:fs"));
+var fs6 = __toESM(require("node:fs"));
 var path5 = __toESM(require("node:path"));
 var os4 = __toESM(require("node:os"));
 var PROMOTION_BEGIN_MARKER = "<!-- tom-swe:begin (managed by tom-swe; edits inside will be overwritten) -->";
@@ -14609,7 +14695,7 @@ function renderPromotionBlock(prefs) {
   return lines.join("\n");
 }
 function writePromotionBlock(filePath, block) {
-  const content = fs5.readFileSync(filePath, "utf-8");
+  const content = fs6.readFileSync(filePath, "utf-8");
   const beginIdx = content.indexOf(PROMOTION_BEGIN_MARKER);
   let updated;
   if (beginIdx >= 0) {
@@ -14622,12 +14708,12 @@ function writePromotionBlock(filePath, block) {
     const separator = content.endsWith("\n") ? "\n" : "\n\n";
     updated = content + separator + block + "\n";
   }
-  fs5.writeFileSync(filePath, updated, "utf-8");
+  fs6.writeFileSync(filePath, updated, "utf-8");
 }
 function removePromotionBlock(filePath) {
   let content;
   try {
-    content = fs5.readFileSync(filePath, "utf-8");
+    content = fs6.readFileSync(filePath, "utf-8");
   } catch {
     return false;
   }
@@ -14644,7 +14730,7 @@ function removePromotionBlock(filePath) {
   if (content.slice(Math.max(0, beforeBegin - 2), beforeBegin) === "\n\n") {
     beforeBegin -= 1;
   }
-  fs5.writeFileSync(filePath, content.slice(0, beforeBegin) + content.slice(afterEnd), "utf-8");
+  fs6.writeFileSync(filePath, content.slice(0, beforeBegin) + content.slice(afterEnd), "utf-8");
   return true;
 }
 function globalMemoryFilePath() {
@@ -14652,11 +14738,11 @@ function globalMemoryFilePath() {
 }
 function findProjectMemoryFile(cwd) {
   const rootCandidate = path5.join(cwd, "CLAUDE.md");
-  if (fs5.existsSync(rootCandidate)) {
+  if (fs6.existsSync(rootCandidate)) {
     return rootCandidate;
   }
   const dotClaudeCandidate = path5.join(cwd, ".claude", "CLAUDE.md");
-  if (fs5.existsSync(dotClaudeCandidate)) {
+  if (fs6.existsSync(dotClaudeCandidate)) {
     return dotClaudeCandidate;
   }
   return null;
@@ -14693,16 +14779,17 @@ function runPromotion(userModel, config2, cwd) {
     written.push(...projectPrefs);
   }
   const globalFile = globalMemoryFilePath();
-  let globalFileAvailable = fs5.existsSync(globalFile);
-  if (!globalFileAvailable && globalPrefs.length > 0 && fs5.existsSync(path5.dirname(globalFile))) {
-    fs5.writeFileSync(globalFile, "", "utf-8");
+  let globalFileAvailable = fs6.existsSync(globalFile);
+  if (!globalFileAvailable && globalPrefs.length > 0 && fs6.existsSync(path5.dirname(globalFile))) {
+    fs6.writeFileSync(globalFile, "", "utf-8");
     createdFiles.push(globalFile);
     logUsage({
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
       operation: "promotion-file-created",
       model: "none",
       tokenCount: 0,
-      reason: globalFile
+      reason: globalFile,
+      detail: { path: globalFile }
     });
     globalFileAvailable = true;
   }
@@ -14744,7 +14831,10 @@ var HookInputSchema = external_exports.looseObject({
   // promotions to the project's CLAUDE.md.
   cwd: external_exports.string().optional(),
   // UserPromptSubmit payload: the user's exact submitted text.
-  prompt: external_exports.string().optional()
+  prompt: external_exports.string().optional(),
+  // Path to the session transcript JSONL; the Stop hook parses it for
+  // host-session token usage (the cost-overhead denominator).
+  transcript_path: external_exports.string().optional()
 });
 async function readAll(stream) {
   const chunks = [];
@@ -14787,7 +14877,7 @@ function getSessionFilePath(sessionId) {
 function readRawSessionLog(sessionId) {
   try {
     const filePath = getSessionFilePath(sessionId);
-    const content = fs6.readFileSync(filePath, "utf-8");
+    const content = fs7.readFileSync(filePath, "utf-8");
     const raw = JSON.parse(content);
     const result = SessionLogSchema.safeParse(raw);
     return result.success ? result.data : null;
@@ -14795,7 +14885,35 @@ function readRawSessionLog(sessionId) {
     return null;
   }
 }
-async function analyzeCompletedSession(sessionId, cwd = process.cwd()) {
+async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcriptPath) {
+  if (transcriptPath) {
+    const usage = readTranscriptUsage(transcriptPath);
+    if (usage) {
+      logUsage({
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        operation: "session-usage",
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        detail: {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cacheCreationTokens: usage.cacheCreationTokens,
+          cacheReadTokens: usage.cacheReadTokens,
+          assistantMessages: usage.assistantMessages
+        }
+      });
+    } else {
+      logUsage({
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        operation: "session-usage-error",
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        reason: `transcript unreadable: ${transcriptPath}`
+      });
+    }
+  }
   const sessionLog = readRawSessionLog(sessionId);
   if (!sessionLog) {
     return {
@@ -14808,7 +14926,9 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd()) {
     };
   }
   const configuredModel = getModelForOperation("memoryUpdate");
+  const analysisStartedAt = Date.now();
   const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel);
+  const analysisDurationMs = Date.now() - analysisStartedAt;
   let sessionModel;
   if (llmResult.ok) {
     sessionModel = llmResult.model;
@@ -14817,7 +14937,9 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd()) {
       operation: "session-analysis",
       model: configuredModel,
       tokenCount: llmResult.tokensUsed ?? 0,
-      sessionId
+      sessionId,
+      durationMs: analysisDurationMs,
+      detail: { path: "llm" }
     });
   } else {
     logUsage({
@@ -14826,7 +14948,9 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd()) {
       model: NO_MODEL,
       tokenCount: 0,
       sessionId,
-      reason: `${llmResult.reason}: ${llmResult.detail}`
+      durationMs: analysisDurationMs,
+      reason: `${llmResult.reason}: ${llmResult.detail}`,
+      detail: { path: "heuristic", failure: llmResult.reason }
     });
     sessionModel = extractSessionModel(sessionLog);
   }
@@ -14854,10 +14978,10 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd()) {
       model: NO_MODEL,
       tokenCount: 0,
       sessionId,
-      reason: JSON.stringify({
+      detail: {
         corrections: corrections.map((c) => `${c.category}:${c.key}`),
         penalty: config2.correctionPenalty
-      })
+      }
     });
   }
   try {
@@ -14872,10 +14996,10 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd()) {
         model: NO_MODEL,
         tokenCount: 0,
         sessionId,
-        reason: JSON.stringify({
+        detail: {
           promoted: promotion.promoted.map((p) => `${p.category}:${p.key}`),
           targets: promotion.targets
-        })
+        }
       });
     }
   } catch (error48) {
@@ -14891,10 +15015,10 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd()) {
   const index = buildMemoryIndex("global");
   const indexPath = path6.join(globalTomDir(), "bm25-index.json");
   const indexDir = path6.dirname(indexPath);
-  if (!fs6.existsSync(indexDir)) {
-    fs6.mkdirSync(indexDir, { recursive: true });
+  if (!fs7.existsSync(indexDir)) {
+    fs7.mkdirSync(indexDir, { recursive: true });
   }
-  fs6.writeFileSync(indexPath, JSON.stringify(index), "utf-8");
+  fs7.writeFileSync(indexPath, JSON.stringify(index), "utf-8");
   return {
     success: true,
     sessionId,
@@ -14916,7 +15040,11 @@ async function main(stream = process.stdin) {
   }
   const sessionId = getSessionId(input);
   try {
-    await analyzeCompletedSession(sessionId, input?.cwd ?? process.cwd());
+    await analyzeCompletedSession(
+      sessionId,
+      input?.cwd ?? process.cwd(),
+      input?.transcript_path
+    );
   } catch (error48) {
     const errorMessage = error48 instanceof Error ? error48.message : String(error48);
     logUsage({
