@@ -10,3 +10,5 @@ archive/
 .dolt/
 *.db
 .beads-credential-key
+.beads/
+CLAUDE.local.md
