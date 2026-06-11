@@ -177,9 +177,13 @@ export async function analyzeCompletedSession(
   const configuredModel = getModelForOperation('memoryUpdate')
   // Vocabulary anchoring: pass the current model's keys/values so the
   // analyzer reuses them — exact matches are what reinforcement needs.
-  const vocabulary = (readUserModel('global')?.preferencesClusters ?? []).map(
-    (p) => ({ category: p.category, key: p.key, value: p.value })
-  )
+  // Legacy generic keys are excluded: anchoring to 'preference'/'pattern'
+  // would instruct the model to reuse exactly the keys the discipline
+  // rules forbid, re-entrenching the fragmentation this fixes.
+  const LEGACY_GENERIC_KEYS = new Set(['preference', 'pattern'])
+  const vocabulary = (readUserModel('global')?.preferencesClusters ?? [])
+    .filter((p) => !LEGACY_GENERIC_KEYS.has(p.key))
+    .map((p) => ({ category: p.category, key: p.key, value: p.value }))
   const analysisStartedAt = Date.now()
   const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel, {
     vocabulary,

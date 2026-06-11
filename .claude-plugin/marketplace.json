@@ -14,7 +14,7 @@
       "name": "tom-swe",
       "source": "./",
       "description": "Theory of Mind agent that learns your coding preferences, interaction style, and project patterns across sessions. Based on the ToM-SWE paper.",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "author": {
         "name": "sjarmak"
       },

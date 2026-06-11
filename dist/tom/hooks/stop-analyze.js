@@ -15335,9 +15335,8 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
   } catch {
   }
   const configuredModel = getModelForOperation("memoryUpdate");
-  const vocabulary = (readUserModel("global")?.preferencesClusters ?? []).map(
-    (p) => ({ category: p.category, key: p.key, value: p.value })
-  );
+  const LEGACY_GENERIC_KEYS = /* @__PURE__ */ new Set(["preference", "pattern"]);
+  const vocabulary = (readUserModel("global")?.preferencesClusters ?? []).filter((p) => !LEGACY_GENERIC_KEYS.has(p.key)).map((p) => ({ category: p.category, key: p.key, value: p.value }));
   const analysisStartedAt = Date.now();
   const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel, {
     vocabulary

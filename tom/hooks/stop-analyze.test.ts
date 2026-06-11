@@ -828,6 +828,47 @@ describe('analyzeCompletedSession', () => {
     expect(satisfaction?.confidence).toBeCloseTo(0.1)
   })
 
+  it('anchors the analyzer to existing vocabulary, excluding legacy generic keys', async () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(tomDir, 'user-model.json'),
+      JSON.stringify({
+        preferencesClusters: [
+          {
+            category: 'codingPreferences',
+            key: 'test_runner',
+            value: 'vitest',
+            confidence: 0.5,
+            lastUpdated: '2026-06-01T00:00:00.000Z',
+            sessionCount: 5,
+          },
+          {
+            category: 'codingPreferences',
+            key: 'preference',
+            value: 'some legacy sentence',
+            confidence: 0.3,
+            lastUpdated: '2026-06-01T00:00:00.000Z',
+            sessionCount: 2,
+          },
+        ],
+        interactionStyleSummary: '',
+        codingStyleSummary: '',
+        projectOverrides: {},
+      }),
+      'utf-8'
+    )
+    writeSessionFile('vocab-test')
+
+    await analyzeCompletedSession('vocab-test')
+
+    const call = mockAnalyzeWithLlm.mock.calls[0]
+    const options = (call?.[2] ?? {}) as { vocabulary?: Array<{ key: string }> }
+    const keys = (options.vocabulary ?? []).map((v) => v.key)
+    expect(keys).toContain('test_runner')
+    expect(keys).not.toContain('preference')
+  })
+
   it('debounces re-analysis of a freshly analyzed session', async () => {
     writeSessionFile('debounce-test')
 
