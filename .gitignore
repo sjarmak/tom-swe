@@ -5,3 +5,8 @@ progress.txt
 prd.json
 archive/
 .claude/brains/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
