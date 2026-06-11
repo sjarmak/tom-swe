@@ -29,7 +29,7 @@ describe('getAgentConfig', () => {
 
   it('points to system prompt file', () => {
     const config = getAgentConfig()
-    expect(config.systemPromptPath).toBe('tom/agent/tom-agent.md')
+    expect(config.systemPromptPath).toBe('agents/tom-agent.md')
   })
 })
 

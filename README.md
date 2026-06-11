@@ -178,6 +178,10 @@ npm run build        # Bundle with esbuild (output in dist/)
 
 The build uses esbuild to bundle each hook and skill entry point into a self-contained JS file with all dependencies inlined. End users do not need to install `node_modules`.
 
+## Related
+
+[brains](https://github.com/sjarmak/brains) is the project-knowledge counterpart to this plugin: it builds forkable warm-start agent sessions over a codebase scope, while tom-swe learns the *user*. The two compose at session start — and brains exports `TOM_SWE_INTERNAL=1` on every build and fork, so tom-swe treats brain machinery as internal and never learns agent behavior into your user model.
+
 ## License
 
 MIT

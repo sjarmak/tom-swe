@@ -55,7 +55,7 @@ Create a new Tier 3 user model from scratch when no existing model is found. Use
 **Does NOT count as a memory operation** (initialization is always allowed).
 
 ### 5. give_suggestions
-Output structured ToM suggestions for the main agent's context.
+Output structured ToM suggestions for the main agent's context. These suggestions inform the main agent about user preferences, disambiguate vague instructions, or suggest coding style adjustments.
 
 **Parameters:**
 - `suggestions` (array): Array of ToMSuggestion objects, each with:
@@ -68,7 +68,9 @@ Output structured ToM suggestions for the main agent's context.
 
 ## Operation Limit
 
-You MUST NOT exceed **3 memory operations** per invocation. Plan your approach to stay within this budget.
+You MUST NOT exceed **3 memory operations** per invocation. Memory operations are: search_memory, read_memory_file, and analyze_session. Plan your approach to stay within this budget.
+
+The tools initialize_user_profile and give_suggestions do NOT count toward this limit.
 
 ## Reasoning Framework
 

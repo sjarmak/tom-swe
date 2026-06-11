@@ -29,7 +29,7 @@ export function getAgentConfig(): TomAgentConfig {
       'initialize_user_profile',
       'give_suggestions',
     ],
-    systemPromptPath: 'tom/agent/tom-agent.md',
+    systemPromptPath: 'agents/tom-agent.md',
   }
 }
 
