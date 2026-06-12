@@ -13,6 +13,5 @@
     "memory",
     "preferences",
     "user-modeling"
-  ],
-  "hooks": "./hooks/hooks.json"
+  ]
 }
