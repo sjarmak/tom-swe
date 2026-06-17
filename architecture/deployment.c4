@@ -1,0 +1,58 @@
+// Deployment model — where each piece runs at review time.
+//
+// tom-swe has no servers of its own. It runs entirely inside the user's
+// Claude Code process on their workstation: the harness invokes the bundled
+// hook scripts (dist/) in-process-adjacent (short-lived Node subprocesses),
+// they read/write plain JSON under ~/.claude/tom/, and the only off-box-capable
+// call is the headless `claude -p` analysis spawned on Stop. This is the
+// "what runs where / what's the process & data boundary" view a review asks for.
+
+deployment {
+
+  devHost = host 'Developer workstation' {
+    description 'The user’s machine — the only host. All ToM data and code live here; nothing leaves the box'
+
+    harness = proc 'Claude Code harness' {
+      description 'The CLI agent the user talks to; fires lifecycle hooks and accepts additionalContext'
+      instanceOf claudeCode
+    }
+    hookProc = proc 'ToM hook scripts (dist/)' {
+      description 'Short-lived Node processes the harness spawns per hook event (SessionStart / PostToolUse / UserPromptSubmit / Stop)'
+      instanceOf tom.hooks
+    }
+    coreProc = proc 'ToM reasoning + modeling (bundled)' {
+      description 'esbuild-inlined logic the hook scripts call: ambiguity, BM25, extraction, aggregation, rebuild, promotion'
+      instanceOf tom.reasoning
+      instanceOf tom.modeling
+    }
+    tomStore = proc 'ToM store — ~/.claude/tom/ (JSON)' {
+      description 'sessions/, session-models/, user-model.json, user-model-history/, bm25-index.json, usage.log, config.json. Local, gitignored, redacted'
+      instanceOf tom.store
+    }
+    memoryFiles = proc 'CLAUDE.md memory files' {
+      description 'Project ./CLAUDE.md and global ~/.claude/CLAUDE.md — promotion writes a marker-bounded block into existing files only'
+      instanceOf claudeCode.settings
+    }
+    headless = proc 'Headless Claude (claude -p)' {
+      description 'Spawned only on Stop with TOM_SWE_INTERNAL=1 (recursion guard); may reach the Anthropic API depending on the user’s claude config'
+      instanceOf inference
+    }
+  }
+
+  // Runtime data & control flow between processes on the one host.
+  harness -> hookProc 'spawns per hook event'
+  hookProc -> coreProc 'in-process calls (bundled)'
+  hookProc -> tomStore 'read/write JSON tiers + index + log'
+  coreProc -> tomStore 'read/write JSON tiers + index + log'
+  hookProc -> headless 'Stop: spawn claude -p for analysis'
+  coreProc -> memoryFiles 'promotion: regenerate marker block'
+  harness -> memoryFiles 'reads CLAUDE.md as session memory'
+}
+
+views {
+
+  deployment view deployment {
+    title 'Deployment — everything runs on the developer workstation'
+    include *
+  }
+}
