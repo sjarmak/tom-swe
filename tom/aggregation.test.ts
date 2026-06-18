@@ -386,3 +386,197 @@ describe('aggregateSessionIntoModel', () => {
     }
   })
 })
+
+describe('aggregateSessionIntoModel style summaries', () => {
+  const recent = '2026-06-17T00:00:00.000Z'
+
+  it('builds interactionStyleSummary from interactionStyle clusters only', () => {
+    const model = makeUserModel({
+      preferencesClusters: [
+        makePreference({
+          category: 'interactionStyle',
+          key: 'verbosity',
+          value: 'concise',
+          confidence: 0.8,
+          lastUpdated: recent,
+        }),
+        makePreference({
+          category: 'codingPreferences',
+          key: 'language',
+          value: 'TypeScript',
+          confidence: 0.9,
+          lastUpdated: recent,
+        }),
+      ],
+    })
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: [],
+    })
+    const result = aggregateSessionIntoModel(model, session, 30, 0.5, new Date(recent))
+
+    expect(result.interactionStyleSummary).toContain('verbosity: concise')
+    expect(result.interactionStyleSummary).not.toContain('TypeScript')
+    expect(result.codingStyleSummary).toContain('language: TypeScript')
+    expect(result.codingStyleSummary).not.toContain('concise')
+  })
+
+  it('produces empty-string summaries for empty clusters (no crash)', () => {
+    const model = makeUserModel()
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: [],
+      satisfactionSignals: {
+        frustration: false,
+        satisfaction: false,
+        urgency: 'low',
+      },
+    })
+    const result = aggregateSessionIntoModel(model, session)
+
+    expect(result.interactionStyleSummary).toBe('')
+    expect(result.codingStyleSummary).toBe('')
+  })
+
+  it('produces empty-string summaries when all clusters are below threshold', () => {
+    const model = makeUserModel({
+      preferencesClusters: [
+        makePreference({
+          category: 'interactionStyle',
+          key: 'verbosity',
+          value: 'concise',
+          confidence: 0.05,
+          lastUpdated: recent,
+        }),
+        makePreference({
+          category: 'codingPreferences',
+          key: 'language',
+          value: 'TypeScript',
+          confidence: 0.05,
+          lastUpdated: recent,
+        }),
+      ],
+    })
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: [],
+    })
+    const result = aggregateSessionIntoModel(model, session, 30, 0.5, new Date(recent))
+
+    expect(result.interactionStyleSummary).toBe('')
+    expect(result.codingStyleSummary).toBe('')
+  })
+
+  it('is deterministic across repeated runs on the same input', () => {
+    const model = makeUserModel({
+      preferencesClusters: [
+        makePreference({
+          category: 'codingPreferences',
+          key: 'language',
+          value: 'TypeScript',
+          confidence: 0.7,
+          lastUpdated: recent,
+        }),
+        makePreference({
+          category: 'codingPreferences',
+          key: 'testing',
+          value: 'vitest',
+          confidence: 0.6,
+          lastUpdated: recent,
+        }),
+      ],
+    })
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: [],
+    })
+    const at = new Date(recent)
+    const a = aggregateSessionIntoModel(model, session, 30, 0.5, at)
+    const b = aggregateSessionIntoModel(model, session, 30, 0.5, at)
+
+    expect(a.codingStyleSummary).toBe(b.codingStyleSummary)
+    expect(a.interactionStyleSummary).toBe(b.interactionStyleSummary)
+  })
+
+  it('orders by confidence desc with key asc as tiebreak', () => {
+    const model = makeUserModel({
+      preferencesClusters: [
+        // Equal confidence → key ascending: architecture before language
+        makePreference({
+          category: 'codingPreferences',
+          key: 'language',
+          value: 'TypeScript',
+          confidence: 0.6,
+          lastUpdated: recent,
+        }),
+        makePreference({
+          category: 'codingPreferences',
+          key: 'architecture',
+          value: 'layered',
+          confidence: 0.6,
+          lastUpdated: recent,
+        }),
+        // Higher confidence sorts first overall
+        makePreference({
+          category: 'codingPreferences',
+          key: 'testing',
+          value: 'vitest',
+          confidence: 0.9,
+          lastUpdated: recent,
+        }),
+      ],
+    })
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: [],
+    })
+    const result = aggregateSessionIntoModel(model, session, 30, 0.5, new Date(recent))
+
+    expect(result.codingStyleSummary).toBe(
+      'testing: vitest; architecture: layered; language: TypeScript'
+    )
+  })
+
+  it('derives summaries purely from clusters, ignoring prior summary strings', () => {
+    // Two models with identical resolved clusters must yield identical
+    // summaries regardless of the prior summary strings — proving the
+    // summary is a pure function of the resolved clusters (no LLM, no
+    // carry-over of stale text).
+    const clusters: PreferenceCluster[] = [
+      makePreference({
+        category: 'interactionStyle',
+        key: 'verbosity',
+        value: 'concise',
+        confidence: 0.8,
+        lastUpdated: recent,
+      }),
+    ]
+    const session = makeSessionModel({
+      interactionPatterns: [],
+      codingPreferences: [],
+    })
+    const at = new Date(recent)
+    const r1 = aggregateSessionIntoModel(
+      makeUserModel({
+        preferencesClusters: clusters,
+        interactionStyleSummary: 'OLD',
+      }),
+      session,
+      30,
+      0.5,
+      at
+    )
+    const r2 = aggregateSessionIntoModel(
+      makeUserModel({
+        preferencesClusters: clusters,
+        interactionStyleSummary: 'DIFFERENT',
+      }),
+      session,
+      30,
+      0.5,
+      at
+    )
+    expect(r1.interactionStyleSummary).toBe(r2.interactionStyleSummary)
+    expect(r1.interactionStyleSummary).not.toBe('OLD')
+  })
+})
