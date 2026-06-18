@@ -96,19 +96,54 @@ describe('reinforcePreference', () => {
     expect(existing[0]?.confidence).toBe(0.5)
   })
 
-  it('handles value change for same category+key (updates value, resets confidence)', () => {
-    const existing = [makePreference({ value: 'JavaScript', confidence: 0.8 })]
+  it('merges a reworded value into the existing category+key cluster (accumulates, not resets)', () => {
+    const existing = [
+      makePreference({ value: 'prefers TypeScript', confidence: 0.8, sessionCount: 4 }),
+    ]
     const observation = {
       category: 'codingPreferences' as PreferenceCategory,
       key: 'language',
-      value: 'TypeScript',
+      value: 'likes TypeScript', // same observation, reworded
     }
     const result = reinforcePreference(existing, observation)
-    const updated = result.find((p) => p.key === 'language' && p.value === 'TypeScript')
-    expect(updated).toBeDefined()
-    // When value changes, it's a new observation — keep both for conflict resolution
-    const old = result.find((p) => p.key === 'language' && p.value === 'JavaScript')
-    expect(old).toBeDefined()
+
+    // One cluster per category+key — the reword does not spawn a fresh cluster.
+    const langPrefs = result.filter(
+      (p) => p.category === 'codingPreferences' && p.key === 'language'
+    )
+    expect(langPrefs).toHaveLength(1)
+    // Confidence accumulates rather than resetting to INITIAL_CONFIDENCE.
+    expect(langPrefs[0]?.confidence).toBeCloseTo(0.9)
+    expect(langPrefs[0]?.sessionCount).toBe(5)
+    // Latest wording is retained.
+    expect(langPrefs[0]?.value).toBe('likes TypeScript')
+  })
+
+  it('accumulates confidence and sessionCount across N reworded observations', () => {
+    const wordings = [
+      'prefers TypeScript',
+      'likes TypeScript',
+      'wants TS',
+      'TypeScript please',
+      'use TypeScript',
+    ]
+    let prefs: readonly PreferenceCluster[] = []
+    for (const value of wordings) {
+      prefs = reinforcePreference(prefs, {
+        category: 'codingPreferences' as PreferenceCategory,
+        key: 'language',
+        value,
+      })
+    }
+
+    expect(prefs).toHaveLength(1)
+    const pref = prefs[0]
+    // N=5: 0.1 initial + 4 increments of 0.1 = 0.5, monotonic up from INITIAL.
+    expect(pref?.sessionCount).toBe(5)
+    expect(pref?.confidence).toBeCloseTo(0.5)
+    expect(pref?.confidence).toBeGreaterThan(0.1)
+    // Latest wording retained.
+    expect(pref?.value).toBe('use TypeScript')
   })
 })
 

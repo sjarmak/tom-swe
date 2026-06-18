@@ -385,4 +385,105 @@ describe('aggregateSessionIntoModel', () => {
       expect(shortPref.confidence).toBeLessThan(longPref.confidence)
     }
   })
+
+  it('accumulates confidence across N sessions that reword the same observation', () => {
+    // Same keyed observation (key='language'), reworded each session. With the
+    // sessions sharing an asOf there is no inter-session decay, so confidence
+    // climbs monotonically and sessionCount reaches N.
+    const asOf = new Date('2026-06-15T00:00:00.000Z')
+    const wordings = [
+      'prefers TypeScript',
+      'likes using TypeScript',
+      'wants TS everywhere',
+      'TypeScript is the choice',
+    ]
+
+    let model = makeUserModel()
+    for (const value of wordings) {
+      const session = makeSessionModel({
+        interactionPatterns: [],
+        codingPreferences: [{ key: 'language', value }],
+        satisfactionSignals: {
+          frustration: false,
+          satisfaction: false,
+          urgency: 'low',
+        },
+      })
+      model = aggregateSessionIntoModel(model, session, 30, undefined, asOf)
+    }
+
+    const langPrefs = model.preferencesClusters.filter(
+      (p) => p.category === 'codingPreferences' && p.key === 'language'
+    )
+    // At most one cluster per category+key — rewording does not fragment it.
+    expect(langPrefs).toHaveLength(1)
+    const pref = langPrefs[0]
+    // sessionCount == N
+    expect(pref?.sessionCount).toBe(wordings.length)
+    // Confidence climbed above INITIAL_CONFIDENCE (0.1 + 3 increments = 0.4).
+    expect(pref?.confidence).toBeCloseTo(0.4)
+    expect(pref?.confidence).toBeGreaterThan(0.1)
+    // Latest wording is the retained value.
+    expect(pref?.value).toBe('TypeScript is the choice')
+  })
+
+  it('lets a later correction override an accumulated reworded preference', () => {
+    const asOf = new Date('2026-06-15T00:00:00.000Z')
+    // Build up an accumulated preference over three reworded sessions.
+    let model = makeUserModel()
+    for (const value of ['jest is fine', 'use jest', 'jest please']) {
+      model = aggregateSessionIntoModel(
+        model,
+        makeSessionModel({
+          interactionPatterns: [],
+          codingPreferences: [{ key: 'testRunner', value }],
+          satisfactionSignals: { frustration: false, satisfaction: false, urgency: 'low' },
+        }),
+        30,
+        undefined,
+        asOf
+      )
+    }
+    const accumulated = model.preferencesClusters.find(
+      (p) => p.category === 'codingPreferences' && p.key === 'testRunner'
+    )
+    expect(accumulated?.value).toBe('jest please')
+    expect(accumulated?.confidence).toBeCloseTo(0.3)
+
+    // A correction toward 'vitest' must override the accumulated 'jest'.
+    model = aggregateSessionIntoModel(
+      model,
+      makeSessionModel({
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: false, urgency: 'low' },
+        corrections: [
+          {
+            category: 'codingPreferences',
+            key: 'testRunner',
+            correctedValue: 'vitest',
+            evidence: 'user swapped jest for vitest',
+          },
+        ],
+      }),
+      30,
+      undefined,
+      asOf
+    )
+
+    const winner = model.preferencesClusters.find(
+      (p) => p.category === 'codingPreferences' && p.key === 'testRunner'
+    )
+    // Correction overrides: corrected-to value wins, starting fresh.
+    expect(winner?.value).toBe('vitest')
+    expect(winner?.confidence).toBeCloseTo(0.1)
+    expect(winner?.sessionCount).toBe(1)
+    expect(winner?.learnedVia).toBe('correction')
+    expect(winner?.correctedFrom).toBe('jest please')
+    // One cluster per category+key after resolution.
+    const testRunnerPrefs = model.preferencesClusters.filter(
+      (p) => p.category === 'codingPreferences' && p.key === 'testRunner'
+    )
+    expect(testRunnerPrefs).toHaveLength(1)
+  })
 })
