@@ -170,7 +170,10 @@ describe('analyzeCompletedSession', () => {
     expect(result.success).toBe(true)
     expect(result.sessionModel).not.toBeNull()
     expect(result.sessionModel?.sessionId).toBe('analyze-test')
-    expect(result.sessionModel?.interactionPatterns).toContain('uses-Edit')
+    expect(result.sessionModel?.intent).toBe('brief code modification')
+    // Heuristic fallback never speculates semantic preferences/patterns.
+    expect(result.sessionModel?.interactionPatterns).toEqual([])
+    expect(result.sessionModel?.codingPreferences).toEqual([])
   })
 
   it('writes Tier 2 session model to disk', async () => {
@@ -464,7 +467,11 @@ describe('analyzeCompletedSession', () => {
     const result = await analyzeCompletedSession('heuristic-fallback-test')
 
     expect(result.success).toBe(true)
-    expect(result.sessionModel?.interactionPatterns).toContain('uses-Read')
+    // Heuristic fallback derives intent mechanically but never speculates
+    // interaction patterns or coding preferences.
+    expect(result.sessionModel?.intent).toBe('brief code exploration')
+    expect(result.sessionModel?.interactionPatterns).toEqual([])
+    expect(result.sessionModel?.codingPreferences).toEqual([])
   })
 
   it('uses the LLM session model and logs real model and tokens on success', async () => {
