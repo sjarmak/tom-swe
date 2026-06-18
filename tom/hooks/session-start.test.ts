@@ -114,6 +114,32 @@ describe('buildModelSummary', () => {
     expect(summary).toContain('typescript')
   })
 
+  it('excludes emotionalSignals clusters even when they are the highest-confidence', () => {
+    const model = createUserModel({
+      preferencesClusters: [
+        pref('frustration', 'false', 0.99, 'emotionalSignals'),
+        pref('language', 'typescript', 0.6),
+      ],
+    })
+
+    const summary = buildModelSummary(model) ?? ''
+    // The emotionalSignals cluster dominates by confidence but is not actionable
+    expect(summary).not.toContain('emotionalSignals')
+    expect(summary).not.toContain('frustration')
+    // Actionable preferences above MIN_CONFIDENCE are still injected
+    expect(summary).toContain('codingPreferences/language: typescript (60%)')
+  })
+
+  it('returns null when only emotionalSignals are confident and no summaries exist', () => {
+    const model = createUserModel({
+      preferencesClusters: [
+        pref('frustration', 'false', 0.99, 'emotionalSignals'),
+        pref('satisfaction', 'true', 0.8, 'emotionalSignals'),
+      ],
+    })
+    expect(buildModelSummary(model)).toBeNull()
+  })
+
   it('returns null when every confident preference is promoted and no summaries exist', () => {
     const model = createUserModel({
       preferencesClusters: [
