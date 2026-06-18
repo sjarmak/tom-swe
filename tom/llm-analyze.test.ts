@@ -7,6 +7,7 @@ import {
   parseAnalysisOutput,
   buildAnalysisPrompt,
   boundSessionLog,
+  ALLOWED_KEYS,
   LLM_ANALYSIS_TIMEOUT_MS,
   MAX_PROMPT_INTERACTIONS,
 } from './llm-analyze'
@@ -136,6 +137,26 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toContain('snake_case topic name')
     expect(prompt).toContain('Never a generic word like "preference" or "pattern"')
     expect(prompt).toContain('{"key": "<topic key>", "value": "<short canonical value>"}')
+  })
+
+  it('embeds the fixed per-category key vocabulary built from ALLOWED_KEYS', () => {
+    const prompt = buildAnalysisPrompt(makeSessionLog())
+
+    expect(prompt).toContain('Allowed keys')
+    expect(prompt).toContain('Map each observation onto the nearest allowed key')
+
+    // The vocabulary is rendered FROM the constant, so every key in
+    // ALLOWED_KEYS must appear verbatim in the prompt — no duplicated literal.
+    for (const keys of Object.values(ALLOWED_KEYS)) {
+      for (const key of keys) {
+        expect(prompt).toContain(key)
+      }
+    }
+
+    // The exact joined rendering proves the prompt reads from the constant.
+    expect(prompt).toContain(ALLOWED_KEYS.codingPreferences.join(', '))
+    expect(prompt).toContain(ALLOWED_KEYS.interactionStyle.join(', '))
+    expect(prompt).toContain(ALLOWED_KEYS.emotionalSignals.join(', '))
   })
 
   it('anchors extraction to the existing preference vocabulary when provided', () => {
@@ -421,6 +442,47 @@ describe('parseAnalysisOutput', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.reason).toBe('no-json-found')
+    }
+  })
+
+  it('warns on an out-of-vocabulary key but keeps the model intact', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const model: SessionModel = {
+        ...makeSessionModel('s-oov'),
+        codingPreferences: [{ key: 'totally_made_up_key', value: 'x' }],
+      }
+      const result = parseAnalysisOutput(JSON.stringify(model), 's-oov')
+
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        // The unknown-keyed entry is preserved, not dropped or crashed on.
+        expect(result.model.codingPreferences).toEqual([
+          { key: 'totally_made_up_key', value: 'x' },
+        ])
+      }
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('totally_made_up_key')
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('does not warn when every emitted key is in the allowed vocabulary', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const model: SessionModel = {
+        ...makeSessionModel('s-ok'),
+        codingPreferences: [{ key: ALLOWED_KEYS.codingPreferences[0], value: 'x' }],
+        interactionPatterns: [{ key: ALLOWED_KEYS.interactionStyle[0], value: 'y' }],
+      }
+      const result = parseAnalysisOutput(JSON.stringify(model), 's-ok')
+
+      expect(result.ok).toBe(true)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
     }
   })
 })
