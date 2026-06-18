@@ -190,6 +190,19 @@ export async function analyzeCompletedSession(
   })
   const analysisDurationMs = Date.now() - analysisStartedAt
 
+  // Observable truncation: when the log was bounded for the prompt, record
+  // how many interactions were dropped (never silent — see anti-slop).
+  if (llmResult.dropped > 0) {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'analysis-log-truncated',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: { dropped: llmResult.dropped },
+    })
+  }
+
   let extracted: SessionModel
   if (llmResult.ok) {
     extracted = llmResult.model

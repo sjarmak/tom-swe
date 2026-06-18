@@ -6,7 +6,9 @@ import {
   analyzeSessionWithLlm,
   parseAnalysisOutput,
   buildAnalysisPrompt,
+  boundSessionLog,
   LLM_ANALYSIS_TIMEOUT_MS,
+  MAX_PROMPT_INTERACTIONS,
 } from './llm-analyze'
 import type { SessionLog, SessionModel } from './schemas'
 
@@ -37,6 +39,27 @@ function makeSessionLog(sessionId = 'llm-test-session'): SessionLog {
         timestamp: '2026-06-10T10:30:00.000Z',
       },
     ],
+  }
+}
+
+/**
+ * Builds a log whose interactions are uniquely numbered, so a test can assert
+ * exactly which ones survive bounding.
+ */
+function makeSessionLogWithInteractions(
+  count: number,
+  sessionId = 'bounded-session'
+): SessionLog {
+  return {
+    sessionId,
+    startedAt: '2026-06-10T10:00:00.000Z',
+    endedAt: '2026-06-10T11:00:00.000Z',
+    interactions: Array.from({ length: count }, (_, i) => ({
+      toolName: 'Edit',
+      parameterShape: { index: String(i) },
+      outcomeSummary: 'success',
+      timestamp: '2026-06-10T10:30:00.000Z',
+    })),
   }
 }
 
@@ -399,5 +422,103 @@ describe('parseAnalysisOutput', () => {
     if (!result.ok) {
       expect(result.reason).toBe('no-json-found')
     }
+  })
+})
+
+// --- Prompt bounding (timeout/oversized-log mitigation) ---
+
+describe('LLM_ANALYSIS_TIMEOUT_MS', () => {
+  it('is raised to ~90s to cut the timeout-driven fallback rate', () => {
+    expect(LLM_ANALYSIS_TIMEOUT_MS).toBe(90_000)
+  })
+})
+
+describe('boundSessionLog', () => {
+  it('passes a within-budget log through unchanged (same object reference)', () => {
+    const log = makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS)
+    const result = boundSessionLog(log)
+
+    expect(result.dropped).toBe(0)
+    expect(result.sessionLog).toBe(log)
+  })
+
+  it('does not drop at exactly the cap (boundary just under/at)', () => {
+    expect(boundSessionLog(makeSessionLogWithInteractions(1)).dropped).toBe(0)
+    expect(
+      boundSessionLog(makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS - 1))
+        .dropped
+    ).toBe(0)
+    expect(
+      boundSessionLog(makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS)).dropped
+    ).toBe(0)
+  })
+
+  it('drops the oldest interactions just over the cap, keeping the tail', () => {
+    const log = makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS + 1)
+    const result = boundSessionLog(log)
+
+    expect(result.dropped).toBe(1)
+    expect(result.sessionLog.interactions).toHaveLength(MAX_PROMPT_INTERACTIONS)
+    // The single dropped interaction is the oldest (index 0); the tail
+    // (the session's conclusion) is retained.
+    expect(result.sessionLog.interactions[0]?.parameterShape['index']).toBe('1')
+    const last = result.sessionLog.interactions[MAX_PROMPT_INTERACTIONS - 1]
+    expect(last?.parameterShape['index']).toBe(String(MAX_PROMPT_INTERACTIONS))
+  })
+
+  it('reports the exact dropped count for a much larger log', () => {
+    const result = boundSessionLog(
+      makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS + 250)
+    )
+    expect(result.dropped).toBe(250)
+    expect(result.sessionLog.interactions).toHaveLength(MAX_PROMPT_INTERACTIONS)
+  })
+
+  it('does not mutate the input log', () => {
+    const log = makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS + 5)
+    boundSessionLog(log)
+    expect(log.interactions).toHaveLength(MAX_PROMPT_INTERACTIONS + 5)
+  })
+})
+
+describe('analyzeSessionWithLlm prompt bounding', () => {
+  it('builds a byte-identical prompt for within-budget logs', async () => {
+    const log = makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS)
+    const expectedPrompt = buildAnalysisPrompt(log)
+    spawnEmitting(wrapperOutput(JSON.stringify(makeSessionModel(log.sessionId))), 0)
+
+    const result = await analyzeSessionWithLlm(log, 'haiku')
+
+    expect(result.dropped).toBe(0)
+    const [, args] = mockSpawn.mock.calls[0] as unknown as [string, string[]]
+    expect(args[1]).toBe(expectedPrompt)
+  })
+
+  it('surfaces the dropped count for over-budget logs so the caller can log it', async () => {
+    const log = makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS + 3)
+    spawnEmitting(wrapperOutput(JSON.stringify(makeSessionModel(log.sessionId))), 0)
+
+    const result = await analyzeSessionWithLlm(log, 'haiku')
+
+    expect(result.dropped).toBe(3)
+    // The prompt embeds only the bounded log, not the original oversized one.
+    const [, args] = mockSpawn.mock.calls[0] as unknown as [string, string[]]
+    expect(args[1]).toBe(buildAnalysisPrompt(boundSessionLog(log).sessionLog))
+  })
+
+  it('reports dropped alongside failures, not only successes', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChildProcess()
+    mockSpawn.mockReturnValue(child as never)
+
+    const pending = analyzeSessionWithLlm(
+      makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS + 7),
+      'haiku'
+    )
+    await vi.advanceTimersByTimeAsync(LLM_ANALYSIS_TIMEOUT_MS)
+    const result = await pending
+
+    expect(result.ok).toBe(false)
+    expect(result.dropped).toBe(7)
   })
 })
