@@ -249,7 +249,9 @@ describe('analyzeSession', () => {
     expect(result.sessionModel).not.toBeNull()
     expect(result.sessionModel?.sessionId).toBe('session-1')
     expect(result.sessionModel?.intent).toContain('code modification')
-    expect(result.sessionModel?.interactionPatterns).toContain('uses-Edit')
+    // Heuristic extraction never speculates interaction patterns.
+    expect(result.sessionModel?.interactionPatterns).toEqual([])
+    expect(result.sessionModel?.codingPreferences).toEqual([])
     expect(newState.operationCount).toBe(1)
   })
 

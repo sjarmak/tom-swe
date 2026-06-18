@@ -41,16 +41,28 @@ describe('extractSessionModel', () => {
     expect(model.intent).toBe('brief code modification')
   })
 
-  it('extracts interaction patterns from top tools', () => {
+  it('never emits interaction patterns (heuristics cannot detect them reliably)', () => {
     const log = createSessionLog('session-2', [
       createInteraction('Edit', {}, 'success'),
       createInteraction('Grep', {}, 'success'),
       createInteraction('Read', {}, 'success'),
     ])
     const model = extractSessionModel(log)
-    expect(model.interactionPatterns).toContain('uses-Edit')
-    expect(model.interactionPatterns).toContain('uses-Grep')
-    expect(model.interactionPatterns).toContain('uses-Read')
+    expect(model.interactionPatterns).toEqual([])
+  })
+
+  it('never emits "uses-<Tool>" speculation even with many tools', () => {
+    const log = createSessionLog('session-2b', [
+      createInteraction('Edit', {}, 'success'),
+      createInteraction('Grep', {}, 'success'),
+      createInteraction('Read', {}, 'success'),
+      createInteraction('Bash', {}, 'success'),
+      createInteraction('Glob', {}, 'success'),
+      createInteraction('Task', {}, 'success'),
+    ])
+    const model = extractSessionModel(log)
+    expect(model.interactionPatterns).toEqual([])
+    expect(model.interactionPatterns.some((p) => p.startsWith('uses-'))).toBe(false)
   })
 
   it('detects frustration from error outcomes', () => {
@@ -91,14 +103,15 @@ describe('extractSessionModel', () => {
     expect(extractSessionModel(log3).satisfactionSignals.urgency).toBe('high')
   })
 
-  it('extracts coding preferences from file_path parameters', () => {
+  it('never emits coding preferences, even when file_path params are present', () => {
     const log = createSessionLog('session-8', [
       createInteraction('Edit', { file_path: 'src/app.ts' }, 'success'),
-      createInteraction('Edit', { file_path: 'src/utils.ts' }, 'success'),
+      createInteraction('Edit', { file_path: 'src/utils.ts', language: 'typescript' }, 'success'),
     ])
     const model = extractSessionModel(log)
-    expect(model.codingPreferences).toContain('src/app.ts')
-    expect(model.codingPreferences).toContain('src/utils.ts')
+    expect(model.codingPreferences).toEqual([])
+    // No raw file path leaks into the returned model.
+    expect(model.codingPreferences.some((p) => p.includes('src/'))).toBe(false)
   })
 
   it('handles empty session log', () => {
