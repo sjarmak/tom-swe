@@ -18,7 +18,17 @@ import { SessionModelSchema } from './schemas.js'
 
 // --- Types ---
 
-export const LLM_ANALYSIS_TIMEOUT_MS = 45_000
+export const LLM_ANALYSIS_TIMEOUT_MS = 90_000
+
+/**
+ * Maximum number of Tier 1 interactions embedded in the analysis prompt.
+ * Long sessions produce session logs large enough that the claude CLI spawn
+ * stalls (a dominant cause of the ~32% analysis-fallback rate). The tail is
+ * retained — the session's conclusion (satisfaction/frustration signals)
+ * lives in the most recent interactions — and the drop count is surfaced so
+ * the caller can log it (truncation is never silent).
+ */
+export const MAX_PROMPT_INTERACTIONS = 400
 
 export type LlmAnalysisFailureReason =
   | 'spawn-error'
@@ -33,12 +43,16 @@ export interface LlmAnalysisSuccess {
   readonly model: SessionModel
   readonly tokensUsed: number | null
   readonly path: 'llm'
+  /** Interactions dropped to keep the prompt within budget (0 when none). */
+  readonly dropped: number
 }
 
 export interface LlmAnalysisFailure {
   readonly ok: false
   readonly reason: LlmAnalysisFailureReason
   readonly detail: string
+  /** Interactions dropped to keep the prompt within budget (0 when none). */
+  readonly dropped: number
 }
 
 export type LlmAnalysisResult = LlmAnalysisSuccess | LlmAnalysisFailure
@@ -50,6 +64,34 @@ export interface VocabularyEntry {
   readonly category: string
   readonly key: string
   readonly value: string
+}
+
+/** A session log bounded to the prompt budget, plus how many were dropped. */
+export interface BoundedSessionLog {
+  readonly sessionLog: SessionLog
+  readonly dropped: number
+}
+
+/**
+ * Deterministically caps the session log's interactions to
+ * MAX_PROMPT_INTERACTIONS, keeping the most recent ones (the tail carries the
+ * session's outcome). Within budget the original log object is returned
+ * unchanged, so the resulting prompt is byte-identical to today's. Over
+ * budget, `dropped` reports the count removed so the caller can log it.
+ */
+export function boundSessionLog(sessionLog: SessionLog): BoundedSessionLog {
+  const total = sessionLog.interactions.length
+  if (total <= MAX_PROMPT_INTERACTIONS) {
+    return { sessionLog, dropped: 0 }
+  }
+  const dropped = total - MAX_PROMPT_INTERACTIONS
+  return {
+    sessionLog: {
+      ...sessionLog,
+      interactions: sessionLog.interactions.slice(dropped),
+    },
+    dropped,
+  }
 }
 
 export function buildAnalysisPrompt(
@@ -202,6 +244,7 @@ export function parseAnalysisOutput(
       ok: false,
       reason: 'no-json-found',
       detail: truncateDetail(`no JSON object in output: ${modelText}`),
+      dropped: 0,
     }
   }
 
@@ -214,6 +257,7 @@ export function parseAnalysisOutput(
       ok: false,
       reason: 'invalid-json',
       detail: truncateDetail(message),
+      dropped: 0,
     }
   }
 
@@ -223,6 +267,7 @@ export function parseAnalysisOutput(
       ok: false,
       reason: 'schema-mismatch',
       detail: truncateDetail(parsed.error.message),
+      dropped: 0,
     }
   }
 
@@ -233,6 +278,7 @@ export function parseAnalysisOutput(
     model: { ...parsed.data, sessionId: expectedSessionId },
     tokensUsed,
     path: 'llm',
+    dropped: 0,
   }
 }
 
@@ -253,13 +299,22 @@ export async function analyzeSessionWithLlm(
   } = {}
 ): Promise<LlmAnalysisResult> {
   const timeoutMs = options.timeoutMs ?? LLM_ANALYSIS_TIMEOUT_MS
-  const prompt = buildAnalysisPrompt(sessionLog, options.vocabulary ?? [])
+  // Bound the log BEFORE the spawn: oversized logs are what stall the CLI.
+  // `dropped` is stamped onto every outcome so the caller can log it.
+  const { sessionLog: boundedLog, dropped } = boundSessionLog(sessionLog)
+  const prompt = buildAnalysisPrompt(boundedLog, options.vocabulary ?? [])
 
   return new Promise<LlmAnalysisResult>((resolve) => {
     let settled = false
     let timer: NodeJS.Timeout | null = null
 
-    const settle = (result: LlmAnalysisResult): void => {
+    // settle accepts results without `dropped`; it stamps the bounded-log
+    // drop count onto every outcome so there is a single source for it.
+    const settle = (
+      result:
+        | Omit<LlmAnalysisSuccess, 'dropped'>
+        | Omit<LlmAnalysisFailure, 'dropped'>
+    ): void => {
       if (settled) {
         return
       }
@@ -267,7 +322,7 @@ export async function analyzeSessionWithLlm(
       if (timer !== null) {
         clearTimeout(timer)
       }
-      resolve(result)
+      resolve({ ...result, dropped })
     }
 
     let child: ReturnType<typeof spawn>
