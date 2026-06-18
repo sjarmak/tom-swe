@@ -21,11 +21,14 @@ export const DEFAULT_CORRECTION_PENALTY = 0.5
 /**
  * Reinforces an existing preference or adds a new observation.
  *
- * - If a preference with the same category+key+value exists, its confidence
- *   is increased by 0.1 (capped at 1.0), sessionCount incremented, and
- *   lastUpdated set to now.
- * - If a preference with the same category+key but different value exists,
- *   both are kept (conflict resolution handled separately).
+ * Preference identity is category+key — the value is the current wording of
+ * that preference, not part of its identity. Rewording the same observation
+ * across sessions accumulates confidence on one cluster instead of spawning a
+ * fresh low-confidence cluster each time.
+ *
+ * - If a preference with the same category+key exists, its confidence is
+ *   increased by 0.1 (capped at 1.0), sessionCount incremented, value updated
+ *   to the latest wording, and lastUpdated set to now.
  * - If no matching category+key exists, a new preference is added with
  *   confidence 0.1 and sessionCount 1.
  *
@@ -38,10 +41,7 @@ export function reinforcePreference(
 ): PreferenceCluster[] {
   const now = asOf.toISOString()
   const matchIndex = preferences.findIndex(
-    (p) =>
-      p.category === observation.category &&
-      p.key === observation.key &&
-      p.value === observation.value
+    (p) => p.category === observation.category && p.key === observation.key
   )
 
   if (matchIndex >= 0) {
@@ -49,6 +49,7 @@ export function reinforcePreference(
       if (i !== matchIndex) return p
       return {
         ...p,
+        value: observation.value,
         confidence: Math.min(p.confidence + CONFIDENCE_INCREMENT, CONFIDENCE_MAX),
         lastUpdated: now,
         sessionCount: p.sessionCount + 1,
@@ -159,27 +160,49 @@ export function applyCorrections(
     })
 
     if (correction.correctedValue !== undefined) {
-      result = reinforcePreference(
-        result,
-        {
+      // A correction overrides accumulated confidence: the corrected-to value
+      // starts fresh, not by reinforcing the penalized cluster. Identity is
+      // category+key, so an existing corrected-to cluster is reinforced in
+      // place; otherwise a fresh INITIAL_CONFIDENCE cluster is appended. The
+      // penalized old-value cluster is left for resolveConflicts to collapse.
+      const existingIndex = result.findIndex(
+        (p) =>
+          p.category === correction.category &&
+          p.key === correction.key &&
+          p.value === correction.correctedValue
+      )
+      const provenance = {
+        learnedVia: 'correction' as const,
+        ...(correctedFrom !== undefined ? { correctedFrom } : {}),
+      }
+
+      if (existingIndex >= 0) {
+        result = result.map((p, i) =>
+          i !== existingIndex
+            ? p
+            : {
+                ...p,
+                confidence: Math.min(
+                  p.confidence + CONFIDENCE_INCREMENT,
+                  CONFIDENCE_MAX
+                ),
+                lastUpdated: now,
+                sessionCount: p.sessionCount + 1,
+                ...provenance,
+              }
+        )
+      } else {
+        const correctedToPreference: PreferenceCluster = {
           category: correction.category,
           key: correction.key,
           value: correction.correctedValue,
-        },
-        asOf
-      )
-      // Stamp correction provenance on the corrected-to cluster.
-      result = result.map((p) =>
-        p.category === correction.category &&
-        p.key === correction.key &&
-        p.value === correction.correctedValue
-          ? {
-              ...p,
-              learnedVia: 'correction' as const,
-              ...(correctedFrom !== undefined ? { correctedFrom } : {}),
-            }
-          : p
-      )
+          confidence: INITIAL_CONFIDENCE,
+          lastUpdated: now,
+          sessionCount: 1,
+          ...provenance,
+        }
+        result = [...result, correctedToPreference]
+      }
     }
   }
 
