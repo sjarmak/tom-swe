@@ -14209,7 +14209,7 @@ function buildSuggestionFromUserModel(ambiguityResult) {
     return null;
   }
   const unpromoted = userModel.preferencesClusters.filter(
-    (p) => p.promoted !== true
+    (p) => p.promoted !== true && p.category !== "emotionalSignals"
   );
   if (unpromoted.length === 0) {
     return null;

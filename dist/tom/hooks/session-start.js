@@ -14097,7 +14097,9 @@ function isExcludedSession() {
 var MIN_CONFIDENCE = 0.5;
 var MAX_PREFERENCE_LINES = 7;
 function buildModelSummary(model) {
-  const confidentPrefs = [...model.preferencesClusters].filter((p) => p.confidence >= MIN_CONFIDENCE && p.promoted !== true).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
+  const confidentPrefs = [...model.preferencesClusters].filter(
+    (p) => p.confidence >= MIN_CONFIDENCE && p.promoted !== true && p.category !== "emotionalSignals"
+  ).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
   const lines = [];
   if (confidentPrefs.length > 0) {
     lines.push("ToM user preferences (learned across sessions):");

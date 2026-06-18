@@ -14057,13 +14057,14 @@ var DEFAULT_CORRECTION_PENALTY = 0.5;
 function reinforcePreference(preferences, observation, asOf = /* @__PURE__ */ new Date()) {
   const now = asOf.toISOString();
   const matchIndex = preferences.findIndex(
-    (p) => p.category === observation.category && p.key === observation.key && p.value === observation.value
+    (p) => p.category === observation.category && p.key === observation.key
   );
   if (matchIndex >= 0) {
     return preferences.map((p, i) => {
       if (i !== matchIndex) return p;
       return {
         ...p,
+        value: observation.value,
         confidence: Math.min(p.confidence + CONFIDENCE_INCREMENT, CONFIDENCE_MAX),
         lastUpdated: now,
         sessionCount: p.sessionCount + 1
@@ -14114,22 +14115,38 @@ function applyCorrections(preferences, corrections, penaltyFactor = DEFAULT_CORR
       };
     });
     if (correction.correctedValue !== void 0) {
-      result = reinforcePreference(
-        result,
-        {
+      const existingIndex = result.findIndex(
+        (p) => p.category === correction.category && p.key === correction.key && p.value === correction.correctedValue
+      );
+      const provenance = {
+        learnedVia: "correction",
+        ...correctedFrom !== void 0 ? { correctedFrom } : {}
+      };
+      if (existingIndex >= 0) {
+        result = result.map(
+          (p, i) => i !== existingIndex ? p : {
+            ...p,
+            confidence: Math.min(
+              p.confidence + CONFIDENCE_INCREMENT,
+              CONFIDENCE_MAX
+            ),
+            lastUpdated: now,
+            sessionCount: p.sessionCount + 1,
+            ...provenance
+          }
+        );
+      } else {
+        const correctedToPreference = {
           category: correction.category,
           key: correction.key,
-          value: correction.correctedValue
-        },
-        asOf
-      );
-      result = result.map(
-        (p) => p.category === correction.category && p.key === correction.key && p.value === correction.correctedValue ? {
-          ...p,
-          learnedVia: "correction",
-          ...correctedFrom !== void 0 ? { correctedFrom } : {}
-        } : p
-      );
+          value: correction.correctedValue,
+          confidence: INITIAL_CONFIDENCE,
+          lastUpdated: now,
+          sessionCount: 1,
+          ...provenance
+        };
+        result = [...result, correctedToPreference];
+      }
     }
   }
   return [...result];
@@ -14148,6 +14165,15 @@ function resolveConflicts(preferences) {
 
 // tom/aggregation.ts
 var DEFAULT_DECAY_DAYS = 30;
+var SUMMARY_CONFIDENCE_THRESHOLD = 0.2;
+var SUMMARY_MAX_ENTRIES = 5;
+function summarizeCategory(clusters, category) {
+  return clusters.filter(
+    (c) => c.category === category && c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
+  ).slice().sort(
+    (a, b) => b.confidence !== a.confidence ? b.confidence - a.confidence : a.key.localeCompare(b.key)
+  ).slice(0, SUMMARY_MAX_ENTRIES).map((c) => `${c.key}: ${c.value}`).join("; ");
+}
 function extractObservations(session) {
   const observations = [];
   for (const pref of session.codingPreferences) {
@@ -14199,8 +14225,8 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
   const resolved = resolveConflicts(corrected);
   return {
     preferencesClusters: resolved,
-    interactionStyleSummary: currentModel.interactionStyleSummary,
-    codingStyleSummary: currentModel.codingStyleSummary,
+    interactionStyleSummary: summarizeCategory(resolved, "interactionStyle"),
+    codingStyleSummary: summarizeCategory(resolved, "codingPreferences"),
     projectOverrides: { ...currentModel.projectOverrides }
   };
 }
@@ -14296,7 +14322,7 @@ function buildMemoryIndex(scope = "global") {
     const content = [
       userModel.interactionStyleSummary,
       userModel.codingStyleSummary,
-      ...userModel.preferencesClusters.map((p) => `${p.category} ${p.key} ${p.value}`)
+      ...userModel.preferencesClusters.filter((p) => p.category !== "emotionalSignals").map((p) => `${p.category} ${p.key} ${p.value}`)
     ].join(" ");
     documents.push({ id: "user-model", content, tier: 3 });
   }

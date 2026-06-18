@@ -14020,13 +14020,14 @@ var DEFAULT_CORRECTION_PENALTY = 0.5;
 function reinforcePreference(preferences, observation, asOf = /* @__PURE__ */ new Date()) {
   const now = asOf.toISOString();
   const matchIndex = preferences.findIndex(
-    (p) => p.category === observation.category && p.key === observation.key && p.value === observation.value
+    (p) => p.category === observation.category && p.key === observation.key
   );
   if (matchIndex >= 0) {
     return preferences.map((p, i) => {
       if (i !== matchIndex) return p;
       return {
         ...p,
+        value: observation.value,
         confidence: Math.min(p.confidence + CONFIDENCE_INCREMENT, CONFIDENCE_MAX),
         lastUpdated: now,
         sessionCount: p.sessionCount + 1
@@ -14077,22 +14078,38 @@ function applyCorrections(preferences, corrections, penaltyFactor = DEFAULT_CORR
       };
     });
     if (correction.correctedValue !== void 0) {
-      result = reinforcePreference(
-        result,
-        {
+      const existingIndex = result.findIndex(
+        (p) => p.category === correction.category && p.key === correction.key && p.value === correction.correctedValue
+      );
+      const provenance = {
+        learnedVia: "correction",
+        ...correctedFrom !== void 0 ? { correctedFrom } : {}
+      };
+      if (existingIndex >= 0) {
+        result = result.map(
+          (p, i) => i !== existingIndex ? p : {
+            ...p,
+            confidence: Math.min(
+              p.confidence + CONFIDENCE_INCREMENT,
+              CONFIDENCE_MAX
+            ),
+            lastUpdated: now,
+            sessionCount: p.sessionCount + 1,
+            ...provenance
+          }
+        );
+      } else {
+        const correctedToPreference = {
           category: correction.category,
           key: correction.key,
-          value: correction.correctedValue
-        },
-        asOf
-      );
-      result = result.map(
-        (p) => p.category === correction.category && p.key === correction.key && p.value === correction.correctedValue ? {
-          ...p,
-          learnedVia: "correction",
-          ...correctedFrom !== void 0 ? { correctedFrom } : {}
-        } : p
-      );
+          value: correction.correctedValue,
+          confidence: INITIAL_CONFIDENCE,
+          lastUpdated: now,
+          sessionCount: 1,
+          ...provenance
+        };
+        result = [...result, correctedToPreference];
+      }
     }
   }
   return [...result];
@@ -14111,6 +14128,15 @@ function resolveConflicts(preferences) {
 
 // tom/aggregation.ts
 var DEFAULT_DECAY_DAYS = 30;
+var SUMMARY_CONFIDENCE_THRESHOLD = 0.2;
+var SUMMARY_MAX_ENTRIES = 5;
+function summarizeCategory(clusters, category) {
+  return clusters.filter(
+    (c) => c.category === category && c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
+  ).slice().sort(
+    (a, b) => b.confidence !== a.confidence ? b.confidence - a.confidence : a.key.localeCompare(b.key)
+  ).slice(0, SUMMARY_MAX_ENTRIES).map((c) => `${c.key}: ${c.value}`).join("; ");
+}
 function extractObservations(session) {
   const observations = [];
   for (const pref of session.codingPreferences) {
@@ -14162,8 +14188,8 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
   const resolved = resolveConflicts(corrected);
   return {
     preferencesClusters: resolved,
-    interactionStyleSummary: currentModel.interactionStyleSummary,
-    codingStyleSummary: currentModel.codingStyleSummary,
+    interactionStyleSummary: summarizeCategory(resolved, "interactionStyle"),
+    codingStyleSummary: summarizeCategory(resolved, "codingPreferences"),
     projectOverrides: { ...currentModel.projectOverrides }
   };
 }
@@ -14339,19 +14365,10 @@ function buildIndex(documents) {
 // tom/session-extract.ts
 function extractSessionModel(sessionLog) {
   const toolCounts = {};
-  const codingPrefs = [];
-  const patterns = [];
   let frustrationCount = 0;
   let satisfactionCount = 0;
   for (const interaction of sessionLog.interactions) {
     toolCounts[interaction.toolName] = (toolCounts[interaction.toolName] ?? 0) + 1;
-    const paramKeys = Object.keys(interaction.parameterShape);
-    if (paramKeys.includes("language") || paramKeys.includes("file_path")) {
-      const fileExt = interaction.parameterShape["file_path"] ?? "";
-      if (fileExt && !codingPrefs.includes(fileExt)) {
-        codingPrefs.push(fileExt);
-      }
-    }
     const outcome = interaction.outcomeSummary.toLowerCase();
     if (outcome.includes("error") || outcome.includes("fail") || outcome.includes("retry")) {
       frustrationCount++;
@@ -14363,9 +14380,6 @@ function extractSessionModel(sessionLog) {
   const sortedTools = Object.entries(toolCounts).sort(([, a], [, b]) => b - a).map(([name]) => name);
   const topTool = sortedTools[0] ?? "unknown";
   const intent = deriveIntent(topTool, sessionLog.interactions.length);
-  for (const toolName of sortedTools.slice(0, 5)) {
-    patterns.push(`uses-${toolName}`);
-  }
   const totalInteractions = sessionLog.interactions.length;
   const frustration = totalInteractions > 0 && frustrationCount / totalInteractions > 0.3;
   const satisfaction = totalInteractions > 0 && satisfactionCount / totalInteractions > 0.5;
@@ -14373,16 +14387,16 @@ function extractSessionModel(sessionLog) {
   return {
     sessionId: sessionLog.sessionId,
     intent,
-    interactionPatterns: patterns,
-    codingPreferences: codingPrefs,
+    // Interaction patterns, coding preferences, and corrections all require
+    // semantic understanding the heuristic path lacks. Only the LLM analysis
+    // path populates them; the fallback never guesses.
+    interactionPatterns: [],
+    codingPreferences: [],
     satisfactionSignals: {
       frustration,
       satisfaction,
       urgency
     },
-    // Heuristics cannot reliably detect corrections — contradiction requires
-    // semantic understanding of the user's messages. Only the LLM analysis
-    // path extracts corrections; the fallback never guesses.
     corrections: []
   };
 }
@@ -14442,7 +14456,7 @@ function buildMemoryIndex(scope = "global") {
     const content = [
       userModel.interactionStyleSummary,
       userModel.codingStyleSummary,
-      ...userModel.preferencesClusters.map((p) => `${p.category} ${p.key} ${p.value}`)
+      ...userModel.preferencesClusters.filter((p) => p.category !== "emotionalSignals").map((p) => `${p.category} ${p.key} ${p.value}`)
     ].join(" ");
     documents.push({ id: "user-model", content, tier: 3 });
   }
@@ -14578,7 +14592,37 @@ function readTranscriptUsage(transcriptPath) {
 
 // tom/llm-analyze.ts
 var import_node_child_process = require("node:child_process");
-var LLM_ANALYSIS_TIMEOUT_MS = 45e3;
+var LLM_ANALYSIS_TIMEOUT_MS = 9e4;
+var MAX_PROMPT_INTERACTIONS = 400;
+var ALLOWED_KEYS = {
+  interactionStyle: ["verbosity", "question_timing", "response_length"],
+  codingPreferences: [
+    "language",
+    "libraries",
+    "test_runner",
+    "testing_approach",
+    "architecture_patterns",
+    "naming_conventions",
+    "docs_style",
+    "commit_format",
+    "error_handling"
+  ],
+  emotionalSignals: ["frustration", "satisfaction", "urgency"]
+};
+function boundSessionLog(sessionLog) {
+  const total = sessionLog.interactions.length;
+  if (total <= MAX_PROMPT_INTERACTIONS) {
+    return { sessionLog, dropped: 0 };
+  }
+  const dropped = total - MAX_PROMPT_INTERACTIONS;
+  return {
+    sessionLog: {
+      ...sessionLog,
+      interactions: sessionLog.interactions.slice(dropped)
+    },
+    dropped
+  };
+}
 function buildAnalysisPrompt(sessionLog, vocabulary = []) {
   const vocabularySection = vocabulary.length > 0 ? [
     "",
@@ -14613,6 +14657,11 @@ function buildAnalysisPrompt(sessionLog, vocabulary = []) {
     '- "key" is a snake_case topic name of 1-3 words naming WHAT the preference is about: test_runner, docs_style, commit_format, error_handling. Never a generic word like "preference" or "pattern".',
     '- "value" is a short canonical phrase (at most ~6 words) naming the preferred choice: "vitest", "negative_space_documentation", "tests in same commit". Never a full sentence.',
     "- The same real-world preference must always produce the same key and the same value, so it reinforces instead of fragmenting.",
+    "",
+    'Allowed keys \u2014 every "key" you emit MUST be one of these exact snake_case keys for its category. Map each observation onto the nearest allowed key rather than inventing a new one:',
+    `- interactionPatterns (category interactionStyle): ${ALLOWED_KEYS.interactionStyle.join(", ")}`,
+    `- codingPreferences (category codingPreferences): ${ALLOWED_KEYS.codingPreferences.join(", ")}`,
+    `- corrections with category emotionalSignals: ${ALLOWED_KEYS.emotionalSignals.join(", ")}`,
     ...vocabularySection,
     "",
     'Corrections: ALSO extract corrections \u2014 moments where the user contradicted, overrode, or re-edited away a previously suggested or observed preference. The redacted user messages in the session log (the "userMessages" field) are the primary evidence source. Return an empty "corrections" array if there are none.',
@@ -14626,6 +14675,28 @@ function buildAnalysisPrompt(sessionLog, vocabulary = []) {
 var DETAIL_MAX_LENGTH = 500;
 function truncateDetail(text) {
   return text.length > DETAIL_MAX_LENGTH ? `${text.slice(0, DETAIL_MAX_LENGTH)}\u2026` : text;
+}
+function warnUnknownKeys(model) {
+  const check2 = (entries, category) => {
+    const allowed = ALLOWED_KEYS[category];
+    for (const entry of entries) {
+      if (typeof entry !== "string" && !allowed.includes(entry.key)) {
+        console.warn(
+          `[tom-swe] analyzer emitted out-of-vocabulary ${category} key "${entry.key}"; allowed keys: ${allowed.join(", ")}`
+        );
+      }
+    }
+  };
+  check2(model.interactionPatterns, "interactionStyle");
+  check2(model.codingPreferences, "codingPreferences");
+  for (const correction of model.corrections ?? []) {
+    const allowed = ALLOWED_KEYS[correction.category];
+    if (!allowed.includes(correction.key)) {
+      console.warn(
+        `[tom-swe] analyzer emitted out-of-vocabulary ${correction.category} correction key "${correction.key}"; allowed keys: ${allowed.join(", ")}`
+      );
+    }
+  }
 }
 function extractFirstJsonObject(text) {
   const start = text.indexOf("{");
@@ -14695,7 +14766,8 @@ function parseAnalysisOutput(stdout, expectedSessionId) {
     return {
       ok: false,
       reason: "no-json-found",
-      detail: truncateDetail(`no JSON object in output: ${modelText}`)
+      detail: truncateDetail(`no JSON object in output: ${modelText}`),
+      dropped: 0
     };
   }
   let candidate;
@@ -14706,7 +14778,8 @@ function parseAnalysisOutput(stdout, expectedSessionId) {
     return {
       ok: false,
       reason: "invalid-json",
-      detail: truncateDetail(message)
+      detail: truncateDetail(message),
+      dropped: 0
     };
   }
   const parsed = SessionModelSchema.safeParse(candidate);
@@ -14714,19 +14787,24 @@ function parseAnalysisOutput(stdout, expectedSessionId) {
     return {
       ok: false,
       reason: "schema-mismatch",
-      detail: truncateDetail(parsed.error.message)
+      detail: truncateDetail(parsed.error.message),
+      dropped: 0
     };
   }
+  const model = { ...parsed.data, sessionId: expectedSessionId };
+  warnUnknownKeys(model);
   return {
     ok: true,
-    model: { ...parsed.data, sessionId: expectedSessionId },
+    model,
     tokensUsed,
-    path: "llm"
+    path: "llm",
+    dropped: 0
   };
 }
 async function analyzeSessionWithLlm(sessionLog, model, options = {}) {
   const timeoutMs = options.timeoutMs ?? LLM_ANALYSIS_TIMEOUT_MS;
-  const prompt = buildAnalysisPrompt(sessionLog, options.vocabulary ?? []);
+  const { sessionLog: boundedLog, dropped } = boundSessionLog(sessionLog);
+  const prompt = buildAnalysisPrompt(boundedLog, options.vocabulary ?? []);
   return new Promise((resolve) => {
     let settled = false;
     let timer = null;
@@ -14738,7 +14816,7 @@ async function analyzeSessionWithLlm(sessionLog, model, options = {}) {
       if (timer !== null) {
         clearTimeout(timer);
       }
-      resolve(result);
+      resolve({ ...result, dropped });
     };
     let child;
     try {
@@ -15342,6 +15420,16 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
     vocabulary
   });
   const analysisDurationMs = Date.now() - analysisStartedAt;
+  if (llmResult.dropped > 0) {
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "analysis-log-truncated",
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: { dropped: llmResult.dropped }
+    });
+  }
   let extracted;
   if (llmResult.ok) {
     extracted = llmResult.model;
