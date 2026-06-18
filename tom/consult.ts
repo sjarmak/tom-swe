@@ -100,8 +100,11 @@ function buildSuggestionFromUserModel(
 
   // Promoted preferences already live in a CLAUDE.md marker block; a
   // suggestion built solely from them would double-inject, so skip them.
+  // emotionalSignals (frustration/satisfaction/urgency) are not actionable
+  // preferences and are excluded here to mirror the SessionStart injection
+  // filter — consultation stays focused on coding/interaction signal.
   const unpromoted = userModel.preferencesClusters.filter(
-    (p) => p.promoted !== true
+    (p) => p.promoted !== true && p.category !== 'emotionalSignals'
   )
   if (unpromoted.length === 0) {
     return null

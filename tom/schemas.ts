@@ -35,9 +35,12 @@ const SatisfactionSignalsSchema = z.strictObject({
 /**
  * The three preference categories tracked by the ToM system.
  *
- * - interactionStyle: verbosity, questionTiming, responseLength
- * - codingPreferences: language, libraries, testingApproach, architecturePatterns, namingConventions
- * - emotionalSignals: frustration, satisfaction, urgency, mode
+ * Allowed keys per category are the single source of truth in ALLOWED_KEYS
+ * (tom/llm-analyze.ts); kept in sync here for reference:
+ * - interactionStyle: verbosity, question_timing, response_length
+ * - codingPreferences: language, libraries, test_runner, testing_approach,
+ *   architecture_patterns, naming_conventions, docs_style, commit_format, error_handling
+ * - emotionalSignals: frustration, satisfaction, urgency
  */
 export const PreferenceCategorySchema = z.enum([
   'interactionStyle',

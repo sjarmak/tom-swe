@@ -518,6 +518,59 @@ describe('analyzeCompletedSession', () => {
     expect(entry['sessionId']).toBe('llm-success-test')
   })
 
+  it('logs analysis-log-truncated with the dropped count when the prompt was bounded', async () => {
+    writeSessionFile('truncation-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'truncation-test',
+        intent: 'bounded',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [],
+      },
+      tokensUsed: 10,
+      path: 'llm',
+      dropped: 7,
+    })
+
+    const result = await analyzeCompletedSession('truncation-test')
+    expect(result.success).toBe(true)
+
+    const truncEntry = readUsageEntries().find(
+      (e) => e['operation'] === 'analysis-log-truncated'
+    )
+    expect(truncEntry).toBeDefined()
+    expect(truncEntry?.['sessionId']).toBe('truncation-test')
+    const detail = (truncEntry?.['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['dropped']).toBe(7)
+  })
+
+  it('emits no analysis-log-truncated entry when nothing was dropped', async () => {
+    writeSessionFile('no-truncation-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'no-truncation-test',
+        intent: 'within budget',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: false, urgency: 'low' },
+        corrections: [],
+      },
+      tokensUsed: 10,
+      path: 'llm',
+      dropped: 0,
+    })
+
+    await analyzeCompletedSession('no-truncation-test')
+
+    expect(
+      readUsageEntries().some((e) => e['operation'] === 'analysis-log-truncated')
+    ).toBe(false)
+  })
+
   it('passes the configured memoryUpdate model to the LLM analyzer', async () => {
     const tomDir = path.join(tempDir, '.claude', 'tom')
     fs.mkdirSync(tomDir, { recursive: true })
