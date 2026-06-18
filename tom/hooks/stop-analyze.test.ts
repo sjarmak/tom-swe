@@ -967,9 +967,25 @@ describe('analyzeCompletedSession', () => {
     const updatedModel = JSON.parse(fs.readFileSync(userModelPath, 'utf-8'))
     // Should still have preferences (merged from existing + new session)
     expect(updatedModel.preferencesClusters.length).toBeGreaterThan(0)
-    // Should preserve summaries
-    expect(updatedModel.interactionStyleSummary).toBe('prefers concise')
-    expect(updatedModel.codingStyleSummary).toBe('typescript focused')
+    // Summaries are now derived deterministically from the resolved clusters
+    // (not carried over verbatim). No interactionStyle cluster exists, so
+    // that summary is empty; both summaries are always strings.
+    expect(typeof updatedModel.interactionStyleSummary).toBe('string')
+    expect(typeof updatedModel.codingStyleSummary).toBe('string')
+    expect(updatedModel.interactionStyleSummary).toBe('')
+    // Every entry in a derived summary must come from a resolved
+    // codingPreferences cluster — never the stale carried-over text.
+    expect(updatedModel.codingStyleSummary).not.toContain('focused')
+    for (const cluster of updatedModel.preferencesClusters) {
+      if (
+        cluster.category === 'codingPreferences' &&
+        cluster.confidence >= 0.2
+      ) {
+        expect(updatedModel.codingStyleSummary).toContain(
+          `${cluster.key}: ${cluster.value}`
+        )
+      }
+    }
   })
 })
 

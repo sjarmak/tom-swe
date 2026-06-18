@@ -10,6 +10,42 @@ import {
 
 const DEFAULT_DECAY_DAYS = 30
 
+// Minimum confidence a resolved cluster must carry to appear in a style
+// summary. Below this the signal is too weak to surface to the model.
+const SUMMARY_CONFIDENCE_THRESHOLD = 0.2
+
+// Cap on how many clusters a single summary lists, so the rendered string
+// stays bounded regardless of how many preferences accumulate.
+const SUMMARY_MAX_ENTRIES = 5
+
+/**
+ * Renders a deterministic, human-readable style summary from resolved
+ * clusters of one category.
+ *
+ * Mechanical only (ZFC): filter to the category and confidence threshold,
+ * sort confidence descending with key ascending as the tiebreak, take the
+ * top N, and join "key: value" pairs. No category clusters above threshold
+ * yields an empty string (the schema requires a string, not null).
+ */
+function summarizeCategory(
+  clusters: readonly PreferenceCluster[],
+  category: string
+): string {
+  return clusters
+    .filter(
+      (c) => c.category === category && c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
+    )
+    .slice()
+    .sort((a, b) =>
+      b.confidence !== a.confidence
+        ? b.confidence - a.confidence
+        : a.key.localeCompare(b.key)
+    )
+    .slice(0, SUMMARY_MAX_ENTRIES)
+    .map((c) => `${c.key}: ${c.value}`)
+    .join('; ')
+}
+
 /**
  * Extracts preference observations from a SessionModel.
  *
@@ -119,11 +155,12 @@ export function aggregateSessionIntoModel(
   // Step 5: Resolve conflicts
   const resolved = resolveConflicts(corrected)
 
-  // Step 6: Return new UserModel
+  // Step 6: Derive style summaries deterministically from resolved clusters
+  // (mechanical, no LLM) and return a new UserModel.
   return {
     preferencesClusters: resolved,
-    interactionStyleSummary: currentModel.interactionStyleSummary,
-    codingStyleSummary: currentModel.codingStyleSummary,
+    interactionStyleSummary: summarizeCategory(resolved, 'interactionStyle'),
+    codingStyleSummary: summarizeCategory(resolved, 'codingPreferences'),
     projectOverrides: { ...currentModel.projectOverrides },
   }
 }
