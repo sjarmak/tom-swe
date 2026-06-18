@@ -13,12 +13,39 @@
 
 import { spawn } from 'node:child_process'
 
-import type { SessionLog, SessionModel } from './schemas.js'
+import type { PreferenceCategory, SessionLog, SessionModel } from './schemas.js'
 import { SessionModelSchema } from './schemas.js'
 
 // --- Types ---
 
 export const LLM_ANALYSIS_TIMEOUT_MS = 45_000
+
+/**
+ * The fixed snake_case key vocabulary the analyzer may emit, per category.
+ * Single source of truth: the prompt is built from this constant (not a
+ * duplicated literal), and parseAnalysisOutput normalizes observed keys
+ * against it.
+ *
+ * Constraining the vocabulary keeps preferences reinforcing across sessions
+ * instead of fragmenting into near-synonym keys. Categories are exactly the
+ * three in PreferenceCategorySchema. emotionalSignals keys are the fixed
+ * satisfactionSignals fields (frustration / satisfaction / urgency).
+ */
+export const ALLOWED_KEYS: Readonly<Record<PreferenceCategory, readonly string[]>> = {
+  interactionStyle: ['verbosity', 'question_timing', 'response_length'],
+  codingPreferences: [
+    'language',
+    'libraries',
+    'test_runner',
+    'testing_approach',
+    'architecture_patterns',
+    'naming_conventions',
+    'docs_style',
+    'commit_format',
+    'error_handling',
+  ],
+  emotionalSignals: ['frustration', 'satisfaction', 'urgency'],
+}
 
 export type LlmAnalysisFailureReason =
   | 'spawn-error'
@@ -93,6 +120,11 @@ export function buildAnalysisPrompt(
     '- "key" is a snake_case topic name of 1-3 words naming WHAT the preference is about: test_runner, docs_style, commit_format, error_handling. Never a generic word like "preference" or "pattern".',
     '- "value" is a short canonical phrase (at most ~6 words) naming the preferred choice: "vitest", "negative_space_documentation", "tests in same commit". Never a full sentence.',
     '- The same real-world preference must always produce the same key and the same value, so it reinforces instead of fragmenting.',
+    '',
+    'Allowed keys — every "key" you emit MUST be one of these exact snake_case keys for its category. Map each observation onto the nearest allowed key rather than inventing a new one:',
+    `- interactionPatterns (category interactionStyle): ${ALLOWED_KEYS.interactionStyle.join(', ')}`,
+    `- codingPreferences (category codingPreferences): ${ALLOWED_KEYS.codingPreferences.join(', ')}`,
+    `- corrections with category emotionalSignals: ${ALLOWED_KEYS.emotionalSignals.join(', ')}`,
     ...vocabularySection,
     '',
     'Corrections: ALSO extract corrections — moments where the user contradicted, overrode, or re-edited away a previously suggested or observed preference. The redacted user messages in the session log (the "userMessages" field) are the primary evidence source. Return an empty "corrections" array if there are none.',
@@ -110,6 +142,41 @@ const DETAIL_MAX_LENGTH = 500
 
 function truncateDetail(text: string): string {
   return text.length > DETAIL_MAX_LENGTH ? `${text.slice(0, DETAIL_MAX_LENGTH)}…` : text
+}
+
+/**
+ * Warns (once per offending key) when the model emitted a key outside the
+ * fixed ALLOWED_KEYS vocabulary for a category. This is advisory only: the
+ * model is never crashed or discarded over an unknown key — out-of-vocabulary
+ * keys still flow through to storage so no observation is silently lost. The
+ * warning surfaces vocabulary drift for the prompt to tighten over time.
+ */
+function warnUnknownKeys(model: SessionModel): void {
+  const check = (
+    entries: SessionModel['interactionPatterns'],
+    category: PreferenceCategory
+  ): void => {
+    const allowed = ALLOWED_KEYS[category]
+    for (const entry of entries) {
+      if (typeof entry !== 'string' && !allowed.includes(entry.key)) {
+        console.warn(
+          `[tom-swe] analyzer emitted out-of-vocabulary ${category} key "${entry.key}"; ` +
+            `allowed keys: ${allowed.join(', ')}`
+        )
+      }
+    }
+  }
+  check(model.interactionPatterns, 'interactionStyle')
+  check(model.codingPreferences, 'codingPreferences')
+  for (const correction of model.corrections ?? []) {
+    const allowed = ALLOWED_KEYS[correction.category]
+    if (!allowed.includes(correction.key)) {
+      console.warn(
+        `[tom-swe] analyzer emitted out-of-vocabulary ${correction.category} correction key ` +
+          `"${correction.key}"; allowed keys: ${allowed.join(', ')}`
+      )
+    }
+  }
 }
 
 /**
@@ -228,9 +295,11 @@ export function parseAnalysisOutput(
 
   // Pin the session id mechanically: downstream storage keys on it, and the
   // log being analyzed is the single source of truth for identity.
+  const model: SessionModel = { ...parsed.data, sessionId: expectedSessionId }
+  warnUnknownKeys(model)
   return {
     ok: true,
-    model: { ...parsed.data, sessionId: expectedSessionId },
+    model,
     tokensUsed,
     path: 'llm',
   }
