@@ -1,0 +1,383 @@
+// The `tom-swe` Theory-of-Mind plugin for Claude Code.
+//
+// tom-swe observes how one user drives Claude Code and builds a confidence-
+// scored model of their preferences across sessions. It ships as a Claude Code
+// plugin: four lifecycle hooks (SessionStart / PostToolUse / UserPromptSubmit /
+// Stop) plus a set of management skills, all bundled by esbuild into dist/ and
+// registered via hooks/hooks.json. Memory lives as plain JSON under
+// ~/.claude/tom/ in three tiers.
+//
+// Delivery state is tagged from real evidence (see spec.c4 for the legend).
+// The single most important truth this model surfaces: the namesake ToM
+// *sub-agent* (agents/tom-agent.md + tom/agent/) is built but NOT spawned by
+// any runtime path — the live consultation is a local BM25 lookup, and the
+// only model call is the headless `claude -p` analysis on Stop. That gap is
+// tagged #planned + #risk rather than hidden.
+//
+// Elements carry `link`s to their source so a reviewer can jump from any box
+// straight to the code.
+
+model {
+
+  user = actor 'Developer (the modeled user)' {
+    description 'The single human whose coding preferences and interaction style tom-swe learns; drives Claude Code sessions'
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // External systems — the harness tom-swe plugs into, and the inference it
+  // borrows. tom-swe owns no servers; it runs inside the user's Claude Code.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  claudeCode = externalSystem 'Claude Code harness' {
+    description 'The CLI agent host. Fires lifecycle hooks, accepts additionalContext injection, runs the main coding agent the user talks to'
+    link ../hooks/hooks.json 'hooks.json — hook registration'
+    link ../.claude-plugin/plugin.json 'plugin.json — plugin manifest'
+
+    mainAgent = externalSystem 'Main coding agent' {
+      description 'The conversation the user actually has; receives ToM context as background observation, never as instructions'
+    }
+    settings = datastore 'CLAUDE.md memory files' {
+      description 'Project ./CLAUDE.md and global ~/.claude/CLAUDE.md — promotion targets for stable preferences (marker-bounded block)'
+    }
+    transcript = datastore 'Session transcript (JSONL)' {
+      description 'The harness transcript; read at Stop to attribute host-session token usage'
+    }
+  }
+
+  inference = externalSystem 'Headless Claude (inference)' {
+    description 'A `claude -p --output-format json` subprocess spawned only on Stop, for session analysis (memoryUpdate model). Heuristic fallback on any failure'
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // The tom-swe system.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  tom = system 'tom-swe' {
+    description 'Theory-of-Mind plugin: learns one user across sessions and injects relevant preferences when a prompt is ambiguous'
+    link ../README.md 'README — system overview'
+    link ../CLAUDE.md 'CLAUDE.md — conventions'
+
+    // ── Integration surface: the four lifecycle hooks ──────────────────────
+    hooks = container 'Lifecycle hooks' {
+      description 'tom/hooks/ — the four Claude Code hook entry points, bundled to dist/. The only code the harness invokes directly'
+      technology 'TypeScript / Node'
+      link ../tom/hooks 'tom/hooks/'
+      link ../hooks/hooks.json 'hooks.json'
+
+      sessionStart = component 'SessionStart hook' {
+        #built
+        description 'Injects a compact summary of confident, unpromoted preferences as additionalContext at session start'
+        link ../tom/hooks/session-start.ts 'session-start.ts'
+      }
+      promptSubmit = component 'UserPromptSubmit hook' {
+        #built
+        description 'Blocking, per-prompt: redacts + stores the prompt to Tier 1, runs ambiguity detection, injects preference context above threshold. Latency is a first-class metric'
+        link ../tom/hooks/user-prompt-submit.ts 'user-prompt-submit.ts'
+      }
+      captureInteraction = component 'PostToolUse hook' {
+        #built
+        description 'Async, non-blocking: appends sanitized tool name + parameter shape + outcome to the Tier 1 session log; resolves git branch once'
+        link ../tom/hooks/capture-interaction.ts 'capture-interaction.ts'
+      }
+      stopAnalyze = component 'Stop hook' {
+        #evolving
+        description 'Async, debounced 90s: orchestrates the full analysis → rebuild → promote → reindex → prune pipeline. Fires per turn-end, so rebuild semantics keep Tier 3 idempotent'
+        link ../tom/hooks/stop-analyze.ts 'stop-analyze.ts'
+      }
+      hookInput = component 'hook-input + exclusion guard' {
+        #built
+        description 'Parses permissive hook stdin; exits silently for excluded sessions (TOM_SWE_INTERNAL / TOM_SWE_DISABLE / GC_AGENT) so agent runs never train the user model'
+        link ../tom/hooks/hook-input.ts 'hook-input.ts'
+      }
+    }
+
+    // ── Reasoning core: ambiguity + local consultation + LLM analysis ──────
+    reasoning = container 'ToM reasoning core' {
+      description 'tom/ — turns prompts into ambiguity scores, retrieves matching memory, and extracts session models. Two extraction paths kept separate'
+      technology 'TypeScript / Node'
+      link ../tom 'tom/'
+
+      ambiguity = component 'ambiguity detector' {
+        #evolving
+        description 'Pure heuristics over prompt text (short-vague / preference-sensitive / no-user-model triggers) → score vs configured threshold. <50ms, no IO'
+        link ../tom/ambiguity.ts 'ambiguity.ts'
+      }
+      consult = component 'consultation pipeline' {
+        #evolving
+        #risk
+        description 'Detect → BM25 search → user-model fallback → ToMSuggestion. RISK: fully local; the paper-described interactive ToM sub-agent reasoning is NOT on this path (see tom-agent)'
+        link ../tom/consult.ts 'consult.ts'
+      }
+      bm25 = component 'BM25 retrieval + index' {
+        #built
+        description 'Tier-weighted keyword search (Tier 3 user model 3x, Tier 2 2x, Tier 1 1x); index rebuilt on Stop and cached to disk'
+        link ../tom/bm25.ts 'bm25.ts'
+      }
+      llmAnalyze = component 'headless LLM analysis' {
+        #evolving
+        #risk
+        description 'Spawns `claude -p` to extract a Tier 2 model with key/value discipline + memory-poisoning guard. RISK: depends on an external CLI shape and an env-only recursion guard'
+        link ../tom/llm-analyze.ts 'llm-analyze.ts'
+      }
+      sessionExtract = component 'heuristic extractor (fallback)' {
+        #built
+        description 'Deterministic Tier 2 extraction from tool patterns; the loud fallback whenever the LLM path fails (logged with typed reason)'
+        link ../tom/session-extract.ts 'session-extract.ts'
+      }
+      routing = component 'model routing + telemetry log' {
+        #built
+        description 'Maps operation → configured model; appends one versioned JSON line per operation to usage.log via logUsage'
+        link ../tom/routing.ts 'routing.ts'
+      }
+      telemetry = component 'telemetry rollup' {
+        #built
+        description 'Reads usage.log and computes the acceptance/cost summary consumed by /tom-status and external harnesses'
+        link ../tom/telemetry.ts 'telemetry.ts'
+      }
+      transcriptUsage = component 'transcript usage parser' {
+        #built
+        description 'Parses host-session token usage (dedup by message id, sidechains included) from the harness transcript at Stop'
+        link ../tom/transcript-usage.ts 'transcript-usage.ts'
+      }
+    }
+
+    // ── Preference modeling: aggregation, rebuild, decay, promotion ────────
+    modeling = container 'Preference modeling' {
+      description 'tom/ — builds and maintains the Tier 3 user model: confidence math, decay, correction penalties, and graduation into CLAUDE.md'
+      technology 'TypeScript / Node'
+      link ../tom 'tom/'
+
+      preferences = component 'preference math' {
+        #built
+        description 'Immutable confidence updates: reinforcement on exact key/value match, decay by half-life, correction penalty multiplier'
+        link ../tom/preferences.ts 'preferences.ts'
+      }
+      aggregation = component 'session → user aggregation' {
+        #built
+        description 'Folds one Tier 2 session model into the Tier 3 cluster set (pure, returns a new model)'
+        link ../tom/aggregation.ts 'aggregation.ts'
+      }
+      rebuild = component 'idempotent Tier 3 rebuild' {
+        #evolving
+        description 'Rebuilds the whole user model from ALL Tier 2 models with endedAt-grounded decay, so re-analyzing a session replaces (not inflates) its contribution'
+        link ../tom/rebuild.ts 'rebuild.ts'
+      }
+      promotion = component 'CLAUDE.md promotion' {
+        #evolving
+        #risk
+        description 'Graduates stable high-confidence prefs into a marker-bounded CLAUDE.md block (regenerated wholesale = merge + retirement). RISK: writes into the user’s host memory files; category/cap/budget gates bound the blast radius'
+        link ../tom/promotion.ts 'promotion.ts'
+      }
+      promotionGate = component 'derivability gate' {
+        #evolving
+        description 'Headless-model judgment: drops candidates already derivable from the repo; corrections bypass it (conservative fallback when judgment unavailable)'
+        link ../tom/promotion-gate.ts 'promotion-gate.ts'
+      }
+      pruning = component 'retention pruning' {
+        #built
+        description 'Drops Tier 1/2 files + matching history snapshots past maxSessionsRetained; rebuilds the index after'
+        link ../tom/pruning.ts 'pruning.ts'
+      }
+    }
+
+    // ── Persistence: 3-tier JSON store under ~/.claude/tom/ ────────────────
+    store = container 'ToM memory store' {
+      description '~/.claude/tom/ — plain JSON, three tiers + index + telemetry. All data stays local; secrets redacted before write'
+      technology 'JSON on local filesystem'
+      link ../tom/memory-io.ts 'memory-io.ts'
+
+      tier1 = datastore 'Tier 1 — session logs' {
+        #built
+        description 'sessions/<id>.json: tool calls, parameter shapes, outcomes, redacted prompt text, cwd + git branch join fields'
+        link ../tom/schemas.ts 'schemas.ts — SessionLog'
+      }
+      tier2 = datastore 'Tier 2 — session models' {
+        #built
+        description 'session-models/<id>.json: intent, interaction/coding patterns, satisfaction signals, corrections, endedAt'
+        link ../tom/schemas.ts 'schemas.ts — SessionModel'
+      }
+      tier3 = datastore 'Tier 3 — user model' {
+        #evolving
+        description 'user-model.json: confidence-scored preference clusters + style summaries; rebuilt each Stop. Memory horizon = Tier 2 retention window'
+        link ../tom/schemas.ts 'schemas.ts — UserModel'
+      }
+      history = datastore 'user-model-history snapshots' {
+        #built
+        description 'user-model-history/<id>.json: model state as-of each past session, for temporal leave-one-out evaluation; pruned with sessions'
+        link ../tom/hooks/stop-analyze.ts 'stop-analyze.ts — snapshot step'
+      }
+      usageLog = datastore 'usage.log (telemetry)' {
+        #built
+        description 'One versioned JSON line per operation; the external-consumer surface for eval harnesses and /tom-status'
+        link ../tom/routing.ts 'routing.ts — UsageLogEntrySchema'
+      }
+      memoryIo = component 'memory-io (tier read/write)' {
+        #built
+        description 'Schema-validated read/write of all three tiers; global / project / merged scoping'
+        link ../tom/memory-io.ts 'memory-io.ts'
+      }
+    }
+
+    // ── Privacy boundary: redaction enforced before any write ──────────────
+    privacy = container 'Privacy & redaction' {
+      description 'tom/ — strips secrets and bulky content at the system boundary before anything is persisted'
+      technology 'TypeScript / Node'
+      link ../tom/redaction.ts 'redaction.ts'
+
+      redaction = component 'prompt redaction' {
+        #built
+        description 'Strips code blocks and query-string URLs from prompt text before Tier 1 storage'
+        link ../tom/redaction.ts 'redaction.ts'
+      }
+      secrets = component 'secret detection + truncation' {
+        #built
+        description 'Pattern-matches secret-shaped tokens → REDACTED; truncates long values to 200 chars'
+        link ../tom/secrets.ts 'secrets.ts'
+      }
+      gitignore = component 'gitignore guard' {
+        #built
+        description 'Keeps generated store artifacts out of version control'
+        link ../tom/gitignore.ts 'gitignore.ts'
+      }
+    }
+
+    // ── Management surface: the user-facing skills ─────────────────────────
+    skills = container 'Management skills' {
+      description 'skills/ + tom/skills/ — namespaced slash commands for setup, inspection, export, and deletion of ToM memory'
+      technology 'TypeScript / Node + SKILL.md'
+      link ../skills 'skills/'
+      link ../tom/skills 'tom/skills/'
+
+      setup = component 'tom-setup' {
+        #built
+        description 'Creates ~/.claude/tom/config.json with defaults and enables ToM'
+        link ../tom/skills/tom-setup.ts 'tom-setup.ts'
+        link ../skills/tom-setup/SKILL.md 'SKILL.md'
+      }
+      status = component 'tom-status' {
+        #built
+        description 'Model state, storage stats, top preferences, telemetry rollup'
+        link ../tom/skills/tom-status.ts 'tom-status.ts'
+        link ../skills/tom-status/SKILL.md 'SKILL.md'
+      }
+      inspect = component 'tom-inspect' {
+        #built
+        description 'Deep inspection of raw session logs, models, and data'
+        link ../tom/skills/tom-inspect.ts 'tom-inspect.ts'
+        link ../skills/tom-inspect/SKILL.md 'SKILL.md'
+      }
+      reset = component 'tom-reset' {
+        #built
+        description 'Clears all ToM memory and removes promotion marker blocks (confirmation required)'
+        link ../tom/skills/tom-reset.ts 'tom-reset.ts'
+        link ../skills/tom-reset/SKILL.md 'SKILL.md'
+      }
+      forgetExport = component 'tom-forget / tom-export' {
+        #built
+        description 'Selectively remove a preference (and reindex) or export the user model as JSON'
+        link ../tom/skills/tom-forget-export.ts 'tom-forget-export.ts'
+        link ../skills/tom-export/SKILL.md 'SKILL.md'
+      }
+    }
+
+    // ── Planned: the interactive ToM sub-agent (built, but unwired) ────────
+    agent = container 'ToM reasoning sub-agent' {
+      #planned
+      #risk
+      description 'agents/tom-agent.md + tom/agent/: a Theory-of-Mind sub-agent with 5 memory tools and a 3-op budget. RISK: defined and unit-tested, but NOT spawned by any hook — the live path uses local BM25 + heuristic/LLM extraction instead. Only its buildMemoryIndex helper is wired in'
+      link ../agents/tom-agent.md 'tom-agent.md — system prompt'
+      link ../tom/agent/config.ts 'agent/config.ts'
+
+      agentTools = component 'agent tools (5)' {
+        #planned
+        description 'search_memory / read_memory_file / analyze_session / initialize_user_profile / give_suggestions — implemented; only buildMemoryIndex is called at runtime'
+        link ../tom/agent/tools.ts 'agent/tools.ts'
+      }
+      agentConfig = component 'agent config + op budget' {
+        #planned
+        description 'haiku, temp 0.1, max 3 memory operations; references agents/tom-agent.md as the system prompt'
+        link ../tom/agent/config.ts 'agent/config.ts'
+      }
+    }
+
+    // ── Research track ─────────────────────────────────────────────────────
+    consultModel = container 'Model-backed consultation' {
+      #research
+      description 'config models.consultation = sonnet is reserved but unused: consultation runs locally today. A model-spawning consultation path is the research direction the sub-agent enables'
+      link ../tom/config.ts 'config.ts — models.consultation'
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Relationships.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // The user drives the harness; ToM rides its hooks.
+  user -> claudeCode 'codes in a session'
+  claudeCode -> tom.hooks 'fires SessionStart / PostToolUse / UserPromptSubmit / Stop'
+
+  // SessionStart: inject the learned model.
+  tom.hooks.sessionStart -> tom.store.tier3 'reads merged user model'
+  tom.hooks.sessionStart -> claudeCode.mainAgent 'injects confident-preference summary (additionalContext)'
+
+  // UserPromptSubmit: capture + ambiguity consultation.
+  tom.hooks.promptSubmit -> tom.privacy.redaction 'redact prompt before storage'
+  tom.hooks.promptSubmit -> tom.store.tier1 'append redacted user message'
+  tom.hooks.promptSubmit -> tom.reasoning.consult 'consult on the prompt'
+  tom.reasoning.consult -> tom.reasoning.ambiguity 'score ambiguity'
+  tom.reasoning.consult -> tom.reasoning.bm25 'tier-weighted search'
+  tom.reasoning.consult -> tom.store.tier3 'user-model fallback (unpromoted prefs)'
+  tom.hooks.promptSubmit -> claudeCode.mainAgent 'inject suggestion as background observation'
+
+  // PostToolUse: capture interaction metadata.
+  tom.hooks.captureInteraction -> tom.privacy.secrets 'sanitize parameter shapes'
+  tom.hooks.captureInteraction -> tom.store.tier1 'append interaction entry'
+
+  // Stop: the full analysis pipeline.
+  tom.hooks.stopAnalyze -> tom.reasoning.transcriptUsage 'parse host-session token usage'
+  tom.hooks.stopAnalyze -> claudeCode.transcript 'read transcript JSONL'
+  tom.hooks.stopAnalyze -> tom.store.tier1 'read raw session log'
+  tom.hooks.stopAnalyze -> tom.reasoning.llmAnalyze 'extract Tier 2 (LLM first)'
+  tom.reasoning.llmAnalyze -> inference 'claude -p analysis'
+  tom.hooks.stopAnalyze -> tom.reasoning.sessionExtract 'heuristic fallback on LLM failure'
+  tom.hooks.stopAnalyze -> tom.store.tier2 'write session model'
+  tom.hooks.stopAnalyze -> tom.modeling.rebuild 'rebuild Tier 3 from all Tier 2'
+  tom.modeling.rebuild -> tom.modeling.preferences 'decay + reinforce + penalize'
+  tom.hooks.stopAnalyze -> tom.modeling.promotion 'promote stable prefs'
+  tom.modeling.promotion -> tom.modeling.promotionGate 'derivability judgment'
+  tom.modeling.promotionGate -> inference 'is this derivable from the repo?'
+  tom.modeling.promotion -> claudeCode.settings 'write marker block to CLAUDE.md'
+  tom.hooks.stopAnalyze -> tom.store.history 'snapshot post-session model'
+  tom.hooks.stopAnalyze -> tom.reasoning.bm25 'rebuild + cache index'
+  tom.hooks.stopAnalyze -> tom.modeling.pruning 'prune past retention cap'
+
+  // Telemetry — every operation logs.
+  tom.reasoning.routing -> tom.store.usageLog 'one JSON line per operation'
+  tom.reasoning.telemetry -> tom.store.usageLog 'rollup for /tom-status'
+
+  // Store access goes through memory-io.
+  tom.store.memoryIo -> tom.store.tier1 'read/write Tier 1'
+  tom.store.memoryIo -> tom.store.tier2 'read/write Tier 2'
+  tom.store.memoryIo -> tom.store.tier3 'read/write Tier 3'
+
+  // Skills operate on the store.
+  tom.skills.setup -> tom.store 'create config'
+  tom.skills.status -> tom.reasoning.telemetry 'telemetry rollup'
+  tom.skills.inspect -> tom.store 'read all tiers'
+  tom.skills.reset -> tom.store 'delete all memory + marker blocks'
+  tom.skills.forgetExport -> tom.store.tier3 'remove preference / export model'
+
+  // Planned sub-agent wiring (not active).
+  tom.hooks.promptSubmit -> tom.agent 'would consult the ToM sub-agent' {
+    #planned
+  }
+  tom.agent.agentTools -> tom.store 'memory tools over all tiers' {
+    #planned
+  }
+  tom.agent -> claudeCode.mainAgent 'give_suggestions → context' {
+    #planned
+  }
+  tom.consultModel -> tom.agent 'model-backed consultation path' {
+    #research
+  }
+}

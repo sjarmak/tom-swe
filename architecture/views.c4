@@ -1,0 +1,196 @@
+// Views over the tom-swe model. Planned (#planned) and research (#research)
+// elements/relationships are dimmed + dashed so the "what runs vs what is
+// designed-but-unwired" split is readable at a glance.
+
+views {
+
+  // Landscape — the whole system in context of the harness and inference.
+  view index {
+    title 'tom-swe — system landscape'
+    include *
+
+    style * {
+      opacity 25%
+    }
+    style element.tag == #built, element.tag == #evolving {
+      opacity 100%
+    }
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+    style element.tag == #research {
+      color indigo
+      border dashed
+    }
+  }
+
+  // The tom-swe system, decomposed into its containers.
+  view tomSystem of tom {
+    title 'tom-swe — containers (built vs planned)'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+    style element.tag == #research {
+      color indigo
+      border dashed
+    }
+  }
+
+  // The four lifecycle hooks — the integration surface with Claude Code.
+  view hooksContainer of tom.hooks {
+    title 'Lifecycle hooks (tom/hooks/) — the Claude Code integration surface'
+    include *
+  }
+
+  // The reasoning core — ambiguity, consultation, extraction.
+  view reasoningContainer of tom.reasoning {
+    title 'ToM reasoning core (tom/) — components'
+    include *
+
+    style element.tag == #evolving {
+      color amber
+    }
+  }
+
+  // Preference modeling — aggregation, rebuild, decay, promotion.
+  view modelingContainer of tom.modeling {
+    title 'Preference modeling — aggregation, rebuild, promotion'
+    include *
+
+    style element.tag == #evolving {
+      color amber
+    }
+  }
+
+  // The 3-tier JSON store.
+  view storeContainer of tom.store {
+    title 'ToM memory store (~/.claude/tom/) — three tiers + index + telemetry'
+    include *
+  }
+
+  // The user-facing management skills.
+  view skillsContainer of tom.skills {
+    title 'Management skills — setup / status / inspect / reset / forget / export'
+    include *
+  }
+
+  // Risks & open questions — the elements that carry a #risk flag, with the
+  // open question stated in each box's description. The things a reviewer
+  // should probe, surfaced rather than discovered mid-meeting.
+  view risks {
+    title 'Risks & open questions'
+    include
+      tom,
+      element.tag == #risk,
+      tom.reasoning,
+      tom.modeling,
+      tom.agent
+
+    style * {
+      opacity 30%
+    }
+    style element.tag == #risk {
+      opacity 100%
+      color red
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Walkthrough flows (dynamic views) — the narrative spine of the review.
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Flow 1 — ambiguity-detected → consultation → response adjustment.
+  dynamic view consultFlow {
+    title 'Walkthrough — ambiguity → ToM consultation → response adjustment'
+    description 'The live runtime path. Fully local: ambiguity is heuristic, retrieval is BM25 over the cached index, and the suggestion is injected as background observation — never as instructions, never blocking the prompt.'
+
+    user -> claudeCode 'submits an ambiguous prompt'
+    claudeCode -> tom.hooks.promptSubmit 'UserPromptSubmit'
+    tom.hooks.promptSubmit -> tom.privacy.redaction 'redact prompt'
+    tom.hooks.promptSubmit -> tom.store.tier1 'append redacted message'
+    tom.hooks.promptSubmit -> tom.reasoning.consult 'consult'
+    tom.reasoning.consult -> tom.reasoning.ambiguity 'score vs threshold'
+    tom.reasoning.consult -> tom.reasoning.bm25 'tier-weighted search'
+    tom.reasoning.bm25 -> tom.reasoning.consult 'ranked candidates'
+    tom.reasoning.consult -> tom.store.tier3 'user-model fallback if empty'
+    tom.reasoning.consult -> tom.reasoning.routing 'log ambiguity-consultation'
+    tom.hooks.promptSubmit -> claudeCode.mainAgent 'inject preference context'
+    claudeCode.mainAgent -> user 'response adjusted to learned preference'
+  }
+
+  // Flow 2 — Stop-hook analysis pipeline (the learning loop).
+  dynamic view analyzeFlow {
+    title 'Walkthrough — Stop-hook analysis & model rebuild'
+    description 'Stop fires per turn-end, debounced 90s. The LLM path runs first; any failure falls back loudly to the heuristic extractor. Tier 3 is REBUILT from all Tier 2 (idempotent), not incremented — re-analysis replaces a session’s contribution.'
+
+    claudeCode -> tom.hooks.stopAnalyze 'Stop (per turn-end)'
+    tom.hooks.stopAnalyze -> tom.reasoning.transcriptUsage 'parse host token usage'
+    tom.hooks.stopAnalyze -> tom.store.tier1 'read raw session log'
+    tom.hooks.stopAnalyze -> tom.reasoning.llmAnalyze 'extract Tier 2 model'
+    tom.reasoning.llmAnalyze -> inference 'claude -p (memoryUpdate model)'
+    tom.reasoning.llmAnalyze -> tom.reasoning.sessionExtract 'fallback on failure'
+    tom.hooks.stopAnalyze -> tom.store.tier2 'write session model'
+    tom.hooks.stopAnalyze -> tom.modeling.rebuild 'rebuild Tier 3 from all Tier 2'
+    tom.modeling.rebuild -> tom.modeling.preferences 'decay + reinforce + penalize'
+    tom.hooks.stopAnalyze -> tom.store.tier3 'write rebuilt user model'
+    tom.hooks.stopAnalyze -> tom.reasoning.bm25 'rebuild + cache index'
+    tom.hooks.stopAnalyze -> tom.modeling.pruning 'prune past retention cap'
+  }
+
+  // Flow 3 — preference promotion into CLAUDE.md.
+  dynamic view promotionFlow {
+    title 'Walkthrough — preference promotion into CLAUDE.md'
+    description 'Crossing confidence × sessions is necessary but not sufficient: a category gate, a derivability gate (corrections bypass), a 10-line cap, and a ~200-line host-file budget all bound what reaches the user’s memory files. The block is regenerated wholesale, so decay below threshold = automatic retirement.'
+
+    tom.hooks.stopAnalyze -> tom.modeling.promotion 'promote stable prefs'
+    tom.modeling.promotion -> tom.store.tier3 'read confident preference clusters'
+    tom.modeling.promotion -> tom.modeling.promotionGate 'derivability judgment'
+    tom.modeling.promotionGate -> inference 'already visible from the repo?'
+    tom.modeling.promotion -> claudeCode.settings 'regenerate marker block'
+    tom.modeling.promotion -> tom.reasoning.routing 'log preference-promotion'
+  }
+
+  // Flow 4 — the planned interactive ToM sub-agent loop (not wired today).
+  dynamic view agentLoop {
+    title 'Walkthrough — planned ToM sub-agent consultation loop'
+    description 'PLANNED. The sub-agent (agents/tom-agent.md) and its 5 memory tools exist and are unit-tested, but no hook spawns it: today consultFlow runs locally instead. This is the path that activates the paper’s interactive Theory-of-Mind reasoning.'
+
+    tom.hooks.promptSubmit -> tom.agent 'consult (ambiguity detected)'
+    tom.agent.agentTools -> tom.store.tier1 'search_memory / read_memory_file'
+    tom.agent.agentTools -> tom.store.tier2 'analyze_session'
+    tom.agent.agentTools -> tom.store.tier3 'read user model'
+    tom.agent -> claudeCode.mainAgent 'give_suggestions → context'
+  }
+
+  // Planned-only lens: the unwired sub-agent + research track in context.
+  view planned {
+    title 'Planned & research work'
+    include
+      tom,
+      tom.agent,
+      tom.agent.*,
+      tom.consultModel,
+      tom.hooks.promptSubmit,
+      tom.reasoning.consult,
+      tom.store.tier3,
+      claudeCode.mainAgent
+
+    style * {
+      opacity 30%
+    }
+    style element.tag == #planned {
+      opacity 100%
+      color muted
+      border dashed
+    }
+    style element.tag == #research {
+      opacity 100%
+      color indigo
+      border dashed
+    }
+  }
+}
