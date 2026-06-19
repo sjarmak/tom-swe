@@ -14820,19 +14820,19 @@ async function analyzeSessionWithLlm(sessionLog, model, options = {}) {
     };
     let child;
     try {
-      child = (0, import_node_child_process.spawn)(
-        "claude",
-        ["-p", prompt, "--model", model, "--output-format", "json"],
-        {
-          env: { ...process.env, TOM_SWE_INTERNAL: "1" },
-          stdio: ["ignore", "pipe", "pipe"]
-        }
-      );
+      child = (0, import_node_child_process.spawn)("claude", ["-p", "--model", model, "--output-format", "json"], {
+        env: { ...process.env, TOM_SWE_INTERNAL: "1" },
+        stdio: ["pipe", "pipe", "pipe"]
+      });
     } catch (error48) {
       const message = error48 instanceof Error ? error48.message : String(error48);
       settle({ ok: false, reason: "spawn-error", detail: truncateDetail(message) });
       return;
     }
+    child.stdin?.on("error", () => {
+    });
+    child.stdin?.write(prompt);
+    child.stdin?.end();
     timer = setTimeout(() => {
       child.kill("SIGTERM");
       settle({

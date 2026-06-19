@@ -21,7 +21,13 @@ const mockSpawn = vi.mocked(spawn)
 
 // --- Test Helpers ---
 
+class FakeStdin extends EventEmitter {
+  readonly write = vi.fn()
+  readonly end = vi.fn()
+}
+
 class FakeChildProcess extends EventEmitter {
+  readonly stdin = new FakeStdin()
   readonly stdout = new EventEmitter()
   readonly stderr = new EventEmitter()
   readonly kill = vi.fn(() => true)
@@ -239,13 +245,31 @@ describe('analyzeSessionWithLlm', () => {
       { env: Record<string, string>; stdio: unknown },
     ]
     expect(command).toBe('claude')
-    expect(args[0]).toBe('-p')
-    expect(args[1]).toContain('Session log (JSON)')
+    expect(args).toContain('-p')
     expect(args).toContain('--model')
     expect(args).toContain('claude-sonnet-4-6')
     expect(args).toContain('--output-format')
     expect(args).toContain('json')
     expect(options.env['TOM_SWE_INTERNAL']).toBe('1')
+  })
+
+  it('passes the prompt via stdin, never argv, so argv stays bounded (E2BIG defense)', async () => {
+    // A large session would, on the old argv path, push the prompt past the OS
+    // ARG_MAX and fail with spawn E2BIG. Piping it via stdin removes the ceiling.
+    const log = makeSessionLogWithInteractions(200)
+    const child = spawnEmitting(wrapperOutput(JSON.stringify(makeSessionModel())), 0)
+
+    await analyzeSessionWithLlm(log, 'haiku')
+
+    const [, args] = mockSpawn.mock.calls[0] as unknown as [string, string[], unknown]
+    // No argv entry carries the prompt body — argv length is independent of
+    // session size.
+    expect(args.some((a) => a.includes('Session log (JSON)'))).toBe(false)
+    // The prompt is written to stdin and the stream is closed.
+    expect(child.stdin.write).toHaveBeenCalledTimes(1)
+    const written = child.stdin.write.mock.calls[0]?.[0] as string
+    expect(written).toContain('Session log (JSON)')
+    expect(child.stdin.end).toHaveBeenCalledTimes(1)
   })
 
   it('returns tokensUsed null when usage fields are absent', async () => {
@@ -547,25 +571,25 @@ describe('analyzeSessionWithLlm prompt bounding', () => {
   it('builds a byte-identical prompt for within-budget logs', async () => {
     const log = makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS)
     const expectedPrompt = buildAnalysisPrompt(log)
-    spawnEmitting(wrapperOutput(JSON.stringify(makeSessionModel(log.sessionId))), 0)
+    const child = spawnEmitting(wrapperOutput(JSON.stringify(makeSessionModel(log.sessionId))), 0)
 
     const result = await analyzeSessionWithLlm(log, 'haiku')
 
     expect(result.dropped).toBe(0)
-    const [, args] = mockSpawn.mock.calls[0] as unknown as [string, string[]]
-    expect(args[1]).toBe(expectedPrompt)
+    expect(child.stdin.write.mock.calls[0]?.[0]).toBe(expectedPrompt)
   })
 
   it('surfaces the dropped count for over-budget logs so the caller can log it', async () => {
     const log = makeSessionLogWithInteractions(MAX_PROMPT_INTERACTIONS + 3)
-    spawnEmitting(wrapperOutput(JSON.stringify(makeSessionModel(log.sessionId))), 0)
+    const child = spawnEmitting(wrapperOutput(JSON.stringify(makeSessionModel(log.sessionId))), 0)
 
     const result = await analyzeSessionWithLlm(log, 'haiku')
 
     expect(result.dropped).toBe(3)
     // The prompt embeds only the bounded log, not the original oversized one.
-    const [, args] = mockSpawn.mock.calls[0] as unknown as [string, string[]]
-    expect(args[1]).toBe(buildAnalysisPrompt(boundSessionLog(log).sessionLog))
+    expect(child.stdin.write.mock.calls[0]?.[0]).toBe(
+      buildAnalysisPrompt(boundSessionLog(log).sessionLog)
+    )
   })
 
   it('reports dropped alongside failures, not only successes', async () => {

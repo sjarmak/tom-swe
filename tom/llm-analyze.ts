@@ -396,19 +396,26 @@ export async function analyzeSessionWithLlm(
 
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(
-        'claude',
-        ['-p', prompt, '--model', model, '--output-format', 'json'],
-        {
-          env: { ...process.env, TOM_SWE_INTERNAL: '1' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }
-      )
+      // The prompt is piped to stdin, NOT passed as an argv argument: a large
+      // session transcript on argv overflows the OS ARG_MAX and fails the
+      // spawn with E2BIG. `claude -p` (no prompt arg) reads the prompt from
+      // stdin, so argv length stays constant regardless of session size.
+      child = spawn('claude', ['-p', '--model', model, '--output-format', 'json'], {
+        env: { ...process.env, TOM_SWE_INTERNAL: '1' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       settle({ ok: false, reason: 'spawn-error', detail: truncateDetail(message) })
       return
     }
+
+    // Swallow stdin write errors (e.g. EPIPE if the child dies before reading):
+    // the child 'error'/'close' handlers below settle the real outcome, and an
+    // unhandled stream 'error' would otherwise crash the process.
+    child.stdin?.on('error', () => {})
+    child.stdin?.write(prompt)
+    child.stdin?.end()
 
     timer = setTimeout(() => {
       child.kill('SIGTERM')
