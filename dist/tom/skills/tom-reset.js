@@ -13841,8 +13841,7 @@ var SatisfactionSignalsSchema = external_exports.strictObject({
 });
 var PreferenceCategorySchema = external_exports.enum([
   "interactionStyle",
-  "codingPreferences",
-  "emotionalSignals"
+  "codingPreferences"
 ]);
 var CorrectionSchema = external_exports.strictObject({
   category: PreferenceCategorySchema,
@@ -13862,7 +13861,9 @@ var SessionModelSchema = external_exports.strictObject({
   intent: external_exports.string(),
   interactionPatterns: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
   codingPreferences: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
-  satisfactionSignals: SatisfactionSignalsSchema,
+  // Deprecated and no longer produced; optional so legacy session models that
+  // still carry it parse cleanly under strictObject (see tom-swe-l35).
+  satisfactionSignals: SatisfactionSignalsSchema.optional(),
   // Corrections extracted from the session. Optional for backward
   // compatibility with session models written before this field existed;
   // consumers treat absence as an empty array.

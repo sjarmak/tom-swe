@@ -52,7 +52,6 @@ function summarizeCategory(
  * - codingPreferences → category 'codingPreferences'; keyed entries carry
  *   their own topic key, legacy bare strings fold under 'preference'
  * - interactionPatterns → category 'interactionStyle'; same, legacy key 'pattern'
- * - satisfactionSignals → category 'emotionalSignals', individual keys
  *
  * Keyed entries are what make the flywheel work: reinforcement and conflict
  * resolution match on category+key, so generic keys made distinct
@@ -76,23 +75,6 @@ function extractObservations(session: SessionModel): PreferenceObservation[] {
         : { category: 'interactionStyle', key: pattern.key, value: pattern.value }
     )
   }
-
-  const { frustration, satisfaction, urgency } = session.satisfactionSignals
-  observations.push({
-    category: 'emotionalSignals',
-    key: 'frustration',
-    value: String(frustration),
-  })
-  observations.push({
-    category: 'emotionalSignals',
-    key: 'satisfaction',
-    value: String(satisfaction),
-  })
-  observations.push({
-    category: 'emotionalSignals',
-    key: 'urgency',
-    value: urgency,
-  })
 
   return observations
 }

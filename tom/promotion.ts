@@ -14,7 +14,7 @@
  *   cwd/.claude/CLAUDE.md), only when it already exists — local repo habits
  *   must not silently become global rules, and we never create files in
  *   repos we don't manage.
- * - interactionStyle and emotionalSignals → the global user memory file
+ * - interactionStyle → the global user memory file
  *   (~/.claude/CLAUDE.md), created only if its parent dir exists, with the
  *   creation logged (no silent resource creation).
  */
@@ -61,10 +61,9 @@ export interface PromotionConfig {
 // --- Selection ---
 
 /**
- * Categories eligible for promotion. emotionalSignals are runtime
- * modulation state for ToM's own behavior (satisfaction/frustration
- * reinforce nearly every session and would cross any threshold), not
- * standing guidance for agents — they never belong in CLAUDE.md.
+ * Categories eligible for promotion — the two that carry standing guidance for
+ * agents. Every tracked category is promotable today; the set stays explicit so
+ * a future non-promotable category (e.g. transient runtime state) is opt-in.
  */
 const PROMOTABLE_CATEGORIES: ReadonlySet<string> = new Set([
   'codingPreferences',

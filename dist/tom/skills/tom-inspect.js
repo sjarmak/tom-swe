@@ -13839,8 +13839,7 @@ var SatisfactionSignalsSchema = external_exports.strictObject({
 });
 var PreferenceCategorySchema = external_exports.enum([
   "interactionStyle",
-  "codingPreferences",
-  "emotionalSignals"
+  "codingPreferences"
 ]);
 var CorrectionSchema = external_exports.strictObject({
   category: PreferenceCategorySchema,
@@ -13860,7 +13859,9 @@ var SessionModelSchema = external_exports.strictObject({
   intent: external_exports.string(),
   interactionPatterns: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
   codingPreferences: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
-  satisfactionSignals: SatisfactionSignalsSchema,
+  // Deprecated and no longer produced; optional so legacy session models that
+  // still carry it parse cleanly under strictObject (see tom-swe-l35).
+  satisfactionSignals: SatisfactionSignalsSchema.optional(),
   // Corrections extracted from the session. Optional for backward
   // compatibility with session models written before this field existed;
   // consumers treat absence as an empty array.
@@ -13936,6 +13937,20 @@ function readSessionModel(sessionId, scope = "global") {
   const result = SessionModelSchema.safeParse(raw);
   return result.success ? result.data : null;
 }
+var DEPRECATED_CATEGORIES = /* @__PURE__ */ new Set(["emotionalSignals"]);
+function withoutDeprecatedClusters(model) {
+  const keep = (c) => !DEPRECATED_CATEGORIES.has(c.category);
+  return {
+    ...model,
+    preferencesClusters: model.preferencesClusters.filter(keep),
+    projectOverrides: Object.fromEntries(
+      Object.entries(model.projectOverrides).map(([k, clusters]) => [
+        k,
+        clusters.filter(keep)
+      ])
+    )
+  };
+}
 function mergePreferences(globalPrefs, projectPrefs) {
   const merged = /* @__PURE__ */ new Map();
   for (const pref of globalPrefs) {
@@ -13950,11 +13965,11 @@ function readUserModel(scope = "merged") {
   if (scope === "global" || scope === "merged") {
     const globalRaw = readJsonFile(globalUserModelPath());
     const globalResult = globalRaw !== null ? UserModelSchema.safeParse(globalRaw) : null;
-    const globalModel = globalResult?.success ? globalResult.data : null;
+    const globalModel = globalResult?.success ? withoutDeprecatedClusters(globalResult.data) : null;
     if (scope === "global") return globalModel;
     const projectRaw2 = readJsonFile(projectUserModelPath());
     const projectResult = projectRaw2 !== null ? UserModelSchema.safeParse(projectRaw2) : null;
-    const projectModel = projectResult?.success ? projectResult.data : null;
+    const projectModel = projectResult?.success ? withoutDeprecatedClusters(projectResult.data) : null;
     if (globalModel === null) return projectModel;
     if (projectModel === null) return globalModel;
     return {
@@ -13973,7 +13988,7 @@ function readUserModel(scope = "merged") {
   const projectRaw = readJsonFile(projectUserModelPath());
   if (projectRaw === null) return null;
   const result = UserModelSchema.safeParse(projectRaw);
-  return result.success ? result.data : null;
+  return result.success ? withoutDeprecatedClusters(result.data) : null;
 }
 
 // tom/config.ts

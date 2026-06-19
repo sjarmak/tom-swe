@@ -13,7 +13,7 @@ ToM-SWE observes how you use Claude Code and builds a model of your preferences 
 | Tier | What | Where |
 |------|------|-------|
 | **Tier 1** | Raw session logs (tool calls, parameters, outcomes, redacted prompt text) | `~/.claude/tom/sessions/` |
-| **Tier 2** | Session models (intent, patterns, satisfaction signals) | `~/.claude/tom/session-models/` |
+| **Tier 2** | Session models (intent, patterns, coding preferences, corrections) | `~/.claude/tom/session-models/` |
 | **Tier 3** | Aggregated user model (confidence-scored preference clusters) | `~/.claude/tom/user-model.json` |
 
 ### Four hooks drive the system

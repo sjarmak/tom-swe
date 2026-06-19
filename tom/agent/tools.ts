@@ -151,9 +151,7 @@ export function buildMemoryIndex(scope: 'global' | 'project' = 'global'): BM25In
     const content = [
       userModel.interactionStyleSummary,
       userModel.codingStyleSummary,
-      ...userModel.preferencesClusters
-        .filter(p => p.category !== 'emotionalSignals')
-        .map(p => `${p.category} ${p.key} ${p.value}`),
+      ...userModel.preferencesClusters.map(p => `${p.category} ${p.key} ${p.value}`),
     ].join(' ')
     documents.push({ id: 'user-model', content, tier: 3 })
   }

@@ -38,7 +38,7 @@ Read a specific memory file by tier and ID.
 **Counts as a memory operation.**
 
 ### 3. analyze_session
-Analyze a raw Tier 1 session log and extract a Tier 2 session model (intent, patterns, preferences, satisfaction signals).
+Analyze a raw Tier 1 session log and extract a Tier 2 session model (intent, patterns, preferences, corrections).
 
 **Parameters:**
 - `sessionId` (string): The session ID to analyze

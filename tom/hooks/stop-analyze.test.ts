@@ -207,6 +207,20 @@ describe('analyzeCompletedSession', () => {
       JSON.stringify(log),
       'utf-8'
     )
+    // The heuristic fallback emits no preference clusters; an actionable cluster
+    // only comes from the LLM path, so mock a success with a coding preference.
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'user-model-test',
+        intent: 'edit',
+        interactionPatterns: [],
+        codingPreferences: [{ key: 'test_runner', value: 'vitest' }],
+        corrections: [],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
 
     const result = await analyzeCompletedSession('user-model-test')
     expect(result.userModelUpdated).toBe(true)
@@ -866,9 +880,21 @@ describe('analyzeCompletedSession', () => {
   it('does not inflate confidence when the same session is analyzed repeatedly', async () => {
     // THE dogfooding regression: Stop fires per turn-end; incremental
     // aggregation re-reinforced the same session every fire (9 analyses /
-    // 4 sessions inflated emotionalSignals to 90% in a day). Under rebuild,
+    // 4 sessions inflated a preference to 90% in a day). Under rebuild,
     // N analyses of one session contribute exactly one session's worth.
     writeSessionFile('idempotent-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'idempotent-test',
+        intent: 'edit',
+        interactionPatterns: [],
+        codingPreferences: [{ key: 'test_runner', value: 'vitest' }],
+        corrections: [],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
     const modelsDir = path.join(tempDir, '.claude', 'tom', 'session-models')
 
     await analyzeCompletedSession('idempotent-test')
@@ -883,9 +909,9 @@ describe('analyzeCompletedSession', () => {
     const userModel = JSON.parse(
       fs.readFileSync(path.join(tempDir, '.claude', 'tom', 'user-model.json'), 'utf-8')
     ) as { preferencesClusters: Array<{ key: string; confidence: number; sessionCount: number }> }
-    const satisfaction = userModel.preferencesClusters.find((p) => p.key === 'satisfaction')
-    expect(satisfaction?.sessionCount).toBe(1)
-    expect(satisfaction?.confidence).toBeCloseTo(0.1)
+    const pref = userModel.preferencesClusters.find((p) => p.key === 'test_runner')
+    expect(pref?.sessionCount).toBe(1)
+    expect(pref?.confidence).toBeCloseTo(0.1)
   })
 
   it('anchors the analyzer to existing vocabulary, excluding legacy generic keys', async () => {
@@ -1013,6 +1039,20 @@ describe('analyzeCompletedSession', () => {
       JSON.stringify(log),
       'utf-8'
     )
+    // Actionable clusters only come from the LLM path; the heuristic fallback
+    // emits none.
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'aggregate-test',
+        intent: 'edit',
+        interactionPatterns: [],
+        codingPreferences: [{ key: 'language', value: 'typescript' }],
+        corrections: [],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
 
     await analyzeCompletedSession('aggregate-test')
 

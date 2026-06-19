@@ -38,8 +38,7 @@ export const MAX_PROMPT_INTERACTIONS = 400
  *
  * Constraining the vocabulary keeps preferences reinforcing across sessions
  * instead of fragmenting into near-synonym keys. Categories are exactly the
- * three in PreferenceCategorySchema. emotionalSignals keys are the fixed
- * satisfactionSignals fields (frustration / satisfaction / urgency).
+ * ones in PreferenceCategorySchema.
  */
 export const ALLOWED_KEYS: Readonly<Record<PreferenceCategory, readonly string[]>> = {
   interactionStyle: ['verbosity', 'question_timing', 'response_length'],
@@ -54,7 +53,6 @@ export const ALLOWED_KEYS: Readonly<Record<PreferenceCategory, readonly string[]
     'commit_format',
     'error_handling',
   ],
-  emotionalSignals: ['frustration', 'satisfaction', 'urgency'],
 }
 
 export type LlmAnalysisFailureReason =
@@ -142,21 +140,16 @@ export function buildAnalysisPrompt(
     '  "intent": "<string: concise description of what the user was trying to accomplish>",',
     '  "interactionPatterns": [{"key": "<topic key>", "value": "<short canonical value>"}],',
     '  "codingPreferences": [{"key": "<topic key>", "value": "<short canonical value>"}],',
-    '  "satisfactionSignals": {',
-    '    "frustration": <boolean: did the user hit repeated errors or friction?>,',
-    '    "satisfaction": <boolean: did the session conclude successfully?>,',
-    '    "urgency": "<one of exactly: low | medium | high>"',
-    '  },',
     '  "corrections": [',
     '    {',
-    '      "category": "<one of exactly: interactionStyle | codingPreferences | emotionalSignals>",',
+    '      "category": "<one of exactly: interactionStyle | codingPreferences>",',
     '      "key": "<string: the preference key the user corrected>",',
     '      "correctedValue": "<string, optional: the value the user corrected to — omit if the user only rejected without a replacement>",',
     '      "evidence": "<string: short quote or paraphrase of the correcting moment>"',
     '    }',
     '  ]',
     '}',
-    'No additional fields are allowed. "urgency" must be exactly "low", "medium", or "high".',
+    'No additional fields are allowed.',
     '',
     'Key/value discipline (this is what makes preferences accumulate across sessions):',
     '- "key" is a snake_case topic name of 1-3 words naming WHAT the preference is about: test_runner, docs_style, commit_format, error_handling. Never a generic word like "preference" or "pattern".',
@@ -166,7 +159,6 @@ export function buildAnalysisPrompt(
     'Allowed keys — every "key" you emit MUST be one of these exact snake_case keys for its category. Map each observation onto the nearest allowed key rather than inventing a new one:',
     `- interactionPatterns (category interactionStyle): ${ALLOWED_KEYS.interactionStyle.join(', ')}`,
     `- codingPreferences (category codingPreferences): ${ALLOWED_KEYS.codingPreferences.join(', ')}`,
-    `- corrections with category emotionalSignals: ${ALLOWED_KEYS.emotionalSignals.join(', ')}`,
     ...vocabularySection,
     '',
     'Corrections: ALSO extract corrections — moments where the user contradicted, overrode, or re-edited away a previously suggested or observed preference. The redacted user messages in the session log (the "userMessages" field) are the primary evidence source. Return an empty "corrections" array if there are none.',

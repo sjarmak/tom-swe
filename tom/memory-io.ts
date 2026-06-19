@@ -135,6 +135,30 @@ export function writeSessionModel(
 
 // --- User Model (Tier 3) ---
 
+/**
+ * Drops legacy 'emotionalSignals' clusters from a parsed user model.
+ *
+ * Emotional signals are no longer produced (see tom-swe-l35), but user models
+ * written before their removal still carry these clusters in storage. Stripping
+ * them at the read boundary keeps the deprecated category out of every consumer
+ * without per-consumer filters, and storage self-heals on the next write.
+ */
+const DEPRECATED_CATEGORIES: ReadonlySet<string> = new Set(['emotionalSignals'])
+
+function withoutDeprecatedClusters(model: UserModel): UserModel {
+  const keep = (c: PreferenceCluster): boolean => !DEPRECATED_CATEGORIES.has(c.category)
+  return {
+    ...model,
+    preferencesClusters: model.preferencesClusters.filter(keep),
+    projectOverrides: Object.fromEntries(
+      Object.entries(model.projectOverrides).map(([k, clusters]) => [
+        k,
+        clusters.filter(keep),
+      ])
+    ),
+  }
+}
+
 function mergePreferences(
   globalPrefs: readonly PreferenceCluster[],
   projectPrefs: readonly PreferenceCluster[]
@@ -159,14 +183,18 @@ export function readUserModel(
     const globalRaw = readJsonFile(globalUserModelPath())
     const globalResult =
       globalRaw !== null ? UserModelSchema.safeParse(globalRaw) : null
-    const globalModel = globalResult?.success ? globalResult.data : null
+    const globalModel = globalResult?.success
+      ? withoutDeprecatedClusters(globalResult.data)
+      : null
 
     if (scope === 'global') return globalModel
 
     const projectRaw = readJsonFile(projectUserModelPath())
     const projectResult =
       projectRaw !== null ? UserModelSchema.safeParse(projectRaw) : null
-    const projectModel = projectResult?.success ? projectResult.data : null
+    const projectModel = projectResult?.success
+      ? withoutDeprecatedClusters(projectResult.data)
+      : null
 
     if (globalModel === null) return projectModel
     if (projectModel === null) return globalModel
@@ -191,7 +219,7 @@ export function readUserModel(
   if (projectRaw === null) return null
 
   const result = UserModelSchema.safeParse(projectRaw)
-  return result.success ? result.data : null
+  return result.success ? withoutDeprecatedClusters(result.data) : null
 }
 
 export function writeUserModel(

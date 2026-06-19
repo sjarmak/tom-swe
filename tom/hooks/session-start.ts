@@ -31,19 +31,13 @@ const MAX_PREFERENCE_LINES = 7
  *
  * Promoted preferences are excluded: they already ride along via their
  * CLAUDE.md marker block, and double-injection wastes context budget.
- *
- * emotionalSignals clusters (frustration, satisfaction, urgency, mode) are
- * excluded too: they carry no actionable guidance for the model and, being
- * frequently high-confidence, would otherwise crowd out the actionable
- * codingPreferences/interactionStyle clusters in the capped injection slot.
  */
 export function buildModelSummary(model: UserModel): string | null {
   const confidentPrefs = [...model.preferencesClusters]
     .filter(
       p =>
         p.confidence >= MIN_CONFIDENCE &&
-        p.promoted !== true &&
-        p.category !== 'emotionalSignals'
+        p.promoted !== true
     )
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, MAX_PREFERENCE_LINES)

@@ -174,7 +174,7 @@ describe('aggregateSessionIntoModel', () => {
     expect(codingPrefs.length).toBeLessThanOrEqual(2)
   })
 
-  it('extracts emotional signals from session satisfaction signals', () => {
+  it('never produces emotionalSignals clusters (deprecated and removed)', () => {
     const model = makeUserModel()
     const session = makeSessionModel({
       satisfactionSignals: {
@@ -185,17 +185,9 @@ describe('aggregateSessionIntoModel', () => {
     })
     const result = aggregateSessionIntoModel(model, session)
 
-    const frustrationPref = result.preferencesClusters.find(
-      (p) => p.category === 'emotionalSignals' && p.key === 'frustration'
-    )
-    expect(frustrationPref).toBeDefined()
-    expect(frustrationPref?.value).toBe('true')
-
-    const urgencyPref = result.preferencesClusters.find(
-      (p) => p.category === 'emotionalSignals' && p.key === 'urgency'
-    )
-    expect(urgencyPref).toBeDefined()
-    expect(urgencyPref?.value).toBe('high')
+    expect(
+      result.preferencesClusters.some((p) => p.category === 'emotionalSignals')
+    ).toBe(false)
   })
 
   it('does not mutate the input UserModel', () => {

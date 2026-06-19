@@ -65,44 +65,6 @@ describe('extractSessionModel', () => {
     expect(model.interactionPatterns.some((p) => p.startsWith('uses-'))).toBe(false)
   })
 
-  it('detects frustration from error outcomes', () => {
-    const interactions = Array.from({ length: 10 }, (_, i) =>
-      createInteraction('Bash', {}, i < 4 ? 'error: command failed' : 'success')
-    )
-    const log = createSessionLog('session-3', interactions)
-    const model = extractSessionModel(log)
-    expect(model.satisfactionSignals.frustration).toBe(true)
-  })
-
-  it('detects satisfaction from success outcomes', () => {
-    const interactions = Array.from({ length: 10 }, () =>
-      createInteraction('Edit', {}, 'success: completed')
-    )
-    const log = createSessionLog('session-4', interactions)
-    const model = extractSessionModel(log)
-    expect(model.satisfactionSignals.satisfaction).toBe(true)
-  })
-
-  it('sets urgency based on interaction count', () => {
-    const fewInteractions = Array.from({ length: 5 }, () =>
-      createInteraction('Read', {}, 'success')
-    )
-    const log1 = createSessionLog('session-5', fewInteractions)
-    expect(extractSessionModel(log1).satisfactionSignals.urgency).toBe('low')
-
-    const mediumInteractions = Array.from({ length: 15 }, () =>
-      createInteraction('Read', {}, 'success')
-    )
-    const log2 = createSessionLog('session-6', mediumInteractions)
-    expect(extractSessionModel(log2).satisfactionSignals.urgency).toBe('medium')
-
-    const manyInteractions = Array.from({ length: 25 }, () =>
-      createInteraction('Read', {}, 'success')
-    )
-    const log3 = createSessionLog('session-7', manyInteractions)
-    expect(extractSessionModel(log3).satisfactionSignals.urgency).toBe('high')
-  })
-
   it('never emits coding preferences, even when file_path params are present', () => {
     const log = createSessionLog('session-8', [
       createInteraction('Edit', { file_path: 'src/app.ts' }, 'success'),
@@ -121,9 +83,6 @@ describe('extractSessionModel', () => {
     expect(model.intent).toBe('brief unknown usage')
     expect(model.interactionPatterns).toEqual([])
     expect(model.codingPreferences).toEqual([])
-    expect(model.satisfactionSignals.frustration).toBe(false)
-    expect(model.satisfactionSignals.satisfaction).toBe(false)
-    expect(model.satisfactionSignals.urgency).toBe('low')
   })
 
   it('never extracts corrections (heuristics cannot detect them reliably)', () => {

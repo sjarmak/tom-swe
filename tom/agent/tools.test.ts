@@ -276,27 +276,6 @@ describe('analyzeSession', () => {
     expect(result.sessionModel).toBeNull()
   })
 
-  it('detects frustration from error outcomes', () => {
-    const sessionLog: SessionLog = {
-      sessionId: 'frustrated-session',
-      startedAt: '2026-01-15T10:00:00.000Z',
-      endedAt: '2026-01-15T11:00:00.000Z',
-      interactions: [
-        { toolName: 'Bash', parameterShape: { command: 'string' }, outcomeSummary: 'Command failed with error', timestamp: '2026-01-15T10:05:00.000Z' },
-        { toolName: 'Bash', parameterShape: { command: 'string' }, outcomeSummary: 'Build error occurred', timestamp: '2026-01-15T10:10:00.000Z' },
-        { toolName: 'Bash', parameterShape: { command: 'string' }, outcomeSummary: 'Retry failed again', timestamp: '2026-01-15T10:15:00.000Z' },
-      ],
-    }
-    writeTestFile('sessions/frustrated-session.json', sessionLog)
-
-    const state = createInvocationState()
-    const { result } = analyzeSession(
-      { sessionId: 'frustrated-session', scope: 'global' },
-      state
-    )
-
-    expect(result.sessionModel?.satisfactionSignals.frustration).toBe(true)
-  })
 
   it('blocks when operation limit reached', () => {
     const state: AgentInvocationState = { operationCount: 3, maxOperations: 3 }

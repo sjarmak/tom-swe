@@ -13834,8 +13834,7 @@ var SatisfactionSignalsSchema = external_exports.strictObject({
 });
 var PreferenceCategorySchema = external_exports.enum([
   "interactionStyle",
-  "codingPreferences",
-  "emotionalSignals"
+  "codingPreferences"
 ]);
 var CorrectionSchema = external_exports.strictObject({
   category: PreferenceCategorySchema,
@@ -13855,7 +13854,9 @@ var SessionModelSchema = external_exports.strictObject({
   intent: external_exports.string(),
   interactionPatterns: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
   codingPreferences: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
-  satisfactionSignals: SatisfactionSignalsSchema,
+  // Deprecated and no longer produced; optional so legacy session models that
+  // still carry it parse cleanly under strictObject (see tom-swe-l35).
+  satisfactionSignals: SatisfactionSignalsSchema.optional(),
   // Corrections extracted from the session. Optional for backward
   // compatibility with session models written before this field existed;
   // consumers treat absence as an empty array.
@@ -13962,6 +13963,20 @@ function writeSessionModel(sessionModel, scope = "global") {
   const filePath = scope === "global" ? globalSessionModelPath(validated.sessionId) : projectSessionModelPath(validated.sessionId);
   writeJsonFile(filePath, validated);
 }
+var DEPRECATED_CATEGORIES = /* @__PURE__ */ new Set(["emotionalSignals"]);
+function withoutDeprecatedClusters(model) {
+  const keep = (c) => !DEPRECATED_CATEGORIES.has(c.category);
+  return {
+    ...model,
+    preferencesClusters: model.preferencesClusters.filter(keep),
+    projectOverrides: Object.fromEntries(
+      Object.entries(model.projectOverrides).map(([k, clusters]) => [
+        k,
+        clusters.filter(keep)
+      ])
+    )
+  };
+}
 function mergePreferences(globalPrefs, projectPrefs) {
   const merged = /* @__PURE__ */ new Map();
   for (const pref of globalPrefs) {
@@ -13976,11 +13991,11 @@ function readUserModel(scope = "merged") {
   if (scope === "global" || scope === "merged") {
     const globalRaw = readJsonFile(globalUserModelPath());
     const globalResult = globalRaw !== null ? UserModelSchema.safeParse(globalRaw) : null;
-    const globalModel = globalResult?.success ? globalResult.data : null;
+    const globalModel = globalResult?.success ? withoutDeprecatedClusters(globalResult.data) : null;
     if (scope === "global") return globalModel;
     const projectRaw2 = readJsonFile(projectUserModelPath());
     const projectResult = projectRaw2 !== null ? UserModelSchema.safeParse(projectRaw2) : null;
-    const projectModel = projectResult?.success ? projectResult.data : null;
+    const projectModel = projectResult?.success ? withoutDeprecatedClusters(projectResult.data) : null;
     if (globalModel === null) return projectModel;
     if (projectModel === null) return globalModel;
     return {
@@ -13999,7 +14014,7 @@ function readUserModel(scope = "merged") {
   const projectRaw = readJsonFile(projectUserModelPath());
   if (projectRaw === null) return null;
   const result = UserModelSchema.safeParse(projectRaw);
-  return result.success ? result.data : null;
+  return result.success ? withoutDeprecatedClusters(result.data) : null;
 }
 function writeUserModel(userModel, scope = "global") {
   const validated = UserModelSchema.parse(userModel);
@@ -14149,22 +14164,6 @@ function extractObservations(session) {
       typeof pattern === "string" ? { category: "interactionStyle", key: "pattern", value: pattern } : { category: "interactionStyle", key: pattern.key, value: pattern.value }
     );
   }
-  const { frustration, satisfaction, urgency } = session.satisfactionSignals;
-  observations.push({
-    category: "emotionalSignals",
-    key: "frustration",
-    value: String(frustration)
-  });
-  observations.push({
-    category: "emotionalSignals",
-    key: "satisfaction",
-    value: String(satisfaction)
-  });
-  observations.push({
-    category: "emotionalSignals",
-    key: "urgency",
-    value: urgency
-  });
   return observations;
 }
 function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DECAY_DAYS, correctionPenalty = DEFAULT_CORRECTION_PENALTY, asOf = /* @__PURE__ */ new Date()) {
@@ -14365,25 +14364,12 @@ function buildIndex(documents) {
 // tom/session-extract.ts
 function extractSessionModel(sessionLog) {
   const toolCounts = {};
-  let frustrationCount = 0;
-  let satisfactionCount = 0;
   for (const interaction of sessionLog.interactions) {
     toolCounts[interaction.toolName] = (toolCounts[interaction.toolName] ?? 0) + 1;
-    const outcome = interaction.outcomeSummary.toLowerCase();
-    if (outcome.includes("error") || outcome.includes("fail") || outcome.includes("retry")) {
-      frustrationCount++;
-    }
-    if (outcome.includes("success") || outcome.includes("complete") || outcome.includes("pass")) {
-      satisfactionCount++;
-    }
   }
   const sortedTools = Object.entries(toolCounts).sort(([, a], [, b]) => b - a).map(([name]) => name);
   const topTool = sortedTools[0] ?? "unknown";
   const intent = deriveIntent(topTool, sessionLog.interactions.length);
-  const totalInteractions = sessionLog.interactions.length;
-  const frustration = totalInteractions > 0 && frustrationCount / totalInteractions > 0.3;
-  const satisfaction = totalInteractions > 0 && satisfactionCount / totalInteractions > 0.5;
-  const urgency = totalInteractions > 20 ? "high" : totalInteractions > 10 ? "medium" : "low";
   return {
     sessionId: sessionLog.sessionId,
     intent,
@@ -14392,11 +14378,6 @@ function extractSessionModel(sessionLog) {
     // path populates them; the fallback never guesses.
     interactionPatterns: [],
     codingPreferences: [],
-    satisfactionSignals: {
-      frustration,
-      satisfaction,
-      urgency
-    },
     corrections: []
   };
 }
@@ -14456,7 +14437,7 @@ function buildMemoryIndex(scope = "global") {
     const content = [
       userModel.interactionStyleSummary,
       userModel.codingStyleSummary,
-      ...userModel.preferencesClusters.filter((p) => p.category !== "emotionalSignals").map((p) => `${p.category} ${p.key} ${p.value}`)
+      ...userModel.preferencesClusters.map((p) => `${p.category} ${p.key} ${p.value}`)
     ].join(" ");
     documents.push({ id: "user-model", content, tier: 3 });
   }
@@ -14606,8 +14587,7 @@ var ALLOWED_KEYS = {
     "docs_style",
     "commit_format",
     "error_handling"
-  ],
-  emotionalSignals: ["frustration", "satisfaction", "urgency"]
+  ]
 };
 function boundSessionLog(sessionLog) {
   const total = sessionLog.interactions.length;
@@ -14637,21 +14617,16 @@ function buildAnalysisPrompt(sessionLog, vocabulary = []) {
     '  "intent": "<string: concise description of what the user was trying to accomplish>",',
     '  "interactionPatterns": [{"key": "<topic key>", "value": "<short canonical value>"}],',
     '  "codingPreferences": [{"key": "<topic key>", "value": "<short canonical value>"}],',
-    '  "satisfactionSignals": {',
-    '    "frustration": <boolean: did the user hit repeated errors or friction?>,',
-    '    "satisfaction": <boolean: did the session conclude successfully?>,',
-    '    "urgency": "<one of exactly: low | medium | high>"',
-    "  },",
     '  "corrections": [',
     "    {",
-    '      "category": "<one of exactly: interactionStyle | codingPreferences | emotionalSignals>",',
+    '      "category": "<one of exactly: interactionStyle | codingPreferences>",',
     '      "key": "<string: the preference key the user corrected>",',
     '      "correctedValue": "<string, optional: the value the user corrected to \u2014 omit if the user only rejected without a replacement>",',
     '      "evidence": "<string: short quote or paraphrase of the correcting moment>"',
     "    }",
     "  ]",
     "}",
-    'No additional fields are allowed. "urgency" must be exactly "low", "medium", or "high".',
+    "No additional fields are allowed.",
     "",
     "Key/value discipline (this is what makes preferences accumulate across sessions):",
     '- "key" is a snake_case topic name of 1-3 words naming WHAT the preference is about: test_runner, docs_style, commit_format, error_handling. Never a generic word like "preference" or "pattern".',
@@ -14661,7 +14636,6 @@ function buildAnalysisPrompt(sessionLog, vocabulary = []) {
     'Allowed keys \u2014 every "key" you emit MUST be one of these exact snake_case keys for its category. Map each observation onto the nearest allowed key rather than inventing a new one:',
     `- interactionPatterns (category interactionStyle): ${ALLOWED_KEYS.interactionStyle.join(", ")}`,
     `- codingPreferences (category codingPreferences): ${ALLOWED_KEYS.codingPreferences.join(", ")}`,
-    `- corrections with category emotionalSignals: ${ALLOWED_KEYS.emotionalSignals.join(", ")}`,
     ...vocabularySection,
     "",
     'Corrections: ALSO extract corrections \u2014 moments where the user contradicted, overrode, or re-edited away a previously suggested or observed preference. The redacted user messages in the session log (the "userMessages" field) are the primary evidence source. Return an empty "corrections" array if there are none.',

@@ -131,8 +131,7 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toContain('"intent"')
     expect(prompt).toContain('"interactionPatterns"')
     expect(prompt).toContain('"codingPreferences"')
-    expect(prompt).toContain('"satisfactionSignals"')
-    expect(prompt).toContain('low | medium | high')
+    expect(prompt).toContain('"corrections"')
     expect(prompt).toContain(JSON.stringify(log))
   })
 
@@ -162,7 +161,6 @@ describe('buildAnalysisPrompt', () => {
     // The exact joined rendering proves the prompt reads from the constant.
     expect(prompt).toContain(ALLOWED_KEYS.codingPreferences.join(', '))
     expect(prompt).toContain(ALLOWED_KEYS.interactionStyle.join(', '))
-    expect(prompt).toContain(ALLOWED_KEYS.emotionalSignals.join(', '))
   })
 
   it('anchors extraction to the existing preference vocabulary when provided', () => {
@@ -187,9 +185,7 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toContain('"corrections"')
     expect(prompt).toContain('"correctedValue"')
     expect(prompt).toContain('"evidence"')
-    expect(prompt).toContain(
-      'interactionStyle | codingPreferences | emotionalSignals'
-    )
+    expect(prompt).toContain('interactionStyle | codingPreferences')
     expect(prompt).toContain(
       'moments where the user contradicted, overrode, or re-edited away a previously suggested or observed preference'
     )

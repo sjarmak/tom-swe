@@ -26,6 +26,11 @@ export const SessionLogSchema = z.strictObject({
 
 // --- Tier 2: Session Model ---
 
+// Deprecated: emotional signals (frustration/satisfaction/urgency) were
+// extracted per session but never consumed by any runtime behavior, so they
+// are no longer produced (see tom-swe-l35). The schema is retained only so
+// legacy session models written with this field still parse on read; nothing
+// emits it anymore.
 const SatisfactionSignalsSchema = z.strictObject({
   frustration: z.boolean(),
   satisfaction: z.boolean(),
@@ -33,19 +38,17 @@ const SatisfactionSignalsSchema = z.strictObject({
 })
 
 /**
- * The three preference categories tracked by the ToM system.
+ * The preference categories tracked by the ToM system.
  *
  * Allowed keys per category are the single source of truth in ALLOWED_KEYS
  * (tom/llm-analyze.ts); kept in sync here for reference:
  * - interactionStyle: verbosity, question_timing, response_length
  * - codingPreferences: language, libraries, test_runner, testing_approach,
  *   architecture_patterns, naming_conventions, docs_style, commit_format, error_handling
- * - emotionalSignals: frustration, satisfaction, urgency
  */
 export const PreferenceCategorySchema = z.enum([
   'interactionStyle',
   'codingPreferences',
-  'emotionalSignals',
 ])
 
 /**
@@ -80,7 +83,9 @@ export const SessionModelSchema = z.strictObject({
   intent: z.string(),
   interactionPatterns: z.array(z.union([z.string(), PreferenceEntrySchema])),
   codingPreferences: z.array(z.union([z.string(), PreferenceEntrySchema])),
-  satisfactionSignals: SatisfactionSignalsSchema,
+  // Deprecated and no longer produced; optional so legacy session models that
+  // still carry it parse cleanly under strictObject (see tom-swe-l35).
+  satisfactionSignals: SatisfactionSignalsSchema.optional(),
   // Corrections extracted from the session. Optional for backward
   // compatibility with session models written before this field existed;
   // consumers treat absence as an empty array.
@@ -133,7 +138,6 @@ export const ToMSuggestionSchema = z.strictObject({
 
 export type Interaction = z.infer<typeof InteractionSchema>
 export type SessionLog = z.infer<typeof SessionLogSchema>
-export type SatisfactionSignals = z.infer<typeof SatisfactionSignalsSchema>
 export type PreferenceCategory = z.infer<typeof PreferenceCategorySchema>
 export type Correction = z.infer<typeof CorrectionSchema>
 export type SessionModel = z.infer<typeof SessionModelSchema>

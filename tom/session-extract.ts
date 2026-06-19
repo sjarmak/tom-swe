@@ -2,9 +2,8 @@
  * Heuristic extraction of a Tier 2 SessionModel from a Tier 1 SessionLog.
  *
  * Shared by the Stop hook (fallback path when LLM analysis fails) and the
- * ToM agent's analyze_session tool:
- * - Intent derived from the most common tool patterns
- * - Satisfaction signals from outcome summaries
+ * ToM agent's analyze_session tool. Only intent is derived here, from the most
+ * common tool patterns.
  *
  * Coding preferences, interaction patterns, and corrections require semantic
  * understanding the heuristic path does not have, so they are left empty here.
@@ -15,20 +14,9 @@ import type { SessionLog, SessionModel } from './schemas.js'
 
 export function extractSessionModel(sessionLog: SessionLog): SessionModel {
   const toolCounts: Record<string, number> = {}
-  let frustrationCount = 0
-  let satisfactionCount = 0
 
   for (const interaction of sessionLog.interactions) {
     toolCounts[interaction.toolName] = (toolCounts[interaction.toolName] ?? 0) + 1
-
-    // Detect satisfaction from outcomes
-    const outcome = interaction.outcomeSummary.toLowerCase()
-    if (outcome.includes('error') || outcome.includes('fail') || outcome.includes('retry')) {
-      frustrationCount++
-    }
-    if (outcome.includes('success') || outcome.includes('complete') || outcome.includes('pass')) {
-      satisfactionCount++
-    }
   }
 
   // Derive intent from most-used tools
@@ -39,14 +27,6 @@ export function extractSessionModel(sessionLog: SessionLog): SessionModel {
   const topTool = sortedTools[0] ?? 'unknown'
   const intent = deriveIntent(topTool, sessionLog.interactions.length)
 
-  const totalInteractions = sessionLog.interactions.length
-  const frustration = totalInteractions > 0 && frustrationCount / totalInteractions > 0.3
-  const satisfaction = totalInteractions > 0 && satisfactionCount / totalInteractions > 0.5
-
-  const urgency = totalInteractions > 20 ? 'high' as const
-    : totalInteractions > 10 ? 'medium' as const
-    : 'low' as const
-
   return {
     sessionId: sessionLog.sessionId,
     intent,
@@ -55,11 +35,6 @@ export function extractSessionModel(sessionLog: SessionLog): SessionModel {
     // path populates them; the fallback never guesses.
     interactionPatterns: [],
     codingPreferences: [],
-    satisfactionSignals: {
-      frustration,
-      satisfaction,
-      urgency,
-    },
     corrections: [],
   }
 }

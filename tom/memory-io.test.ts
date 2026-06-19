@@ -162,6 +162,53 @@ describe('readUserModel / writeUserModel', () => {
     expect(readUserModel('merged')).toBeNull()
   })
 
+  it('strips legacy emotionalSignals clusters on read (deprecated category)', () => {
+    const legacy: UserModel = {
+      preferencesClusters: [
+        {
+          category: 'emotionalSignals',
+          key: 'frustration',
+          value: 'false',
+          confidence: 0.99,
+          lastUpdated: '2025-01-01T00:00:00Z',
+          sessionCount: 11,
+        },
+        {
+          category: 'codingPreferences',
+          key: 'language',
+          value: 'typescript',
+          confidence: 0.6,
+          lastUpdated: '2025-01-01T00:00:00Z',
+          sessionCount: 3,
+        },
+      ],
+      interactionStyleSummary: '',
+      codingStyleSummary: '',
+      projectOverrides: {
+        '/repo': [
+          {
+            category: 'emotionalSignals',
+            key: 'urgency',
+            value: 'high',
+            confidence: 0.9,
+            lastUpdated: '2025-01-01T00:00:00Z',
+            sessionCount: 4,
+          },
+        ],
+      },
+    }
+    writeUserModel(legacy, 'global')
+
+    const result = readUserModel('global')
+    expect(
+      result!.preferencesClusters.some((p) => p.category === 'emotionalSignals')
+    ).toBe(false)
+    // Non-deprecated clusters survive, in both arrays.
+    expect(result!.preferencesClusters).toHaveLength(1)
+    expect(result!.preferencesClusters[0]!.key).toBe('language')
+    expect(result!.projectOverrides['/repo']).toEqual([])
+  })
+
   it('merges global and project models with project overriding', () => {
     const globalModel: UserModel = {
       preferencesClusters: [
