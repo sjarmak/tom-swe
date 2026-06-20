@@ -198,6 +198,62 @@ describe('consultToM', () => {
     expect(result.suggestion?.content).not.toContain('language=typescript')
   })
 
+  it('never surfaces legacy generic keys (preference/pattern) in the suggestion', () => {
+    // Legacy keys are unpromoted and high-confidence, so without the guard they
+    // would dominate the top-5 and leak into the agent-facing suggestion
+    // (tom-swe-591). A real keyed pref must still come through.
+    writeUserModel(tempDir, [
+      {
+        category: 'codingPreferences',
+        key: 'preference',
+        value: '/home/ds/some/file.ts',
+        confidence: 1.0,
+        lastUpdated: '2026-02-02T10:00:00.000Z',
+        sessionCount: 675,
+      },
+      {
+        category: 'interactionStyle',
+        key: 'pattern',
+        value: 'uses-Write',
+        confidence: 1.0,
+        lastUpdated: '2026-02-02T10:00:00.000Z',
+        sessionCount: 58,
+      },
+      {
+        category: 'codingPreferences',
+        key: 'framework',
+        value: 'react',
+        confidence: 0.6,
+        lastUpdated: '2026-02-02T10:00:00.000Z',
+        sessionCount: 3,
+      },
+    ])
+
+    const result = consultToM('make it better', 'low', 's1')
+
+    expect(result.suggestion?.content ?? '').not.toContain('uses-Write')
+    expect(result.suggestion?.content ?? '').not.toContain('/home/ds/some/file.ts')
+    expect(result.suggestion?.content ?? '').toContain('framework=react')
+  })
+
+  it('skips the user-model suggestion when only legacy generic keys remain', () => {
+    writeUserModel(tempDir, [
+      {
+        category: 'codingPreferences',
+        key: 'preference',
+        value: '/home/ds/some/file.ts',
+        confidence: 1.0,
+        lastUpdated: '2026-02-02T10:00:00.000Z',
+        sessionCount: 675,
+      },
+    ])
+
+    const result = consultToM('make it better', 'low', 's1')
+
+    expect(result.suggestion).toBeNull()
+    expect(result.source).toBeNull()
+  })
+
   it('returns null suggestion when no memory exists', () => {
     const result = consultToM('fix it', 'low', 's1')
 

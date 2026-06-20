@@ -13976,6 +13976,15 @@ function readUserModel(scope = "merged") {
   return result.success ? withoutDeprecatedClusters(result.data) : null;
 }
 
+// tom/preferences.ts
+var LEGACY_GENERIC_KEYS = /* @__PURE__ */ new Set([
+  "preference",
+  "pattern"
+]);
+function isLegacyGenericKey(key) {
+  return LEGACY_GENERIC_KEYS.has(key);
+}
+
 // tom/config.ts
 var fs2 = __toESM(require("node:fs"));
 var path2 = __toESM(require("node:path"));
@@ -14113,7 +14122,9 @@ var MIN_CONFIDENCE = 0.5;
 var MAX_PREFERENCE_LINES = 7;
 function buildModelSummary(model) {
   const confidentPrefs = [...model.preferencesClusters].filter(
-    (p) => p.confidence >= MIN_CONFIDENCE && p.promoted !== true
+    (p) => p.confidence >= MIN_CONFIDENCE && p.promoted !== true && // Legacy generic keys ('preference'/'pattern') are collapsed noise —
+    // never inject them into session context.
+    !isLegacyGenericKey(p.key)
   ).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
   const lines = [];
   if (confidentPrefs.length > 0) {

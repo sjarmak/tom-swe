@@ -14031,6 +14031,13 @@ var CONFIDENCE_INCREMENT = 0.1;
 var CONFIDENCE_MAX = 1;
 var CONFIDENCE_MIN_THRESHOLD = 0.01;
 var INITIAL_CONFIDENCE = 0.1;
+var LEGACY_GENERIC_KEYS = /* @__PURE__ */ new Set([
+  "preference",
+  "pattern"
+]);
+function isLegacyGenericKey(key) {
+  return LEGACY_GENERIC_KEYS.has(key);
+}
 var DEFAULT_CORRECTION_PENALTY = 0.5;
 function reinforcePreference(preferences, observation, asOf = /* @__PURE__ */ new Date()) {
   const now = asOf.toISOString();
@@ -14147,24 +14154,29 @@ var SUMMARY_CONFIDENCE_THRESHOLD = 0.2;
 var SUMMARY_MAX_ENTRIES = 5;
 function summarizeCategory(clusters, category) {
   return clusters.filter(
-    (c) => c.category === category && c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
+    (c) => c.category === category && // Legacy generic keys carry no real signal — keep them out of the
+    // injected style summary (see isLegacyGenericKey).
+    !isLegacyGenericKey(c.key) && c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
   ).slice().sort(
     (a, b) => b.confidence !== a.confidence ? b.confidence - a.confidence : a.key.localeCompare(b.key)
   ).slice(0, SUMMARY_MAX_ENTRIES).map((c) => `${c.key}: ${c.value}`).join("; ");
 }
 function extractObservations(session) {
-  const observations = [];
+  const byKey = /* @__PURE__ */ new Map();
+  const add = (observation) => {
+    byKey.set(`${observation.category}::${observation.key}`, observation);
+  };
   for (const pref of session.codingPreferences) {
-    observations.push(
+    add(
       typeof pref === "string" ? { category: "codingPreferences", key: "preference", value: pref } : { category: "codingPreferences", key: pref.key, value: pref.value }
     );
   }
   for (const pattern of session.interactionPatterns) {
-    observations.push(
+    add(
       typeof pattern === "string" ? { category: "interactionStyle", key: "pattern", value: pattern } : { category: "interactionStyle", key: pattern.key, value: pattern.value }
     );
   }
-  return observations;
+  return [...byKey.values()];
 }
 function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DECAY_DAYS, correctionPenalty = DEFAULT_CORRECTION_PENALTY, asOf = /* @__PURE__ */ new Date()) {
   const now = asOf;
@@ -14854,7 +14866,9 @@ var PROMOTABLE_CATEGORIES = /* @__PURE__ */ new Set([
 ]);
 function selectPromotable(userModel, config2) {
   return userModel.preferencesClusters.filter(
-    (p) => PROMOTABLE_CATEGORIES.has(p.category) && p.confidence >= config2.threshold && p.sessionCount >= config2.minSessions
+    (p) => PROMOTABLE_CATEGORIES.has(p.category) && // Legacy generic keys ('preference'/'pattern') are collapsed noise —
+    // never promote them into a CLAUDE.md marker block.
+    !isLegacyGenericKey(p.key) && p.confidence >= config2.threshold && p.sessionCount >= config2.minSessions
   ).sort((a, b) => {
     const aCorrection = a.learnedVia === "correction" ? 1 : 0;
     const bCorrection = b.learnedVia === "correction" ? 1 : 0;
@@ -15079,7 +15093,7 @@ function runPromotion(userModel, config2, cwd, gate = null) {
 
 // tom/promotion-gate.ts
 var import_node_child_process2 = require("node:child_process");
-var GATE_TIMEOUT_MS = 45e3;
+var GATE_TIMEOUT_MS = 9e4;
 function buildGatePrompt(candidates) {
   return [
     `You are auditing candidate additions to this repository's CLAUDE.md.`,
@@ -15116,7 +15130,6 @@ function judgeDerivability(candidates, cwd, model) {
     "claude",
     [
       "-p",
-      buildGatePrompt(candidates),
       "--model",
       model,
       "--output-format",
@@ -15126,6 +15139,7 @@ function judgeDerivability(candidates, cwd, model) {
     ],
     {
       cwd,
+      input: buildGatePrompt(candidates),
       encoding: "utf-8",
       timeout: GATE_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
@@ -15387,8 +15401,7 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
   } catch {
   }
   const configuredModel = getModelForOperation("memoryUpdate");
-  const LEGACY_GENERIC_KEYS = /* @__PURE__ */ new Set(["preference", "pattern"]);
-  const vocabulary = (readUserModel("global")?.preferencesClusters ?? []).filter((p) => !LEGACY_GENERIC_KEYS.has(p.key)).map((p) => ({ category: p.category, key: p.key, value: p.value }));
+  const vocabulary = (readUserModel("global")?.preferencesClusters ?? []).filter((p) => !isLegacyGenericKey(p.key)).map((p) => ({ category: p.category, key: p.key, value: p.value }));
   const analysisStartedAt = Date.now();
   const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel, {
     vocabulary

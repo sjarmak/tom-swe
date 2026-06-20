@@ -60,6 +60,22 @@ describe('judgeDerivability', () => {
     expect(opts.env?.['TOM_SWE_INTERNAL']).toBe('1')
   })
 
+  it('pipes the prompt via stdin, never on argv (E2BIG-safe)', () => {
+    mockSpawnSync.mockReturnValue(cliResult('[]'))
+    judgeDerivability(CANDIDATES, '/repo', 'haiku')
+
+    const call = mockSpawnSync.mock.calls[0] ?? []
+    const args = (call[1] ?? []) as string[]
+    const opts = (call[2] ?? {}) as { input?: string; timeout?: number }
+    // The prompt must arrive via stdin, not as an argv element.
+    expect(opts.input).toContain('codingPreferences::testRunner::vitest')
+    expect(args.some((a) => a.includes('NOT derivable'))).toBe(false)
+    // `-p` with no inline prompt arg makes claude read from stdin.
+    expect(args).toContain('-p')
+    // Timeout matches the analysis path (90s) so tool-using runs don't get cut.
+    expect(opts.timeout).toBe(90_000)
+  })
+
   it('returns the passing ids, tolerating prose around the JSON array', () => {
     mockSpawnSync.mockReturnValue(
       cliResult('After inspecting the repo: ["codingPreferences::deploy::canary"] is the answer.')

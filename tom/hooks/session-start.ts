@@ -10,6 +10,7 @@
 
 import type { UserModel } from '../schemas.js'
 import { readUserModel } from '../memory-io.js'
+import { isLegacyGenericKey } from '../preferences.js'
 import { isTomEnabled } from '../config.js'
 import { logUsage } from '../routing.js'
 import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
@@ -37,7 +38,10 @@ export function buildModelSummary(model: UserModel): string | null {
     .filter(
       p =>
         p.confidence >= MIN_CONFIDENCE &&
-        p.promoted !== true
+        p.promoted !== true &&
+        // Legacy generic keys ('preference'/'pattern') are collapsed noise —
+        // never inject them into session context.
+        !isLegacyGenericKey(p.key)
     )
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, MAX_PREFERENCE_LINES)

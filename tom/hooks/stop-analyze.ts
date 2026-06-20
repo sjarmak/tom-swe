@@ -24,6 +24,7 @@ import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { extractSessionModel } from '../session-extract.js'
 import { runPromotion } from '../promotion.js'
+import { isLegacyGenericKey } from '../preferences.js'
 import { judgeDerivability } from '../promotion-gate.js'
 import type { GateCandidate } from '../promotion-gate.js'
 import { pruneOldSessions } from '../pruning.js'
@@ -180,9 +181,8 @@ export async function analyzeCompletedSession(
   // Legacy generic keys are excluded: anchoring to 'preference'/'pattern'
   // would instruct the model to reuse exactly the keys the discipline
   // rules forbid, re-entrenching the fragmentation this fixes.
-  const LEGACY_GENERIC_KEYS = new Set(['preference', 'pattern'])
   const vocabulary = (readUserModel('global')?.preferencesClusters ?? [])
-    .filter((p) => !LEGACY_GENERIC_KEYS.has(p.key))
+    .filter((p) => !isLegacyGenericKey(p.key))
     .map((p) => ({ category: p.category, key: p.key, value: p.value }))
   const analysisStartedAt = Date.now()
   const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel, {

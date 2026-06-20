@@ -14068,6 +14068,13 @@ var CONFIDENCE_INCREMENT = 0.1;
 var CONFIDENCE_MAX = 1;
 var CONFIDENCE_MIN_THRESHOLD = 0.01;
 var INITIAL_CONFIDENCE = 0.1;
+var LEGACY_GENERIC_KEYS = /* @__PURE__ */ new Set([
+  "preference",
+  "pattern"
+]);
+function isLegacyGenericKey(key) {
+  return LEGACY_GENERIC_KEYS.has(key);
+}
 var DEFAULT_CORRECTION_PENALTY = 0.5;
 function reinforcePreference(preferences, observation, asOf = /* @__PURE__ */ new Date()) {
   const now = asOf.toISOString();
@@ -14184,24 +14191,29 @@ var SUMMARY_CONFIDENCE_THRESHOLD = 0.2;
 var SUMMARY_MAX_ENTRIES = 5;
 function summarizeCategory(clusters, category) {
   return clusters.filter(
-    (c) => c.category === category && c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
+    (c) => c.category === category && // Legacy generic keys carry no real signal — keep them out of the
+    // injected style summary (see isLegacyGenericKey).
+    !isLegacyGenericKey(c.key) && c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
   ).slice().sort(
     (a, b) => b.confidence !== a.confidence ? b.confidence - a.confidence : a.key.localeCompare(b.key)
   ).slice(0, SUMMARY_MAX_ENTRIES).map((c) => `${c.key}: ${c.value}`).join("; ");
 }
 function extractObservations(session) {
-  const observations = [];
+  const byKey = /* @__PURE__ */ new Map();
+  const add = (observation) => {
+    byKey.set(`${observation.category}::${observation.key}`, observation);
+  };
   for (const pref of session.codingPreferences) {
-    observations.push(
+    add(
       typeof pref === "string" ? { category: "codingPreferences", key: "preference", value: pref } : { category: "codingPreferences", key: pref.key, value: pref.value }
     );
   }
   for (const pattern of session.interactionPatterns) {
-    observations.push(
+    add(
       typeof pattern === "string" ? { category: "interactionStyle", key: "pattern", value: pattern } : { category: "interactionStyle", key: pattern.key, value: pattern.value }
     );
   }
-  return observations;
+  return [...byKey.values()];
 }
 function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DECAY_DAYS, correctionPenalty = DEFAULT_CORRECTION_PENALTY, asOf = /* @__PURE__ */ new Date()) {
   const now = asOf;

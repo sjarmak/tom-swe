@@ -17,6 +17,7 @@ import { ToMSuggestionSchema } from './schemas.js'
 import { detectAmbiguity } from './ambiguity.js'
 import type { AmbiguityThreshold, AmbiguityResult } from './ambiguity.js'
 import { readUserModel, globalTomDir } from './memory-io.js'
+import { isLegacyGenericKey } from './preferences.js'
 import { search } from './bm25.js'
 import type { BM25Index, BM25SearchResult } from './bm25.js'
 import { logUsage } from './routing.js'
@@ -100,8 +101,12 @@ function buildSuggestionFromUserModel(
 
   // Promoted preferences already live in a CLAUDE.md marker block; a
   // suggestion built solely from them would double-inject, so skip them.
+  // Legacy generic keys ('preference'/'pattern') are collapsed noise and must
+  // never be surfaced to the agent — excluding them from promotion (where they
+  // were previously suppressed here via the promoted flag) would otherwise let
+  // them leak into this consultation suggestion instead.
   const unpromoted = userModel.preferencesClusters.filter(
-    (p) => p.promoted !== true
+    (p) => p.promoted !== true && !isLegacyGenericKey(p.key)
   )
   if (unpromoted.length === 0) {
     return null

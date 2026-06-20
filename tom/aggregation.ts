@@ -5,6 +5,7 @@ import {
   decayPreferences,
   applyCorrections,
   resolveConflicts,
+  isLegacyGenericKey,
   DEFAULT_CORRECTION_PENALTY,
 } from './preferences.js'
 
@@ -33,7 +34,12 @@ function summarizeCategory(
 ): string {
   return clusters
     .filter(
-      (c) => c.category === category && c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
+      (c) =>
+        c.category === category &&
+        // Legacy generic keys carry no real signal — keep them out of the
+        // injected style summary (see isLegacyGenericKey).
+        !isLegacyGenericKey(c.key) &&
+        c.confidence >= SUMMARY_CONFIDENCE_THRESHOLD
     )
     .slice()
     .sort((a, b) =>
@@ -56,12 +62,23 @@ function summarizeCategory(
  * Keyed entries are what make the flywheel work: reinforcement and conflict
  * resolution match on category+key, so generic keys made distinct
  * preferences overwrite each other and sentence-long values never recur.
+ *
+ * Observations are deduplicated by category+key within the session (last
+ * value wins). A single session is one piece of evidence per preference, so
+ * it must contribute at most one reinforcement: without this, a session whose
+ * array carries N entries for the same key (the common case for legacy
+ * bare-strings folding onto 'preference'/'pattern') would inflate confidence
+ * and sessionCount by N instead of 1. Cross-session accumulation is unaffected
+ * — each distinct session still reinforces once.
  */
 function extractObservations(session: SessionModel): PreferenceObservation[] {
-  const observations: PreferenceObservation[] = []
+  const byKey = new Map<string, PreferenceObservation>()
+  const add = (observation: PreferenceObservation): void => {
+    byKey.set(`${observation.category}::${observation.key}`, observation)
+  }
 
   for (const pref of session.codingPreferences) {
-    observations.push(
+    add(
       typeof pref === 'string'
         ? { category: 'codingPreferences', key: 'preference', value: pref }
         : { category: 'codingPreferences', key: pref.key, value: pref.value }
@@ -69,14 +86,14 @@ function extractObservations(session: SessionModel): PreferenceObservation[] {
   }
 
   for (const pattern of session.interactionPatterns) {
-    observations.push(
+    add(
       typeof pattern === 'string'
         ? { category: 'interactionStyle', key: 'pattern', value: pattern }
         : { category: 'interactionStyle', key: pattern.key, value: pattern.value }
     )
   }
 
-  return observations
+  return [...byKey.values()]
 }
 
 /**

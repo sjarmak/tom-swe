@@ -25,6 +25,7 @@ import * as os from 'node:os'
 
 import type { PreferenceCluster, UserModel } from './schemas.js'
 import type { DerivabilityGate } from './promotion-gate.js'
+import { isLegacyGenericKey } from './preferences.js'
 import { logUsage } from './routing.js'
 
 // --- Markers ---
@@ -85,6 +86,9 @@ export function selectPromotable(
     .filter(
       (p) =>
         PROMOTABLE_CATEGORIES.has(p.category) &&
+        // Legacy generic keys ('preference'/'pattern') are collapsed noise —
+        // never promote them into a CLAUDE.md marker block.
+        !isLegacyGenericKey(p.key) &&
         p.confidence >= config.threshold &&
         p.sessionCount >= config.minSessions
     )

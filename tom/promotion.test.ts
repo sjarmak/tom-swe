@@ -59,9 +59,9 @@ function readUsageEntries(homeDir: string): Array<Record<string, unknown>> {
 
 describe('selectPromotable', () => {
   it('selects preferences meeting both confidence and session thresholds', () => {
-    const stable = cluster({ value: 'vitest', confidence: 0.85, sessionCount: 7 })
-    const lowConfidence = cluster({ value: 'jest', confidence: 0.79, sessionCount: 20 })
-    const fewSessions = cluster({ value: 'mocha', confidence: 0.95, sessionCount: 4 })
+    const stable = cluster({ key: 'test_runner', value: 'vitest', confidence: 0.85, sessionCount: 7 })
+    const lowConfidence = cluster({ key: 'test_runner', value: 'jest', confidence: 0.79, sessionCount: 20 })
+    const fewSessions = cluster({ key: 'test_runner', value: 'mocha', confidence: 0.95, sessionCount: 4 })
 
     const result = selectPromotable(
       userModel([stable, lowConfidence, fewSessions]),
@@ -72,25 +72,53 @@ describe('selectPromotable', () => {
   })
 
   it('treats threshold and minSessions boundaries as inclusive', () => {
-    const atBoundary = cluster({ confidence: 0.8, sessionCount: 5 })
+    const atBoundary = cluster({ key: 'test_runner', confidence: 0.8, sessionCount: 5 })
     const result = selectPromotable(userModel([atBoundary]), DEFAULT_PROMOTION)
     expect(result).toEqual([atBoundary])
   })
 
   it('keeps already-promoted preferences selected so blocks retain them', () => {
-    const promoted = cluster({ confidence: 0.9, sessionCount: 10, promoted: true })
+    const promoted = cluster({ key: 'test_runner', confidence: 0.9, sessionCount: 10, promoted: true })
     const result = selectPromotable(userModel([promoted]), DEFAULT_PROMOTION)
     expect(result).toEqual([promoted])
   })
 
   it('respects custom thresholds', () => {
-    const pref = cluster({ confidence: 0.6, sessionCount: 3 })
+    const pref = cluster({ key: 'test_runner', confidence: 0.6, sessionCount: 3 })
     const result = selectPromotable(userModel([pref]), {
       enabled: true,
       threshold: 0.5,
       minSessions: 3,
     })
     expect(result).toEqual([pref])
+  })
+
+  it('never selects legacy generic keys, even at max confidence', () => {
+    // 'preference' and 'pattern' are collapsed-noise keys: they must never be
+    // promoted into CLAUDE.md no matter how high their (inflated) confidence
+    // or session count climbs (tom-swe-591).
+    const legacyPreference = cluster({
+      category: 'codingPreferences',
+      key: 'preference',
+      value: '/home/ds/some/file.ts',
+      confidence: 1.0,
+      sessionCount: 675,
+    })
+    const legacyPattern = cluster({
+      category: 'interactionStyle',
+      key: 'pattern',
+      value: 'uses-Write',
+      confidence: 1.0,
+      sessionCount: 58,
+    })
+    const realKey = cluster({ key: 'test_runner', value: 'vitest', confidence: 0.9, sessionCount: 10 })
+
+    const result = selectPromotable(
+      userModel([legacyPreference, legacyPattern, realKey]),
+      DEFAULT_PROMOTION
+    )
+
+    expect(result).toEqual([realKey])
   })
 })
 
@@ -330,7 +358,7 @@ describe('runPromotion', () => {
     fs.writeFileSync(projectFile, '# Project\n', 'utf-8')
     fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true })
 
-    const codingPref = cluster({ value: 'vitest' })
+    const codingPref = cluster({ key: 'test_runner', value: 'vitest' })
     const result = runPromotion(
       userModel([codingPref]),
       DEFAULT_PROMOTION,
@@ -354,7 +382,7 @@ describe('runPromotion', () => {
     fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true })
     const interaction = cluster({
       category: 'interactionStyle',
-      key: 'pattern',
+      key: 'response_style',
       value: 'concise-answers',
     })
     // Emotional signals reinforce nearly every session and would cross any
@@ -373,7 +401,7 @@ describe('runPromotion', () => {
     )
 
     const content = fs.readFileSync(globalMemoryFilePath(), 'utf-8')
-    expect(content).toContain('Prefers concise-answers (interactionStyle/pattern')
+    expect(content).toContain('Prefers concise-answers (interactionStyle/response_style')
     expect(content).not.toContain('emotionalSignals')
     expect(result.promoted.map((p) => p.category)).not.toContain('emotionalSignals')
     expect(result.targets).toContain(globalMemoryFilePath())
@@ -515,7 +543,7 @@ describe('runPromotion', () => {
 
   it('does not create a project CLAUDE.md that does not exist', () => {
     fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true })
-    const codingPref = cluster({ value: 'vitest' })
+    const codingPref = cluster({ key: 'test_runner', value: 'vitest' })
 
     const result = runPromotion(userModel([codingPref]), DEFAULT_PROMOTION, projectDir)
 
@@ -531,7 +559,7 @@ describe('runPromotion', () => {
     fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true })
     const interaction = cluster({
       category: 'interactionStyle',
-      key: 'pattern',
+      key: 'response_style',
       value: 'concise',
     })
 
@@ -551,7 +579,7 @@ describe('runPromotion', () => {
   it('does not create the global CLAUDE.md when ~/.claude is missing', () => {
     const interaction = cluster({
       category: 'interactionStyle',
-      key: 'pattern',
+      key: 'response_style',
       value: 'concise',
     })
 
@@ -568,7 +596,7 @@ describe('runPromotion', () => {
 
     const stillStable = cluster({
       category: 'interactionStyle',
-      key: 'pattern',
+      key: 'response_style',
       value: 'concise',
       confidence: 0.9,
       sessionCount: 10,

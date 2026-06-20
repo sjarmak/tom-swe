@@ -99,6 +99,24 @@ describe('buildModelSummary', () => {
     expect(lines.length).toBeLessThanOrEqual(10)
   })
 
+  it('excludes legacy generic keys (preference/pattern) from the injected summary', () => {
+    // Collapsed-noise keys must never be injected, even at max confidence
+    // (tom-swe-591). A bare file path under key 'preference' and 'uses-Write'
+    // under key 'pattern' are exactly the junk this guard removes.
+    const model = createUserModel({
+      preferencesClusters: [
+        pref('preference', '/home/ds/some/file.ts', 1.0),
+        pref('pattern', 'uses-Write', 1.0, 'interactionStyle'),
+        pref('language', 'typescript', 0.9),
+      ],
+    })
+
+    const summary = buildModelSummary(model) ?? ''
+    expect(summary).not.toContain('/home/ds/some/file.ts')
+    expect(summary).not.toContain('uses-Write')
+    expect(summary).toContain('typescript')
+  })
+
   it('excludes promoted preferences from the injected summary', () => {
     const promotedPref = { ...pref('testing', 'vitest', 0.95), promoted: true }
     const model = createUserModel({

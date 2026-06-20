@@ -16,6 +16,24 @@ const CONFIDENCE_MAX = 1.0
 const CONFIDENCE_MIN_THRESHOLD = 0.01
 const INITIAL_CONFIDENCE = 0.1
 
+/**
+ * Generic keys produced by the legacy bare-string extraction path (before the
+ * keyed-vocabulary work). Every bare coding-pref folds onto 'preference' and
+ * every bare interaction-pattern onto 'pattern', so these clusters collapse
+ * unrelated observations: the value is whatever was seen last and carries no
+ * real signal. They are excluded from vocabulary anchoring, promotion, and
+ * injection — but kept in the store so a real keyed observation can still
+ * supersede them and so they decay naturally rather than being hand-deleted.
+ */
+export const LEGACY_GENERIC_KEYS: ReadonlySet<string> = new Set([
+  'preference',
+  'pattern',
+])
+
+export function isLegacyGenericKey(key: string): boolean {
+  return LEGACY_GENERIC_KEYS.has(key)
+}
+
 export const DEFAULT_CORRECTION_PENALTY = 0.5
 
 /**

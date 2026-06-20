@@ -29,7 +29,18 @@ export type DerivabilityGate = (
   candidates: readonly GateCandidate[]
 ) => ReadonlySet<string> | null
 
-const GATE_TIMEOUT_MS = 45_000
+// Matches the session-analysis path (LLM_ANALYSIS_TIMEOUT_MS). The gate is an
+// agentic call — it inspects the repo with Read/Glob/Grep — so it is slower
+// than a plain extraction. A 45s ceiling left ~37% of gate runs unavailable
+// (derivability-gate-unavailable in usage.log); 90s covers the tool-using tail.
+//
+// Latency note: this gate runs synchronously in the Stop hook AFTER the (up to
+// 90s) async analysis, so a promotion turn's worst-case background wall time is
+// ~180s. That ceiling is only reachable on turns that actually have new
+// project-scoped promotion candidates needing judgment (rare — most Stops have
+// none and skip the spawn entirely), and the Stop hook is background work that
+// does not block the interactive turn. The bound is accepted for that rarity.
+const GATE_TIMEOUT_MS = 90_000
 
 export function buildGatePrompt(candidates: readonly GateCandidate[]): string {
   return [
@@ -75,11 +86,15 @@ export function judgeDerivability(
     return new Set()
   }
 
+  // The prompt is piped via stdin, NOT passed on argv: the gate prompt embeds
+  // every candidate statement, and a large candidate set on argv overflows the
+  // OS ARG_MAX (spawn E2BIG). `claude -p` with no prompt arg reads from stdin,
+  // so argv length stays constant regardless of candidate count. This mirrors
+  // the analysis path's stdin fix (see llm-analyze.ts).
   const proc = spawnSync(
     'claude',
     [
       '-p',
-      buildGatePrompt(candidates),
       '--model',
       model,
       '--output-format',
@@ -89,6 +104,7 @@ export function judgeDerivability(
     ],
     {
       cwd,
+      input: buildGatePrompt(candidates),
       encoding: 'utf-8',
       timeout: GATE_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,

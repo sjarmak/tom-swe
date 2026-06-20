@@ -144,6 +144,43 @@ describe('aggregateSessionIntoModel', () => {
     }
   })
 
+  it('counts a single session once per key even with many same-key entries', () => {
+    // A session whose arrays carry many entries that fold onto the same
+    // category+key (the legacy bare-string case folding onto 'preference'/
+    // 'pattern') must contribute exactly +1 confidence and +1 sessionCount —
+    // not +N. This is the fix for the count-inflation bug (tom-swe-8h0) where
+    // 675 bare-string observations across 35 sessions inflated one cluster to
+    // sessionCount 675 and pinned confidence at 1.0.
+    const model = makeUserModel()
+    const session = makeSessionModel({
+      // 50 distinct bare-string coding prefs all fold onto key 'preference'.
+      codingPreferences: Array.from({ length: 50 }, (_, i) => `pref-${i}`),
+      // 30 distinct bare-string patterns all fold onto key 'pattern'.
+      interactionPatterns: Array.from({ length: 30 }, (_, i) => `pat-${i}`),
+    })
+    const result = aggregateSessionIntoModel(model, session)
+
+    const codingPref = result.preferencesClusters.find(
+      (p) => p.category === 'codingPreferences' && p.key === 'preference'
+    )
+    expect(codingPref?.sessionCount).toBe(1)
+    expect(codingPref?.confidence).toBeCloseTo(0.1)
+    // Last entry's value is retained (last-wins dedup).
+    expect(codingPref?.value).toBe('pref-49')
+
+    const interactionPref = result.preferencesClusters.find(
+      (p) => p.category === 'interactionStyle' && p.key === 'pattern'
+    )
+    expect(interactionPref?.sessionCount).toBe(1)
+    expect(interactionPref?.confidence).toBeCloseTo(0.1)
+    expect(interactionPref?.value).toBe('pat-29')
+
+    // Exactly one cluster per folded key — no fragmentation.
+    expect(
+      result.preferencesClusters.filter((p) => p.key === 'preference')
+    ).toHaveLength(1)
+  })
+
   it('groups preferences by category and similar keys (auto-clustering)', () => {
     const model = makeUserModel({
       preferencesClusters: [

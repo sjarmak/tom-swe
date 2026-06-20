@@ -14121,6 +14121,15 @@ function readUserModel(scope = "merged") {
   return result.success ? withoutDeprecatedClusters(result.data) : null;
 }
 
+// tom/preferences.ts
+var LEGACY_GENERIC_KEYS = /* @__PURE__ */ new Set([
+  "preference",
+  "pattern"
+]);
+function isLegacyGenericKey(key) {
+  return LEGACY_GENERIC_KEYS.has(key);
+}
+
 // tom/bm25.ts
 var K1 = 1.2;
 var B = 0.75;
@@ -14224,7 +14233,7 @@ function buildSuggestionFromUserModel(ambiguityResult) {
     return null;
   }
   const unpromoted = userModel.preferencesClusters.filter(
-    (p) => p.promoted !== true
+    (p) => p.promoted !== true && !isLegacyGenericKey(p.key)
   );
   if (unpromoted.length === 0) {
     return null;
