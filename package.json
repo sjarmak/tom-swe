@@ -1,6 +1,6 @@
 {
   "name": "tom-swe",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Theory of Mind agent for Claude Code — learns your coding preferences across sessions",
   "scripts": {
     "build": "node esbuild.config.mjs",
@@ -9,7 +9,12 @@
     "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["claude-code", "plugin", "theory-of-mind", "personalization"],
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "theory-of-mind",
+    "personalization"
+  ],
   "author": "sjarmak",
   "license": "MIT",
   "type": "commonjs",
