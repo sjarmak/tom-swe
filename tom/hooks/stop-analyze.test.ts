@@ -488,6 +488,109 @@ describe('analyzeCompletedSession', () => {
     expect(result.sessionModel?.codingPreferences).toEqual([])
   })
 
+  it('preserves an existing Tier 2 model on LLM failure instead of downgrading to the heuristic', async () => {
+    writeSessionFile('preserve-test')
+    // A prior (richer) Tier 2 model already on disk, aged past the debounce
+    // window so re-analysis is attempted again this turn.
+    const modelDir = path.join(tempDir, '.claude', 'tom', 'session-models')
+    fs.mkdirSync(modelDir, { recursive: true })
+    const modelPath = path.join(modelDir, 'preserve-test.json')
+    fs.writeFileSync(
+      modelPath,
+      JSON.stringify({
+        sessionId: 'preserve-test',
+        intent: 'rich prior analysis worth keeping',
+        interactionPatterns: ['reads-before-editing'],
+        codingPreferences: ['typescript strict mode'],
+        endedAt: '2026-01-15T08:00:00.000Z',
+      }),
+      'utf-8'
+    )
+    const aged = new Date(Date.now() - 5 * 60_000)
+    fs.utimesSync(modelPath, aged, aged)
+
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'timeout',
+      detail: 'claude did not respond within 90000ms',
+    })
+
+    const result = await analyzeCompletedSession('preserve-test')
+    expect(result.success).toBe(true)
+    // The prior model is kept, NOT replaced by the heuristic extractor.
+    expect(result.sessionModel?.intent).toBe('rich prior analysis worth keeping')
+    expect(result.sessionModel?.interactionPatterns).toEqual(['reads-before-editing'])
+    // Preserve keeps the prior model's own endedAt (decay anchor) intact —
+    // it is NOT overwritten with this turn's Tier 1 endedAt.
+    expect(result.sessionModel?.endedAt).toBe('2026-01-15T08:00:00.000Z')
+    // On-disk Tier 2 still holds the prior model.
+    const persisted = JSON.parse(fs.readFileSync(modelPath, 'utf-8'))
+    expect(persisted.intent).toBe('rich prior analysis worth keeping')
+
+    // Telemetry distinguishes preservation from a real heuristic synthesis.
+    const fallback = readUsageEntries().find(
+      (e) => e['operation'] === 'session-analysis-fallback'
+    )
+    const detail = (fallback?.['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['path']).toBe('preserved')
+    expect(detail['failure']).toBe('timeout')
+  })
+
+  it('synthesizes a heuristic model on LLM failure when no prior model exists, logged as path=heuristic', async () => {
+    writeSessionFile('no-prior-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'timeout',
+      detail: 'claude did not respond within 90000ms',
+    })
+
+    const result = await analyzeCompletedSession('no-prior-test')
+    expect(result.success).toBe(true)
+    expect(result.sessionModel?.intent).toBe('brief code exploration')
+
+    const fallback = readUsageEntries().find(
+      (e) => e['operation'] === 'session-analysis-fallback'
+    )
+    const detail = (fallback?.['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['path']).toBe('heuristic')
+  })
+
+  it('overwrites a prior Tier 2 model when the LLM analysis succeeds', async () => {
+    writeSessionFile('overwrite-test')
+    const modelDir = path.join(tempDir, '.claude', 'tom', 'session-models')
+    fs.mkdirSync(modelDir, { recursive: true })
+    const modelPath = path.join(modelDir, 'overwrite-test.json')
+    fs.writeFileSync(
+      modelPath,
+      JSON.stringify({
+        sessionId: 'overwrite-test',
+        intent: 'stale prior',
+        interactionPatterns: [],
+        codingPreferences: [],
+      }),
+      'utf-8'
+    )
+    const aged = new Date(Date.now() - 5 * 60_000)
+    fs.utimesSync(modelPath, aged, aged)
+
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'overwrite-test',
+        intent: 'fresh llm analysis',
+        interactionPatterns: [],
+        codingPreferences: [],
+      },
+      tokensUsed: 50,
+      path: 'llm',
+    })
+
+    const result = await analyzeCompletedSession('overwrite-test')
+    expect(result.sessionModel?.intent).toBe('fresh llm analysis')
+    const persisted = JSON.parse(fs.readFileSync(modelPath, 'utf-8'))
+    expect(persisted.intent).toBe('fresh llm analysis')
+  })
+
   it('uses the LLM session model and logs real model and tokens on success', async () => {
     writeSessionFile('llm-success-test')
     const llmModel = {

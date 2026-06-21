@@ -15,7 +15,13 @@ import * as path from 'node:path'
 
 import type { SessionLog, SessionModel } from '../schemas.js'
 import { SessionLogSchema } from '../schemas.js'
-import { readUserModel, writeSessionModel, writeUserModel, globalTomDir } from '../memory-io.js'
+import {
+  readUserModel,
+  readSessionModel,
+  writeSessionModel,
+  writeUserModel,
+  globalTomDir,
+} from '../memory-io.js'
 import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
@@ -204,6 +210,7 @@ export async function analyzeCompletedSession(
   }
 
   let extracted: SessionModel
+  let preservedPrior = false
   if (llmResult.ok) {
     extracted = llmResult.model
     logUsage({
@@ -216,6 +223,15 @@ export async function analyzeCompletedSession(
       detail: { path: 'llm' },
     })
   } else {
+    // Preserve-on-failure: post-0.5.1 the residual failures are uncorrelated
+    // timeouts (see tom-swe-j7c). A transient failure must not DOWNGRADE an
+    // existing Tier 2 model to the heuristic extractor — keep the prior model
+    // when one exists, and only synthesize a heuristic for a session never
+    // analyzed before (no regression). Leaving the prior file untouched also
+    // keeps its mtime aged, so the debounce permits a fresh LLM attempt next
+    // turn (81% of timed-out sessions recover on a later turn).
+    const prior = readSessionModel(sessionId, 'global')
+    preservedPrior = prior !== null
     logUsage({
       timestamp: new Date().toISOString(),
       operation: 'session-analysis-fallback',
@@ -224,14 +240,27 @@ export async function analyzeCompletedSession(
       sessionId,
       durationMs: analysisDurationMs,
       reason: `${llmResult.reason}: ${llmResult.detail}`,
-      detail: { path: 'heuristic', failure: llmResult.reason },
+      detail: {
+        path: preservedPrior ? 'preserved' : 'heuristic',
+        failure: llmResult.reason,
+      },
     })
-    extracted = extractSessionModel(sessionLog)
+    extracted = prior ?? extractSessionModel(sessionLog)
   }
   // endedAt is stamped mechanically from the Tier 1 log (never produced by
-  // the LLM): it grounds decay when Tier 3 is rebuilt from Tier 2.
-  const sessionModel: SessionModel = { ...extracted, endedAt: sessionLog.endedAt }
-  writeSessionModel(sessionModel, 'global')
+  // the LLM): it grounds decay when Tier 3 is rebuilt from Tier 2. On
+  // preservation the prior model is kept exactly as persisted (its own
+  // endedAt) so the in-memory model never diverges from disk; only a freshly
+  // extracted (LLM or heuristic) model is stamped with this turn's endedAt.
+  const sessionModel: SessionModel = preservedPrior
+    ? extracted
+    : { ...extracted, endedAt: sessionLog.endedAt }
+  // On preservation the on-disk Tier 2 model is already authoritative; skip the
+  // rewrite so its mtime stays aged (re-attempt next turn) and avoid a
+  // redundant non-atomic write (tom-swe-ur0).
+  if (!preservedPrior) {
+    writeSessionModel(sessionModel, 'global')
+  }
 
   // Step 3: Rebuild Tier 3 from ALL Tier 2 models. Stop fires per turn-end,
   // so incremental aggregation re-reinforced the same session every turn

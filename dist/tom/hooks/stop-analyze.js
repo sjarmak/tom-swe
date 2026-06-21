@@ -15418,6 +15418,7 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
     });
   }
   let extracted;
+  let preservedPrior = false;
   if (llmResult.ok) {
     extracted = llmResult.model;
     logUsage({
@@ -15430,6 +15431,8 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
       detail: { path: "llm" }
     });
   } else {
+    const prior = readSessionModel(sessionId, "global");
+    preservedPrior = prior !== null;
     logUsage({
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
       operation: "session-analysis-fallback",
@@ -15438,12 +15441,17 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
       sessionId,
       durationMs: analysisDurationMs,
       reason: `${llmResult.reason}: ${llmResult.detail}`,
-      detail: { path: "heuristic", failure: llmResult.reason }
+      detail: {
+        path: preservedPrior ? "preserved" : "heuristic",
+        failure: llmResult.reason
+      }
     });
-    extracted = extractSessionModel(sessionLog);
+    extracted = prior ?? extractSessionModel(sessionLog);
   }
-  const sessionModel = { ...extracted, endedAt: sessionLog.endedAt };
-  writeSessionModel(sessionModel, "global");
+  const sessionModel = preservedPrior ? extracted : { ...extracted, endedAt: sessionLog.endedAt };
+  if (!preservedPrior) {
+    writeSessionModel(sessionModel, "global");
+  }
   const previousUserModel = readUserModel("global");
   const config2 = readTomConfig();
   const aggregatedUserModel = carryPromotedFlags(
