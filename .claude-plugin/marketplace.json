@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "tom-swe",
-  "description": "Theory of Mind plugins for Claude Code — personalized user modeling across sessions",
+  "description": "Theory of Mind plugins for Claude Code \u2014 personalized user modeling across sessions",
   "owner": {
     "name": "sjarmak"
   },
@@ -14,13 +14,22 @@
       "name": "tom-swe",
       "source": "./",
       "description": "Theory of Mind agent that learns your coding preferences, interaction style, and project patterns across sessions. Based on the ToM-SWE paper.",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "author": {
         "name": "sjarmak"
       },
       "category": "development",
-      "tags": ["personalization", "memory", "preferences"],
-      "keywords": ["theory-of-mind", "user-modeling", "preferences", "memory"]
+      "tags": [
+        "personalization",
+        "memory",
+        "preferences"
+      ],
+      "keywords": [
+        "theory-of-mind",
+        "user-modeling",
+        "preferences",
+        "memory"
+      ]
     }
   ]
 }
