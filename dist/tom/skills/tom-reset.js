@@ -37,13 +37,18 @@ __export(tom_reset_exports, {
   performReset: () => performReset
 });
 module.exports = __toCommonJS(tom_reset_exports);
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 
 // tom/memory-io.ts
+var fs2 = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
+var os = __toESM(require("node:os"));
+
+// tom/fs-atomic.ts
 var fs = __toESM(require("node:fs"));
 var path = __toESM(require("node:path"));
-var os = __toESM(require("node:os"));
+var crypto = __toESM(require("node:crypto"));
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -812,10 +817,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path5) {
-  if (!path5)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path5.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1198,11 +1203,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path5, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path5);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1385,7 +1390,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path5 = []) => {
+  const processError = (error49, path6 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1395,7 +1400,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1427,8 +1432,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path5) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13405,13 +13410,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path5 = ref.slice(1).split("/").filter(Boolean);
-  if (path5.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path5[0] === defsKey) {
-    const key = path5[1];
+  if (path6[0] === defsKey) {
+    const key = path6[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13907,20 +13912,20 @@ var ToMSuggestionSchema = external_exports.strictObject({
 
 // tom/memory-io.ts
 function globalTomDir() {
-  return path.join(os.homedir(), ".claude", "tom");
+  return path2.join(os.homedir(), ".claude", "tom");
 }
 function projectTomDir() {
-  return path.join(process.cwd(), ".claude", "tom");
+  return path2.join(process.cwd(), ".claude", "tom");
 }
 
 // tom/promotion.ts
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
 var os3 = __toESM(require("node:os"));
 
 // tom/routing.ts
-var fs2 = __toESM(require("node:fs"));
-var path2 = __toESM(require("node:path"));
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
 var UsageLogEntrySchema = external_exports.looseObject({
   v: external_exports.number().optional(),
@@ -13940,7 +13945,7 @@ var PROMOTION_END_MARKER = "<!-- tom-swe:end -->";
 function removePromotionBlock(filePath) {
   let content;
   try {
-    content = fs3.readFileSync(filePath, "utf-8");
+    content = fs4.readFileSync(filePath, "utf-8");
   } catch {
     return false;
   }
@@ -13957,19 +13962,19 @@ function removePromotionBlock(filePath) {
   if (content.slice(Math.max(0, beforeBegin - 2), beforeBegin) === "\n\n") {
     beforeBegin -= 1;
   }
-  fs3.writeFileSync(filePath, content.slice(0, beforeBegin) + content.slice(afterEnd), "utf-8");
+  fs4.writeFileSync(filePath, content.slice(0, beforeBegin) + content.slice(afterEnd), "utf-8");
   return true;
 }
 function globalMemoryFilePath() {
-  return path3.join(os3.homedir(), ".claude", "CLAUDE.md");
+  return path4.join(os3.homedir(), ".claude", "CLAUDE.md");
 }
 function findProjectMemoryFile(cwd) {
-  const rootCandidate = path3.join(cwd, "CLAUDE.md");
-  if (fs3.existsSync(rootCandidate)) {
+  const rootCandidate = path4.join(cwd, "CLAUDE.md");
+  if (fs4.existsSync(rootCandidate)) {
     return rootCandidate;
   }
-  const dotClaudeCandidate = path3.join(cwd, ".claude", "CLAUDE.md");
-  if (fs3.existsSync(dotClaudeCandidate)) {
+  const dotClaudeCandidate = path4.join(cwd, ".claude", "CLAUDE.md");
+  if (fs4.existsSync(dotClaudeCandidate)) {
     return dotClaudeCandidate;
   }
   return null;
@@ -13979,9 +13984,9 @@ function findProjectMemoryFile(cwd) {
 function collectFiles(dirPath) {
   const results = [];
   try {
-    const entries = fs4.readdirSync(dirPath, { withFileTypes: true });
+    const entries = fs5.readdirSync(dirPath, { withFileTypes: true });
     for (const entry of entries) {
-      const fullPath = path4.join(dirPath, entry.name);
+      const fullPath = path5.join(dirPath, entry.name);
       if (entry.isDirectory()) {
         results.push(...collectFiles(fullPath));
       } else {
@@ -13997,14 +14002,14 @@ function deleteDirectory(dirPath) {
   let totalBytes = 0;
   for (const filePath of files) {
     try {
-      const stat = fs4.statSync(filePath);
+      const stat = fs5.statSync(filePath);
       totalBytes += stat.size;
     } catch {
     }
   }
   const fileCount = files.length;
   try {
-    fs4.rmSync(dirPath, { recursive: true, force: true });
+    fs5.rmSync(dirPath, { recursive: true, force: true });
   } catch {
   }
   return { fileCount, totalBytes };

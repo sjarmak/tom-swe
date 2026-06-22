@@ -17,6 +17,7 @@ import {
 import { readTomConfig } from '../config.js'
 import { aggregateSessionIntoModel } from '../aggregation.js'
 import { buildMemoryIndex } from '../agent/tools.js'
+import { atomicWriteFileSync } from '../fs-atomic.js'
 import type {
   SessionLog,
   SessionModel,
@@ -136,11 +137,7 @@ export function forgetSession(sessionId: string): ForgetResult {
       const index = buildMemoryIndex(scope)
       const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
       const indexPath = path.join(tomDir, 'bm25-index.json')
-      const dir = path.dirname(indexPath)
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true })
-      }
-      fs.writeFileSync(indexPath, JSON.stringify(index), 'utf-8')
+      atomicWriteFileSync(indexPath, JSON.stringify(index))
     }
   }
 
@@ -272,7 +269,7 @@ export function exportToFile(): string {
   const filename = `tom-export-${timestamp}.json`
   const filePath = path.join(process.cwd(), filename)
 
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
+  atomicWriteFileSync(filePath, JSON.stringify(data, null, 2))
 
   return filePath
 }

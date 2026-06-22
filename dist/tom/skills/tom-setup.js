@@ -35,9 +35,41 @@ __export(tom_setup_exports, {
   setup: () => setup
 });
 module.exports = __toCommonJS(tom_setup_exports);
+var fs2 = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
+var os = __toESM(require("node:os"));
+
+// tom/fs-atomic.ts
 var fs = __toESM(require("node:fs"));
 var path = __toESM(require("node:path"));
-var os = __toESM(require("node:os"));
+var crypto = __toESM(require("node:crypto"));
+var tempCounter = 0;
+function tempPathFor(filePath) {
+  const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
+  return `${filePath}.${suffix}.tmp`;
+}
+function ensureDirectoryExists(filePath) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+function atomicWriteFileSync(filePath, data) {
+  ensureDirectoryExists(filePath);
+  const tempPath = tempPathFor(filePath);
+  try {
+    fs.writeFileSync(tempPath, data, "utf-8");
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+    }
+    throw error;
+  }
+}
+
+// tom/skills/tom-setup.ts
 var DEFAULT_CONFIG = {
   enabled: true,
   consultThreshold: "medium",
@@ -49,11 +81,11 @@ var DEFAULT_CONFIG = {
   maxSessionsRetained: 100
 };
 function getConfigPath() {
-  return path.join(os.homedir(), ".claude", "tom", "config.json");
+  return path2.join(os.homedir(), ".claude", "tom", "config.json");
 }
 function setup() {
   const configPath = getConfigPath();
-  if (fs.existsSync(configPath)) {
+  if (fs2.existsSync(configPath)) {
     return {
       created: false,
       alreadyExists: true,
@@ -61,15 +93,7 @@ function setup() {
     };
   }
   try {
-    const dir = path.dirname(configPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify(DEFAULT_CONFIG, null, 2),
-      "utf-8"
-    );
+    atomicWriteFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2));
     return {
       created: true,
       alreadyExists: false,

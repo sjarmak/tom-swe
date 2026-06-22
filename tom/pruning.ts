@@ -14,6 +14,7 @@ import {
   globalTomDir,
   projectTomDir,
 } from './memory-io'
+import { atomicWriteFileSync } from './fs-atomic'
 import { buildMemoryIndex } from './agent/tools'
 import type { BM25Index } from './bm25'
 
@@ -97,11 +98,7 @@ function deleteSnapshotFile(sessionId: string, scope: 'global' | 'project'): voi
 function saveIndex(index: BM25Index, scope: 'global' | 'project'): void {
   const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
   const indexPath = path.join(tomDir, 'bm25-index.json')
-  const dir = path.dirname(indexPath)
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
-  }
-  fs.writeFileSync(indexPath, JSON.stringify(index), 'utf-8')
+  atomicWriteFileSync(indexPath, JSON.stringify(index))
 }
 
 // --- Main Pruning Function ---

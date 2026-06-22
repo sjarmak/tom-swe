@@ -35,13 +35,18 @@ __export(tom_status_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(tom_status_exports);
-var fs5 = __toESM(require("node:fs"));
-var path5 = __toESM(require("node:path"));
+var fs6 = __toESM(require("node:fs"));
+var path6 = __toESM(require("node:path"));
 
 // tom/memory-io.ts
+var fs2 = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
+var os = __toESM(require("node:os"));
+
+// tom/fs-atomic.ts
 var fs = __toESM(require("node:fs"));
 var path = __toESM(require("node:path"));
-var os = __toESM(require("node:os"));
+var crypto = __toESM(require("node:crypto"));
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -810,10 +815,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path6) {
-  if (!path6)
+function getElementAtPath(obj, path7) {
+  if (!path7)
     return obj;
-  return path6.reduce((acc, key) => acc?.[key], obj);
+  return path7.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1196,11 +1201,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -1383,7 +1388,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path6 = []) => {
+  const processError = (error49, path7 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1393,7 +1398,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1425,8 +1430,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path6) {
+  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path7) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13403,13 +13408,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path6 = ref.slice(1).split("/").filter(Boolean);
-  if (path6.length === 0) {
+  const path7 = ref.slice(1).split("/").filter(Boolean);
+  if (path7.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path6[0] === defsKey) {
-    const key = path6[1];
+  if (path7[0] === defsKey) {
+    const key = path7[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13905,20 +13910,20 @@ var ToMSuggestionSchema = external_exports.strictObject({
 
 // tom/memory-io.ts
 function globalTomDir() {
-  return path.join(os.homedir(), ".claude", "tom");
+  return path2.join(os.homedir(), ".claude", "tom");
 }
 function projectTomDir() {
-  return path.join(process.cwd(), ".claude", "tom");
+  return path2.join(process.cwd(), ".claude", "tom");
 }
 function globalUserModelPath() {
-  return path.join(globalTomDir(), "user-model.json");
+  return path2.join(globalTomDir(), "user-model.json");
 }
 function projectUserModelPath() {
-  return path.join(projectTomDir(), "user-model.json");
+  return path2.join(projectTomDir(), "user-model.json");
 }
 function readJsonFile(filePath) {
   try {
-    const content = fs.readFileSync(filePath, "utf-8");
+    const content = fs2.readFileSync(filePath, "utf-8");
     return JSON.parse(content);
   } catch {
     return null;
@@ -13979,8 +13984,8 @@ function readUserModel(scope = "merged") {
 }
 
 // tom/config.ts
-var fs2 = __toESM(require("node:fs"));
-var path2 = __toESM(require("node:path"));
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
 var TomConfigSchema = external_exports.strictObject({
   enabled: external_exports.boolean().default(false),
@@ -14006,8 +14011,8 @@ var TomConfigSchema = external_exports.strictObject({
 });
 function readTomConfig() {
   try {
-    const configPath = path2.join(os2.homedir(), ".claude", "tom", "config.json");
-    const content = fs2.readFileSync(configPath, "utf-8");
+    const configPath = path3.join(os2.homedir(), ".claude", "tom", "config.json");
+    const content = fs3.readFileSync(configPath, "utf-8");
     const raw = JSON.parse(content);
     const result = TomConfigSchema.safeParse(raw);
     if (result.success) {
@@ -14020,8 +14025,8 @@ function readTomConfig() {
 }
 
 // tom/routing.ts
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
 var os3 = __toESM(require("node:os"));
 var UsageLogEntrySchema = external_exports.looseObject({
   v: external_exports.number().optional(),
@@ -14035,10 +14040,10 @@ var UsageLogEntrySchema = external_exports.looseObject({
   detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
 });
 function readUsageLog() {
-  const logPath = path3.join(globalTomDir(), "usage.log");
+  const logPath = path4.join(globalTomDir(), "usage.log");
   let content;
   try {
-    content = fs3.readFileSync(logPath, "utf-8");
+    content = fs4.readFileSync(logPath, "utf-8");
   } catch {
     return { entries: [], invalidLines: 0 };
   }
@@ -14232,19 +14237,19 @@ function formatTelemetry(summary) {
 }
 
 // tom/promotion.ts
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 var os4 = __toESM(require("node:os"));
 function globalMemoryFilePath() {
-  return path4.join(os4.homedir(), ".claude", "CLAUDE.md");
+  return path5.join(os4.homedir(), ".claude", "CLAUDE.md");
 }
 function findProjectMemoryFile(cwd) {
-  const rootCandidate = path4.join(cwd, "CLAUDE.md");
-  if (fs4.existsSync(rootCandidate)) {
+  const rootCandidate = path5.join(cwd, "CLAUDE.md");
+  if (fs5.existsSync(rootCandidate)) {
     return rootCandidate;
   }
-  const dotClaudeCandidate = path4.join(cwd, ".claude", "CLAUDE.md");
-  if (fs4.existsSync(dotClaudeCandidate)) {
+  const dotClaudeCandidate = path5.join(cwd, ".claude", "CLAUDE.md");
+  if (fs5.existsSync(dotClaudeCandidate)) {
     return dotClaudeCandidate;
   }
   return null;
@@ -14253,7 +14258,7 @@ function findProjectMemoryFile(cwd) {
 // tom/skills/tom-status.ts
 function countJsonFiles(dirPath) {
   try {
-    const entries = fs5.readdirSync(dirPath);
+    const entries = fs6.readdirSync(dirPath);
     return entries.filter((e) => e.endsWith(".json")).length;
   } catch {
     return 0;
@@ -14261,19 +14266,19 @@ function countJsonFiles(dirPath) {
 }
 function getFileSize(filePath) {
   try {
-    const stat = fs5.statSync(filePath);
+    const stat = fs6.statSync(filePath);
     return stat.size;
   } catch {
     return 0;
   }
 }
 function getStorageStats() {
-  const globalSessions = path5.join(globalTomDir(), "sessions");
-  const projectSessions = path5.join(projectTomDir(), "sessions");
-  const globalModels = path5.join(globalTomDir(), "session-models");
-  const projectModels = path5.join(projectTomDir(), "session-models");
-  const globalUserModelFile = path5.join(globalTomDir(), "user-model.json");
-  const projectUserModelFile = path5.join(projectTomDir(), "user-model.json");
+  const globalSessions = path6.join(globalTomDir(), "sessions");
+  const projectSessions = path6.join(projectTomDir(), "sessions");
+  const globalModels = path6.join(globalTomDir(), "session-models");
+  const projectModels = path6.join(projectTomDir(), "session-models");
+  const globalUserModelFile = path6.join(globalTomDir(), "user-model.json");
+  const projectUserModelFile = path6.join(projectTomDir(), "user-model.json");
   return {
     tier1SessionCount: countJsonFiles(globalSessions) + countJsonFiles(projectSessions),
     tier2ModelCount: countJsonFiles(globalModels) + countJsonFiles(projectModels),

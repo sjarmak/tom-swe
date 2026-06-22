@@ -2,6 +2,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
+import { atomicWriteFileSync } from './fs-atomic'
 import {
   SessionLogSchema,
   SessionModelSchema,
@@ -48,13 +49,6 @@ function projectUserModelPath(): string {
 
 // --- Internal Utilities ---
 
-function ensureDirectoryExists(filePath: string): void {
-  const dir = path.dirname(filePath)
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
-  }
-}
-
 function readJsonFile(filePath: string): unknown | null {
   try {
     const content = fs.readFileSync(filePath, 'utf-8')
@@ -65,8 +59,7 @@ function readJsonFile(filePath: string): unknown | null {
 }
 
 function writeJsonFile(filePath: string, data: unknown): void {
-  ensureDirectoryExists(filePath)
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
+  atomicWriteFileSync(filePath, JSON.stringify(data, null, 2))
 }
 
 // --- Session Log (Tier 1) ---

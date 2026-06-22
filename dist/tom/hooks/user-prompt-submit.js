@@ -37,8 +37,8 @@ __export(user_prompt_submit_exports, {
   redactPrompt: () => redactPrompt
 });
 module.exports = __toCommonJS(user_prompt_submit_exports);
-var fs5 = __toESM(require("node:fs"));
-var path5 = __toESM(require("node:path"));
+var fs6 = __toESM(require("node:fs"));
+var path6 = __toESM(require("node:path"));
 var os4 = __toESM(require("node:os"));
 
 // tom/config.ts
@@ -813,10 +813,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path6) {
-  if (!path6)
+function getElementAtPath(obj, path7) {
+  if (!path7)
     return obj;
-  return path6.reduce((acc, key) => acc?.[key], obj);
+  return path7.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1199,11 +1199,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -1386,7 +1386,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path6 = []) => {
+  const processError = (error49, path7 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1396,7 +1396,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1428,8 +1428,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path6) {
+  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path7) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13406,13 +13406,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path6 = ref.slice(1).split("/").filter(Boolean);
-  if (path6.length === 0) {
+  const path7 = ref.slice(1).split("/").filter(Boolean);
+  if (path7.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path6[0] === defsKey) {
-    const key = path6[1];
+  if (path7[0] === defsKey) {
+    const key = path7[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13853,8 +13853,8 @@ function readTomConfig() {
 }
 
 // tom/consult.ts
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 
 // tom/schemas.ts
 var InteractionSchema = external_exports.strictObject({
@@ -14044,24 +14044,56 @@ function scoreNoUserModel(hasUserModel) {
 }
 
 // tom/memory-io.ts
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os2 = __toESM(require("node:os"));
+
+// tom/fs-atomic.ts
 var fs2 = __toESM(require("node:fs"));
 var path2 = __toESM(require("node:path"));
-var os2 = __toESM(require("node:os"));
+var crypto = __toESM(require("node:crypto"));
+var tempCounter = 0;
+function tempPathFor(filePath) {
+  const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
+  return `${filePath}.${suffix}.tmp`;
+}
+function ensureDirectoryExists(filePath) {
+  const dir = path2.dirname(filePath);
+  if (!fs2.existsSync(dir)) {
+    fs2.mkdirSync(dir, { recursive: true });
+  }
+}
+function atomicWriteFileSync(filePath, data) {
+  ensureDirectoryExists(filePath);
+  const tempPath = tempPathFor(filePath);
+  try {
+    fs2.writeFileSync(tempPath, data, "utf-8");
+    fs2.renameSync(tempPath, filePath);
+  } catch (error48) {
+    try {
+      fs2.unlinkSync(tempPath);
+    } catch {
+    }
+    throw error48;
+  }
+}
+
+// tom/memory-io.ts
 function globalTomDir() {
-  return path2.join(os2.homedir(), ".claude", "tom");
+  return path3.join(os2.homedir(), ".claude", "tom");
 }
 function projectTomDir() {
-  return path2.join(process.cwd(), ".claude", "tom");
+  return path3.join(process.cwd(), ".claude", "tom");
 }
 function globalUserModelPath() {
-  return path2.join(globalTomDir(), "user-model.json");
+  return path3.join(globalTomDir(), "user-model.json");
 }
 function projectUserModelPath() {
-  return path2.join(projectTomDir(), "user-model.json");
+  return path3.join(projectTomDir(), "user-model.json");
 }
 function readJsonFile(filePath) {
   try {
-    const content = fs2.readFileSync(filePath, "utf-8");
+    const content = fs3.readFileSync(filePath, "utf-8");
     return JSON.parse(content);
   } catch {
     return null;
@@ -14173,8 +14205,8 @@ function search(index, query, k = 3) {
 }
 
 // tom/routing.ts
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
 var os3 = __toESM(require("node:os"));
 var TELEMETRY_SCHEMA_VERSION = 1;
 var UsageLogEntrySchema = external_exports.looseObject({
@@ -14189,22 +14221,22 @@ var UsageLogEntrySchema = external_exports.looseObject({
   detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
 });
 function logUsage(entry) {
-  const logPath = path3.join(globalTomDir(), "usage.log");
-  const dir = path3.dirname(logPath);
-  if (!fs3.existsSync(dir)) {
-    fs3.mkdirSync(dir, { recursive: true });
+  const logPath = path4.join(globalTomDir(), "usage.log");
+  const dir = path4.dirname(logPath);
+  if (!fs4.existsSync(dir)) {
+    fs4.mkdirSync(dir, { recursive: true });
   }
   const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
   const line = JSON.stringify(stamped) + "\n";
-  fs3.appendFileSync(logPath, line, "utf-8");
+  fs4.appendFileSync(logPath, line, "utf-8");
 }
 
 // tom/consult.ts
 var NO_MODEL = "none";
 function loadCachedIndex() {
   try {
-    const indexPath = path4.join(globalTomDir(), "bm25-index.json");
-    const content = fs4.readFileSync(indexPath, "utf-8");
+    const indexPath = path5.join(globalTomDir(), "bm25-index.json");
+    const content = fs5.readFileSync(indexPath, "utf-8");
     return JSON.parse(content);
   } catch {
     return null;
@@ -14428,20 +14460,20 @@ function redactPrompt(prompt) {
   return withoutCode.split(/(\s+)/).map((token) => token.trim() !== "" && looksLikeSecret(token) ? REDACTED : token).join("");
 }
 function getSessionFilePath(sessionId) {
-  const tomDir = path5.join(os4.homedir(), ".claude", "tom", "sessions");
-  return path5.join(tomDir, `${sessionId}.json`);
+  const tomDir = path6.join(os4.homedir(), ".claude", "tom", "sessions");
+  return path6.join(tomDir, `${sessionId}.json`);
 }
 function appendUserMessage(sessionId, message, cwd) {
   const filePath = getSessionFilePath(sessionId);
-  const dir = path5.dirname(filePath);
-  if (!fs5.existsSync(dir)) {
-    fs5.mkdirSync(dir, { recursive: true });
+  const dir = path6.dirname(filePath);
+  if (!fs6.existsSync(dir)) {
+    fs6.mkdirSync(dir, { recursive: true });
     process.stderr.write(`ToM: created session log directory ${dir}
 `);
   }
   let sessionData;
   try {
-    const existing = fs5.readFileSync(filePath, "utf-8");
+    const existing = fs6.readFileSync(filePath, "utf-8");
     sessionData = JSON.parse(existing);
   } catch {
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -14460,7 +14492,7 @@ function appendUserMessage(sessionId, message, cwd) {
     // capture hook — this path blocks the prompt, so no subprocess here.
     ...sessionData.cwd === void 0 && cwd !== void 0 ? { cwd } : {}
   };
-  fs5.writeFileSync(filePath, JSON.stringify(updated, null, 2), "utf-8");
+  atomicWriteFileSync(filePath, JSON.stringify(updated, null, 2));
 }
 function buildHookOutput(suggestion) {
   const confidencePercent = Math.round(suggestion.confidence * 100);

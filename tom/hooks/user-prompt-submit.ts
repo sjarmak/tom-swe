@@ -26,6 +26,7 @@ import { consultToM } from '../consult.js'
 import { redactUserMessage } from '../redaction.js'
 import { looksLikeSecret, REDACTED } from '../secrets.js'
 import { logUsage } from '../routing.js'
+import { atomicWriteFileSync } from '../fs-atomic.js'
 import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
 // --- Injection Framing ---
@@ -110,7 +111,7 @@ export function appendUserMessage(
     ...(sessionData.cwd === undefined && cwd !== undefined ? { cwd } : {}),
   }
 
-  fs.writeFileSync(filePath, JSON.stringify(updated, null, 2), 'utf-8')
+  atomicWriteFileSync(filePath, JSON.stringify(updated, null, 2))
 }
 
 // --- Hook Output ---

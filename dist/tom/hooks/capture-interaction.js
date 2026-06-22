@@ -36,10 +36,47 @@ __export(capture_interaction_exports, {
   summarizeToolResponse: () => summarizeToolResponse
 });
 module.exports = __toCommonJS(capture_interaction_exports);
-var fs2 = __toESM(require("node:fs"));
-var path2 = __toESM(require("node:path"));
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
 var import_node_child_process = require("node:child_process");
+
+// tom/fs-atomic.ts
+var fs = __toESM(require("node:fs"));
+var path = __toESM(require("node:path"));
+var crypto = __toESM(require("node:crypto"));
+var tempCounter = 0;
+function tempPathFor(filePath) {
+  const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
+  return `${filePath}.${suffix}.tmp`;
+}
+function ensureDirectoryExists(filePath) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+function atomicWriteFile(filePath, data, onError) {
+  let tempPath;
+  try {
+    ensureDirectoryExists(filePath);
+    tempPath = tempPathFor(filePath);
+  } catch (err) {
+    onError(err);
+    return;
+  }
+  fs.writeFile(tempPath, data, "utf-8", (writeErr) => {
+    if (writeErr) {
+      onError(writeErr);
+      return;
+    }
+    fs.rename(tempPath, filePath, (renameErr) => {
+      if (renameErr) {
+        fs.unlink(tempPath, () => onError(renameErr));
+      }
+    });
+  });
+}
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -808,10 +845,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path3) {
-  if (!path3)
+function getElementAtPath(obj, path4) {
+  if (!path4)
     return obj;
-  return path3.reduce((acc, key) => acc?.[key], obj);
+  return path4.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1194,11 +1231,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path3, issues) {
+function prefixIssues(path4, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path3);
+    iss.path.unshift(path4);
     return iss;
   });
 }
@@ -1381,7 +1418,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path3 = []) => {
+  const processError = (error49, path4 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1391,7 +1428,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path3, ...issue2.path];
+        const fullpath = [...path4, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1423,8 +1460,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path3 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path3) {
+  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path4) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13401,13 +13438,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path3 = ref.slice(1).split("/").filter(Boolean);
-  if (path3.length === 0) {
+  const path4 = ref.slice(1).split("/").filter(Boolean);
+  if (path4.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path3[0] === defsKey) {
-    const key = path3[1];
+  if (path4[0] === defsKey) {
+    const key = path4[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13929,8 +13966,8 @@ function sanitizeValue(value) {
 }
 
 // tom/config.ts
-var fs = __toESM(require("node:fs"));
-var path = __toESM(require("node:path"));
+var fs2 = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
 var os = __toESM(require("node:os"));
 var TomConfigSchema = external_exports.strictObject({
   enabled: external_exports.boolean().default(false),
@@ -13956,8 +13993,8 @@ var TomConfigSchema = external_exports.strictObject({
 });
 function readTomConfig() {
   try {
-    const configPath = path.join(os.homedir(), ".claude", "tom", "config.json");
-    const content = fs.readFileSync(configPath, "utf-8");
+    const configPath = path2.join(os.homedir(), ".claude", "tom", "config.json");
+    const content = fs2.readFileSync(configPath, "utf-8");
     const raw = JSON.parse(content);
     const result = TomConfigSchema.safeParse(raw);
     if (result.success) {
@@ -14008,14 +14045,8 @@ function summarizeToolResponse(toolResponse) {
   return JSON.stringify(toolResponse);
 }
 function getSessionFilePath(sessionId) {
-  const tomDir = path2.join(os2.homedir(), ".claude", "tom", "sessions");
-  return path2.join(tomDir, `${sessionId}.json`);
-}
-function ensureDirectoryExists(filePath) {
-  const dir = path2.dirname(filePath);
-  if (!fs2.existsSync(dir)) {
-    fs2.mkdirSync(dir, { recursive: true });
-  }
+  const tomDir = path3.join(os2.homedir(), ".claude", "tom", "sessions");
+  return path3.join(tomDir, `${sessionId}.json`);
 }
 function resolveGitBranch(cwd) {
   try {
@@ -14032,10 +14063,9 @@ function resolveGitBranch(cwd) {
 function captureInteraction(sessionId, toolName, toolInput, toolOutput, cwd) {
   const filePath = getSessionFilePath(sessionId);
   const entry = buildInteractionEntry(toolName, toolInput, toolOutput);
-  ensureDirectoryExists(filePath);
   let sessionData;
   try {
-    const existing = fs2.readFileSync(filePath, "utf-8");
+    const existing = fs3.readFileSync(filePath, "utf-8");
     sessionData = JSON.parse(existing);
   } catch {
     sessionData = {
@@ -14054,11 +14084,9 @@ function captureInteraction(sessionId, toolName, toolInput, toolOutput, cwd) {
     ...joinCwd !== void 0 ? { cwd: joinCwd } : {},
     ...joinBranch !== void 0 ? { gitBranch: joinBranch } : {}
   };
-  fs2.writeFile(filePath, JSON.stringify(updated, null, 2), "utf-8", (err) => {
-    if (err) {
-      process.stderr.write(`ToM capture-interaction write error: ${err.message}
+  atomicWriteFile(filePath, JSON.stringify(updated, null, 2), (err) => {
+    process.stderr.write(`ToM capture-interaction write error: ${err.message}
 `);
-    }
   });
 }
 async function main(stream = process.stdin) {

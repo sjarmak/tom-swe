@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { execFileSync } from 'node:child_process'
 
+import { atomicWriteFile } from '../fs-atomic.js'
 import { readHookInput, getSessionId, isExcludedSession, toRecord } from './hook-input.js'
 import { sanitizeValue, MAX_VALUE_LENGTH } from '../secrets.js'
 import { isTomEnabled } from '../config.js'
@@ -76,13 +77,6 @@ function getSessionFilePath(sessionId: string): string {
   return path.join(tomDir, `${sessionId}.json`)
 }
 
-function ensureDirectoryExists(filePath: string): void {
-  const dir = path.dirname(filePath)
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
-  }
-}
-
 // --- Main Capture Function ---
 
 /**
@@ -113,8 +107,6 @@ export function captureInteraction(
 ): void {
   const filePath = getSessionFilePath(sessionId)
   const entry = buildInteractionEntry(toolName, toolInput, toolOutput)
-
-  ensureDirectoryExists(filePath)
 
   // Read existing session log or create new one
   let sessionData: {
@@ -153,12 +145,12 @@ export function captureInteraction(
     ...(joinBranch !== undefined ? { gitBranch: joinBranch } : {}),
   }
 
-  // Async write for speed — not awaited, but failures must surface (stderr,
-  // matching the other hooks' error pattern), never be silently discarded.
-  fs.writeFile(filePath, JSON.stringify(updated, null, 2), 'utf-8', (err) => {
-    if (err) {
-      process.stderr.write(`ToM capture-interaction write error: ${err.message}\n`)
-    }
+  // Async atomic write for speed — not awaited, but failures must surface
+  // (stderr, matching the other hooks' error pattern), never be silently
+  // discarded. Atomic temp+rename prevents a concurrent reader (or another
+  // capture/Stop fire) from seeing a torn session log.
+  atomicWriteFile(filePath, JSON.stringify(updated, null, 2), (err) => {
+    process.stderr.write(`ToM capture-interaction write error: ${err.message}\n`)
   })
 }
 

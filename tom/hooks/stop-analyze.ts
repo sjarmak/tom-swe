@@ -34,6 +34,7 @@ import { isLegacyGenericKey } from '../preferences.js'
 import { judgeDerivability } from '../promotion-gate.js'
 import type { GateCandidate } from '../promotion-gate.js'
 import { pruneOldSessions } from '../pruning.js'
+import { atomicWriteFileSync } from '../fs-atomic.js'
 import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
 // --- Configuration ---
@@ -340,13 +341,9 @@ export async function analyzeCompletedSession(
     const finalModel = readUserModel('global')
     if (finalModel) {
       const historyDir = path.join(globalTomDir(), 'user-model-history')
-      if (!fs.existsSync(historyDir)) {
-        fs.mkdirSync(historyDir, { recursive: true })
-      }
-      fs.writeFileSync(
+      atomicWriteFileSync(
         path.join(historyDir, `${sessionId}.json`),
-        JSON.stringify(finalModel, null, 2),
-        'utf-8'
+        JSON.stringify(finalModel, null, 2)
       )
     }
   } catch (error) {
@@ -363,11 +360,7 @@ export async function analyzeCompletedSession(
   // Step 6: Rebuild BM25 index
   const index = buildMemoryIndex('global')
   const indexPath = path.join(globalTomDir(), 'bm25-index.json')
-  const indexDir = path.dirname(indexPath)
-  if (!fs.existsSync(indexDir)) {
-    fs.mkdirSync(indexDir, { recursive: true })
-  }
-  fs.writeFileSync(indexPath, JSON.stringify(index), 'utf-8')
+  atomicWriteFileSync(indexPath, JSON.stringify(index))
 
   // Step 7: Prune Tier 1/2 (and matching snapshots) past the retention cap.
   // Designed for this hook since US-013 but never wired until now.

@@ -38,13 +38,43 @@ __export(tom_forget_export_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(tom_forget_export_exports);
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 
 // tom/memory-io.ts
+var fs2 = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
+var os = __toESM(require("node:os"));
+
+// tom/fs-atomic.ts
 var fs = __toESM(require("node:fs"));
 var path = __toESM(require("node:path"));
-var os = __toESM(require("node:os"));
+var crypto = __toESM(require("node:crypto"));
+var tempCounter = 0;
+function tempPathFor(filePath) {
+  const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
+  return `${filePath}.${suffix}.tmp`;
+}
+function ensureDirectoryExists(filePath) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+function atomicWriteFileSync(filePath, data) {
+  ensureDirectoryExists(filePath);
+  const tempPath = tempPathFor(filePath);
+  try {
+    fs.writeFileSync(tempPath, data, "utf-8");
+    fs.renameSync(tempPath, filePath);
+  } catch (error48) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+    }
+    throw error48;
+  }
+}
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -813,10 +843,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path5) {
-  if (!path5)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path5.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1199,11 +1229,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path5, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path5);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1386,7 +1416,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path5 = []) => {
+  const processError = (error49, path6 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1396,7 +1426,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1428,8 +1458,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path5) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13406,13 +13436,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path5 = ref.slice(1).split("/").filter(Boolean);
-  if (path5.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path5[0] === defsKey) {
-    const key = path5[1];
+  if (path6[0] === defsKey) {
+    const key = path6[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13908,46 +13938,39 @@ var ToMSuggestionSchema = external_exports.strictObject({
 
 // tom/memory-io.ts
 function globalTomDir() {
-  return path.join(os.homedir(), ".claude", "tom");
+  return path2.join(os.homedir(), ".claude", "tom");
 }
 function projectTomDir() {
-  return path.join(process.cwd(), ".claude", "tom");
+  return path2.join(process.cwd(), ".claude", "tom");
 }
 function globalSessionPath(sessionId) {
-  return path.join(globalTomDir(), "sessions", `${sessionId}.json`);
+  return path2.join(globalTomDir(), "sessions", `${sessionId}.json`);
 }
 function projectSessionPath(sessionId) {
-  return path.join(projectTomDir(), "sessions", `${sessionId}.json`);
+  return path2.join(projectTomDir(), "sessions", `${sessionId}.json`);
 }
 function globalSessionModelPath(sessionId) {
-  return path.join(globalTomDir(), "session-models", `${sessionId}.json`);
+  return path2.join(globalTomDir(), "session-models", `${sessionId}.json`);
 }
 function projectSessionModelPath(sessionId) {
-  return path.join(projectTomDir(), "session-models", `${sessionId}.json`);
+  return path2.join(projectTomDir(), "session-models", `${sessionId}.json`);
 }
 function globalUserModelPath() {
-  return path.join(globalTomDir(), "user-model.json");
+  return path2.join(globalTomDir(), "user-model.json");
 }
 function projectUserModelPath() {
-  return path.join(projectTomDir(), "user-model.json");
-}
-function ensureDirectoryExists(filePath) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  return path2.join(projectTomDir(), "user-model.json");
 }
 function readJsonFile(filePath) {
   try {
-    const content = fs.readFileSync(filePath, "utf-8");
+    const content = fs2.readFileSync(filePath, "utf-8");
     return JSON.parse(content);
   } catch {
     return null;
   }
 }
 function writeJsonFile(filePath, data) {
-  ensureDirectoryExists(filePath);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  atomicWriteFileSync(filePath, JSON.stringify(data, null, 2));
 }
 function readSessionLog(sessionId, scope = "global") {
   const filePath = scope === "global" ? globalSessionPath(sessionId) : projectSessionPath(sessionId);
@@ -14023,8 +14046,8 @@ function writeUserModel(userModel, scope = "global") {
 }
 
 // tom/config.ts
-var fs2 = __toESM(require("node:fs"));
-var path2 = __toESM(require("node:path"));
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
 var TomConfigSchema = external_exports.strictObject({
   enabled: external_exports.boolean().default(false),
@@ -14050,8 +14073,8 @@ var TomConfigSchema = external_exports.strictObject({
 });
 function readTomConfig() {
   try {
-    const configPath = path2.join(os2.homedir(), ".claude", "tom", "config.json");
-    const content = fs2.readFileSync(configPath, "utf-8");
+    const configPath = path3.join(os2.homedir(), ".claude", "tom", "config.json");
+    const content = fs3.readFileSync(configPath, "utf-8");
     const raw = JSON.parse(content);
     const result = TomConfigSchema.safeParse(raw);
     if (result.success) {
@@ -14243,8 +14266,8 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
 }
 
 // tom/agent/tools.ts
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
 
 // tom/bm25.ts
 function tokenize(text) {
@@ -14295,7 +14318,7 @@ function buildIndex(documents) {
 // tom/agent/tools.ts
 function listJsonFiles(dirPath) {
   try {
-    const files = fs3.readdirSync(dirPath);
+    const files = fs4.readdirSync(dirPath);
     return files.filter((f) => f.endsWith(".json"));
   } catch {
     return [];
@@ -14304,7 +14327,7 @@ function listJsonFiles(dirPath) {
 function buildMemoryIndex(scope = "global") {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
   const documents = [];
-  const sessionsDir = path3.join(tomDir, "sessions");
+  const sessionsDir = path4.join(tomDir, "sessions");
   const sessionFiles = listJsonFiles(sessionsDir);
   for (const file2 of sessionFiles) {
     const sessionId = file2.replace(".json", "");
@@ -14314,7 +14337,7 @@ function buildMemoryIndex(scope = "global") {
       documents.push({ id: `session:${sessionId}`, content, tier: 1 });
     }
   }
-  const modelsDir = path3.join(tomDir, "session-models");
+  const modelsDir = path4.join(tomDir, "session-models");
   const modelFiles = listJsonFiles(modelsDir);
   for (const file2 of modelFiles) {
     const sessionId = file2.replace(".json", "");
@@ -14343,7 +14366,7 @@ function buildMemoryIndex(scope = "global") {
 // tom/skills/tom-forget-export.ts
 function deleteFile(filePath) {
   try {
-    fs4.unlinkSync(filePath);
+    fs5.unlinkSync(filePath);
     return true;
   } catch {
     return false;
@@ -14351,24 +14374,24 @@ function deleteFile(filePath) {
 }
 function listJsonFiles2(dirPath) {
   try {
-    return fs4.readdirSync(dirPath).filter((f) => f.endsWith(".json"));
+    return fs5.readdirSync(dirPath).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
 }
 function sessionFileExists(sessionId, scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const filePath = path4.join(tomDir, "sessions", `${sessionId}.json`);
-  return fs4.existsSync(filePath) ? filePath : null;
+  const filePath = path5.join(tomDir, "sessions", `${sessionId}.json`);
+  return fs5.existsSync(filePath) ? filePath : null;
 }
 function sessionModelFileExists(sessionId, scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const filePath = path4.join(tomDir, "session-models", `${sessionId}.json`);
-  return fs4.existsSync(filePath) ? filePath : null;
+  const filePath = path5.join(tomDir, "session-models", `${sessionId}.json`);
+  return fs5.existsSync(filePath) ? filePath : null;
 }
 function rebuildUserModel(scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const modelsDir = path4.join(tomDir, "session-models");
+  const modelsDir = path5.join(tomDir, "session-models");
   const files = listJsonFiles2(modelsDir);
   const config2 = readTomConfig();
   const emptyModel = {
@@ -14406,12 +14429,8 @@ function forgetSession(sessionId) {
       tier3Rebuilt = true;
       const index = buildMemoryIndex(scope);
       const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-      const indexPath = path4.join(tomDir, "bm25-index.json");
-      const dir = path4.dirname(indexPath);
-      if (!fs4.existsSync(dir)) {
-        fs4.mkdirSync(dir, { recursive: true });
-      }
-      fs4.writeFileSync(indexPath, JSON.stringify(index), "utf-8");
+      const indexPath = path5.join(tomDir, "bm25-index.json");
+      atomicWriteFileSync(indexPath, JSON.stringify(index));
     }
   }
   return { sessionId, tier1Deleted, tier2Deleted, tier3Rebuilt };
@@ -14431,9 +14450,9 @@ function formatForgetResult(result) {
   return lines.join("\n");
 }
 function readUsageLog() {
-  const logPath = path4.join(globalTomDir(), "usage.log");
+  const logPath = path5.join(globalTomDir(), "usage.log");
   try {
-    const content = fs4.readFileSync(logPath, "utf-8");
+    const content = fs5.readFileSync(logPath, "utf-8");
     return content.split("\n").filter((line) => line.trim().length > 0);
   } catch {
     return [];
@@ -14441,7 +14460,7 @@ function readUsageLog() {
 }
 function readAllSessions(scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const sessionsDir = path4.join(tomDir, "sessions");
+  const sessionsDir = path5.join(tomDir, "sessions");
   const files = listJsonFiles2(sessionsDir);
   const sessions = [];
   for (const file2 of files) {
@@ -14455,7 +14474,7 @@ function readAllSessions(scope) {
 }
 function readAllSessionModels(scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const modelsDir = path4.join(tomDir, "session-models");
+  const modelsDir = path5.join(tomDir, "session-models");
   const files = listJsonFiles2(modelsDir);
   const models = [];
   for (const file2 of files) {
@@ -14508,8 +14527,8 @@ function exportToFile() {
   const data = collectExportData();
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
   const filename = `tom-export-${timestamp}.json`;
-  const filePath = path4.join(process.cwd(), filename);
-  fs4.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  const filePath = path5.join(process.cwd(), filename);
+  atomicWriteFileSync(filePath, JSON.stringify(data, null, 2));
   return filePath;
 }
 function formatExportResult(filePath, data) {

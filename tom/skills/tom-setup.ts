@@ -10,6 +10,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
+import { atomicWriteFileSync } from '../fs-atomic.js'
+
 // --- Types ---
 
 interface SetupResult {
@@ -50,16 +52,7 @@ export function setup(): SetupResult {
   }
 
   try {
-    const dir = path.dirname(configPath)
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true })
-    }
-
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify(DEFAULT_CONFIG, null, 2),
-      'utf-8'
-    )
+    atomicWriteFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2))
 
     return {
       created: true,
