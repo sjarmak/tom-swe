@@ -243,4 +243,62 @@ describe('pruneOldSessions', () => {
     expect(result.prunedSessionIds).toEqual([])
     expect(result.sessionsBeforePrune).toBe(0)
   })
+
+  describe('stale temp sweep', () => {
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000
+
+    function writeTempFile(dir: string, name: string, ageMs: number): string {
+      fs.mkdirSync(dir, { recursive: true })
+      const filePath = path.join(dir, name)
+      fs.writeFileSync(filePath, 'orphaned', 'utf-8')
+      const when = new Date(Date.now() - ageMs)
+      fs.utimesSync(filePath, when, when)
+      return filePath
+    }
+
+    it('removes stale *.tmp files across the tom dir and its subdirs', () => {
+      const tomDir = globalTomDir()
+      const a = writeTempFile(tomDir, 'user-model.json.123.0.abcd.tmp', TWO_HOURS_MS)
+      const b = writeTempFile(path.join(tomDir, 'sessions'), 's1.json.9.1.ef01.tmp', TWO_HOURS_MS)
+      const c = writeTempFile(path.join(tomDir, 'session-models'), 's2.json.9.2.ef02.tmp', TWO_HOURS_MS)
+      const d = writeTempFile(path.join(tomDir, 'user-model-history'), 's3.json.9.3.ef03.tmp', TWO_HOURS_MS)
+
+      const result = pruneOldSessions(5, 'global')
+
+      expect(result.staleTempFilesRemoved).toBe(4)
+      for (const f of [a, b, c, d]) expect(fs.existsSync(f)).toBe(false)
+    })
+
+    it('leaves recent *.tmp files (an in-flight write) untouched', () => {
+      const tomDir = globalTomDir()
+      const fresh = writeTempFile(tomDir, 'bm25-index.json.123.0.dead.tmp', 1000)
+
+      const result = pruneOldSessions(5, 'global')
+
+      expect(result.staleTempFilesRemoved).toBe(0)
+      expect(fs.existsSync(fresh)).toBe(true)
+    })
+
+    it('never touches non-temp files', () => {
+      const tomDir = globalTomDir()
+      const real = writeTempFile(tomDir, 'user-model.json', TWO_HOURS_MS)
+
+      const result = pruneOldSessions(5, 'global')
+
+      expect(result.staleTempFilesRemoved).toBe(0)
+      expect(fs.existsSync(real)).toBe(true)
+    })
+
+    it('sweeps even when no sessions are pruned', () => {
+      const tomDir = globalTomDir()
+      writeSession(tomDir, 'session-1', '2026-02-01T00:00:00.000Z')
+      const stale = writeTempFile(tomDir, 'config.json.5.0.beef.tmp', TWO_HOURS_MS)
+
+      const result = pruneOldSessions(5, 'global')
+
+      expect(result.indexRebuilt).toBe(false)
+      expect(result.staleTempFilesRemoved).toBe(1)
+      expect(fs.existsSync(stale)).toBe(false)
+    })
+  })
 })

@@ -25,17 +25,64 @@ export interface PruneResult {
   readonly sessionsBeforePrune: number
   readonly sessionsAfterPrune: number
   readonly indexRebuilt: boolean
+  readonly staleTempFilesRemoved: number
 }
+
+// A temp file from atomicWriteFileSync/atomicWriteFile is renamed onto its
+// target within milliseconds. One that still exists an hour later was orphaned
+// by a process killed between write and rename. The generous threshold also
+// guarantees we never unlink a temp that a concurrent write is still using.
+const STALE_TEMP_MS = 60 * 60 * 1000
+
+// Directories under the tom dir where atomic writes place temp siblings: the
+// root (user-model.json, bm25-index.json, config.json) plus the per-id dirs.
+// Keep in sync with the atomicWrite* call sites that target the tom dir tree
+// (the cwd export in tom-forget-export.ts is intentionally out of scope).
+const TEMP_SWEEP_SUBDIRS = ['', 'sessions', 'session-models', 'user-model-history']
 
 // --- Helpers ---
 
-function listJsonFiles(dirPath: string): readonly string[] {
+function safeReaddir(dirPath: string): readonly string[] {
   try {
     return fs.readdirSync(dirPath)
-      .filter(f => f.endsWith('.json'))
   } catch {
     return []
   }
+}
+
+function listJsonFiles(dirPath: string): readonly string[] {
+  return safeReaddir(dirPath).filter(f => f.endsWith('.json'))
+}
+
+/**
+ * Removes stale `*.tmp` files orphaned when a process was killed between the
+ * temp write and the rename in tom/fs-atomic.ts. Age-gated so an in-flight
+ * write's temp is never touched. Returns the count removed.
+ */
+function sweepStaleTempFiles(scope: 'global' | 'project'): number {
+  const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
+  const now = Date.now()
+  let removed = 0
+
+  for (const sub of TEMP_SWEEP_SUBDIRS) {
+    const dir = sub ? path.join(tomDir, sub) : tomDir
+    for (const name of safeReaddir(dir)) {
+      if (!name.endsWith('.tmp')) continue
+      const filePath = path.join(dir, name)
+      try {
+        // lstat (not stat): inspect the directory entry itself, so a symlink
+        // named *.tmp is skipped (isFile() is false) rather than followed.
+        const stat = fs.lstatSync(filePath)
+        if (!stat.isFile() || now - stat.mtimeMs < STALE_TEMP_MS) continue
+        fs.unlinkSync(filePath)
+        removed++
+      } catch {
+        // Raced with the owning rename (ENOENT) or a concurrent sweep — ignore.
+      }
+    }
+  }
+
+  return removed
 }
 
 interface SessionTimestamp {
@@ -114,6 +161,9 @@ export function pruneOldSessions(
   maxSessionsRetained: number,
   scope: 'global' | 'project' = 'global'
 ): PruneResult {
+  // Always sweep orphaned temps — they accumulate independent of session count.
+  const staleTempFilesRemoved = sweepStaleTempFiles(scope)
+
   const sessions = getSessionTimestamps(scope)
   const sessionsBeforePrune = sessions.length
 
@@ -123,6 +173,7 @@ export function pruneOldSessions(
       sessionsBeforePrune,
       sessionsAfterPrune: sessionsBeforePrune,
       indexRebuilt: false,
+      staleTempFilesRemoved,
     }
   }
 
@@ -151,5 +202,6 @@ export function pruneOldSessions(
     sessionsBeforePrune,
     sessionsAfterPrune: sessionsBeforePrune - countToRemove,
     indexRebuilt: true,
+    staleTempFilesRemoved,
   }
 }
