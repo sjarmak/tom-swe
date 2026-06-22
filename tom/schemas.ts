@@ -40,11 +40,10 @@ const SatisfactionSignalsSchema = z.strictObject({
 /**
  * The preference categories tracked by the ToM system.
  *
- * Allowed keys per category are the single source of truth in ALLOWED_KEYS
- * (tom/llm-analyze.ts); kept in sync here for reference:
- * - interactionStyle: verbosity, question_timing, response_length
- * - codingPreferences: language, libraries, test_runner, testing_approach,
- *   architecture_patterns, naming_conventions, docs_style, commit_format, error_handling
+ * Keys within a category are not a fixed enumeration: the analyzer coins
+ * snake_case keys under the prompt's key/value discipline and reuses the
+ * dynamically-learned vocabulary passed into buildAnalysisPrompt, so the key
+ * space tracks what is actually observed rather than a hardcoded list.
  */
 export const PreferenceCategorySchema = z.enum([
   'interactionStyle',

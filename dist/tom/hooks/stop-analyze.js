@@ -14612,20 +14612,6 @@ function readTranscriptUsage(transcriptPath) {
 var import_node_child_process = require("node:child_process");
 var LLM_ANALYSIS_TIMEOUT_MS = 9e4;
 var MAX_PROMPT_INTERACTIONS = 400;
-var ALLOWED_KEYS = {
-  interactionStyle: ["verbosity", "question_timing", "response_length"],
-  codingPreferences: [
-    "language",
-    "libraries",
-    "test_runner",
-    "testing_approach",
-    "architecture_patterns",
-    "naming_conventions",
-    "docs_style",
-    "commit_format",
-    "error_handling"
-  ]
-};
 function boundSessionLog(sessionLog) {
   const total = sessionLog.interactions.length;
   if (total <= MAX_PROMPT_INTERACTIONS) {
@@ -14670,9 +14656,6 @@ function buildAnalysisPrompt(sessionLog, vocabulary = []) {
     '- "value" is a short canonical phrase (at most ~6 words) naming the preferred choice: "vitest", "negative_space_documentation", "tests in same commit". Never a full sentence.',
     "- The same real-world preference must always produce the same key and the same value, so it reinforces instead of fragmenting.",
     "",
-    'Allowed keys \u2014 every "key" you emit MUST be one of these exact snake_case keys for its category. Map each observation onto the nearest allowed key rather than inventing a new one:',
-    `- interactionPatterns (category interactionStyle): ${ALLOWED_KEYS.interactionStyle.join(", ")}`,
-    `- codingPreferences (category codingPreferences): ${ALLOWED_KEYS.codingPreferences.join(", ")}`,
     ...vocabularySection,
     "",
     'Corrections: ALSO extract corrections \u2014 moments where the user contradicted, overrode, or re-edited away a previously suggested or observed preference. The redacted user messages in the session log (the "userMessages" field) are the primary evidence source. Return an empty "corrections" array if there are none.',
@@ -14686,28 +14669,6 @@ function buildAnalysisPrompt(sessionLog, vocabulary = []) {
 var DETAIL_MAX_LENGTH = 500;
 function truncateDetail(text) {
   return text.length > DETAIL_MAX_LENGTH ? `${text.slice(0, DETAIL_MAX_LENGTH)}\u2026` : text;
-}
-function warnUnknownKeys(model) {
-  const check2 = (entries, category) => {
-    const allowed = ALLOWED_KEYS[category];
-    for (const entry of entries) {
-      if (typeof entry !== "string" && !allowed.includes(entry.key)) {
-        console.warn(
-          `[tom-swe] analyzer emitted out-of-vocabulary ${category} key "${entry.key}"; allowed keys: ${allowed.join(", ")}`
-        );
-      }
-    }
-  };
-  check2(model.interactionPatterns, "interactionStyle");
-  check2(model.codingPreferences, "codingPreferences");
-  for (const correction of model.corrections ?? []) {
-    const allowed = ALLOWED_KEYS[correction.category];
-    if (!allowed.includes(correction.key)) {
-      console.warn(
-        `[tom-swe] analyzer emitted out-of-vocabulary ${correction.category} correction key "${correction.key}"; allowed keys: ${allowed.join(", ")}`
-      );
-    }
-  }
 }
 function extractFirstJsonObject(text) {
   const start = text.indexOf("{");
@@ -14803,7 +14764,6 @@ function parseAnalysisOutput(stdout, expectedSessionId) {
     };
   }
   const model = { ...parsed.data, sessionId: expectedSessionId };
-  warnUnknownKeys(model);
   return {
     ok: true,
     model,
@@ -15192,12 +15152,37 @@ function judgeDerivability(candidates, cwd, model) {
 // tom/pruning.ts
 var fs9 = __toESM(require("node:fs"));
 var path8 = __toESM(require("node:path"));
-function listJsonFiles2(dirPath) {
+var STALE_TEMP_MS = 60 * 60 * 1e3;
+var TEMP_SWEEP_SUBDIRS = ["", "sessions", "session-models", "user-model-history"];
+function safeReaddir(dirPath) {
   try {
-    return fs9.readdirSync(dirPath).filter((f) => f.endsWith(".json"));
+    return fs9.readdirSync(dirPath);
   } catch {
     return [];
   }
+}
+function listJsonFiles2(dirPath) {
+  return safeReaddir(dirPath).filter((f) => f.endsWith(".json"));
+}
+function sweepStaleTempFiles(scope) {
+  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
+  const now = Date.now();
+  let removed = 0;
+  for (const sub of TEMP_SWEEP_SUBDIRS) {
+    const dir = sub ? path8.join(tomDir, sub) : tomDir;
+    for (const name of safeReaddir(dir)) {
+      if (!name.endsWith(".tmp")) continue;
+      const filePath = path8.join(dir, name);
+      try {
+        const stat = fs9.lstatSync(filePath);
+        if (!stat.isFile() || now - stat.mtimeMs < STALE_TEMP_MS) continue;
+        fs9.unlinkSync(filePath);
+        removed++;
+      } catch {
+      }
+    }
+  }
+  return removed;
 }
 function getSessionTimestamps(scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
@@ -15246,6 +15231,7 @@ function saveIndex(index, scope) {
   atomicWriteFileSync(indexPath, JSON.stringify(index));
 }
 function pruneOldSessions(maxSessionsRetained, scope = "global") {
+  const staleTempFilesRemoved = sweepStaleTempFiles(scope);
   const sessions = getSessionTimestamps(scope);
   const sessionsBeforePrune = sessions.length;
   if (sessions.length <= maxSessionsRetained) {
@@ -15253,7 +15239,8 @@ function pruneOldSessions(maxSessionsRetained, scope = "global") {
       prunedSessionIds: [],
       sessionsBeforePrune,
       sessionsAfterPrune: sessionsBeforePrune,
-      indexRebuilt: false
+      indexRebuilt: false,
+      staleTempFilesRemoved
     };
   }
   const sorted = [...sessions].sort(
@@ -15274,7 +15261,8 @@ function pruneOldSessions(maxSessionsRetained, scope = "global") {
     prunedSessionIds: prunedIds,
     sessionsBeforePrune,
     sessionsAfterPrune: sessionsBeforePrune - countToRemove,
-    indexRebuilt: true
+    indexRebuilt: true,
+    staleTempFilesRemoved
   };
 }
 

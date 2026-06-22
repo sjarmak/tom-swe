@@ -7,7 +7,6 @@ import {
   parseAnalysisOutput,
   buildAnalysisPrompt,
   boundSessionLog,
-  ALLOWED_KEYS,
   LLM_ANALYSIS_TIMEOUT_MS,
   MAX_PROMPT_INTERACTIONS,
 } from './llm-analyze'
@@ -144,23 +143,23 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toContain('{"key": "<topic key>", "value": "<short canonical value>"}')
   })
 
-  it('embeds the fixed per-category key vocabulary built from ALLOWED_KEYS', () => {
+  it('relies on key discipline + dynamic vocabulary, not a hardcoded allow-list', () => {
     const prompt = buildAnalysisPrompt(makeSessionLog())
 
-    expect(prompt).toContain('Allowed keys')
-    expect(prompt).toContain('Map each observation onto the nearest allowed key')
+    // The stale hardcoded allow-list was removed (tom-swe-3mb): it steered the
+    // analyzer toward keys disconnected from the real learned key space.
+    expect(prompt).not.toContain('Allowed keys')
+    expect(prompt).not.toContain('MUST be one of these exact snake_case keys')
 
-    // The vocabulary is rendered FROM the constant, so every key in
-    // ALLOWED_KEYS must appear verbatim in the prompt — no duplicated literal.
-    for (const keys of Object.values(ALLOWED_KEYS)) {
-      for (const key of keys) {
-        expect(prompt).toContain(key)
-      }
-    }
-
-    // The exact joined rendering proves the prompt reads from the constant.
-    expect(prompt).toContain(ALLOWED_KEYS.codingPreferences.join(', '))
-    expect(prompt).toContain(ALLOWED_KEYS.interactionStyle.join(', '))
+    // Reinforcement now comes from the key/value discipline (always present)
+    // and the dynamically-learned vocabulary section (when non-empty).
+    expect(prompt).toContain(
+      'The same real-world preference must always produce the same key and the same value'
+    )
+    const withVocab = buildAnalysisPrompt(makeSessionLog(), [
+      { category: 'codingPreferences', key: 'code_hygiene', value: 'lint+test' },
+    ])
+    expect(withVocab).toContain('REUSE these exact keys')
   })
 
   it('anchors extraction to the existing preference vocabulary when provided', () => {
@@ -465,41 +464,28 @@ describe('parseAnalysisOutput', () => {
     }
   })
 
-  it('warns on an out-of-vocabulary key but keeps the model intact', () => {
+  it('preserves any coined key without warning (no hardcoded allow-list)', () => {
+    // tom-swe-3mb removed the stale ALLOWED_KEYS constraint and its advisory
+    // warn. Any snake_case key the analyzer coins flows through to storage —
+    // cross-session reuse is driven by the dynamic vocabulary, not a static list.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const model: SessionModel = {
-        ...makeSessionModel('s-oov'),
-        codingPreferences: [{ key: 'totally_made_up_key', value: 'x' }],
+        ...makeSessionModel('s-key'),
+        codingPreferences: [{ key: 'code_hygiene', value: 'x' }],
+        interactionPatterns: [{ key: 'directive_execution', value: 'y' }],
       }
-      const result = parseAnalysisOutput(JSON.stringify(model), 's-oov')
+      const result = parseAnalysisOutput(JSON.stringify(model), 's-key')
 
       expect(result.ok).toBe(true)
       if (result.ok) {
-        // The unknown-keyed entry is preserved, not dropped or crashed on.
         expect(result.model.codingPreferences).toEqual([
-          { key: 'totally_made_up_key', value: 'x' },
+          { key: 'code_hygiene', value: 'x' },
+        ])
+        expect(result.model.interactionPatterns).toEqual([
+          { key: 'directive_execution', value: 'y' },
         ])
       }
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('totally_made_up_key')
-      )
-    } finally {
-      warn.mockRestore()
-    }
-  })
-
-  it('does not warn when every emitted key is in the allowed vocabulary', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const model: SessionModel = {
-        ...makeSessionModel('s-ok'),
-        codingPreferences: [{ key: ALLOWED_KEYS.codingPreferences[0], value: 'x' }],
-        interactionPatterns: [{ key: ALLOWED_KEYS.interactionStyle[0], value: 'y' }],
-      }
-      const result = parseAnalysisOutput(JSON.stringify(model), 's-ok')
-
-      expect(result.ok).toBe(true)
       expect(warn).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()
