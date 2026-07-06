@@ -14247,6 +14247,30 @@ function readTomConfig() {
   }
 }
 
+// tom/hooks/hook-input.ts
+var HookInputSchema = external_exports.looseObject({
+  session_id: external_exports.string().optional(),
+  hook_event_name: external_exports.string().optional(),
+  tool_name: external_exports.string().optional(),
+  tool_input: external_exports.unknown().optional(),
+  tool_response: external_exports.unknown().optional(),
+  stop_hook_active: external_exports.boolean().optional(),
+  source: external_exports.string().optional(),
+  // Working directory of the session, used to route project-scoped
+  // promotions to the project's CLAUDE.md.
+  cwd: external_exports.string().optional(),
+  // UserPromptSubmit payload: the user's exact submitted text.
+  prompt: external_exports.string().optional(),
+  // Path to the session transcript JSONL; the Stop hook parses it for
+  // host-session token usage (the cost-overhead denominator).
+  transcript_path: external_exports.string().optional()
+});
+var MAX_SESSION_ID_LENGTH = 128;
+function sanitizeSessionId(raw) {
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, MAX_SESSION_ID_LENGTH);
+  return safe.length > 0 ? safe : "unknown-session";
+}
+
 // tom/rebuild.ts
 var fs5 = __toESM(require("node:fs"));
 var path5 = __toESM(require("node:path"));
@@ -14641,7 +14665,8 @@ function sessionModelFileExists(sessionId, scope) {
   const filePath = path7.join(tomDir, "session-models", `${sessionId}.json`);
   return fs7.existsSync(filePath) ? filePath : null;
 }
-function forgetSession(sessionId) {
+function forgetSession(rawSessionId) {
+  const sessionId = sanitizeSessionId(rawSessionId);
   let tier1Deleted = false;
   let tier2Deleted = false;
   let tier3Rebuilt = false;

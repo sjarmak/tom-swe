@@ -14513,8 +14513,14 @@ async function readHookInput(stream = process.stdin) {
   const result = HookInputSchema.safeParse(parsed);
   return result.success ? result.data : null;
 }
+var MAX_SESSION_ID_LENGTH = 128;
+function sanitizeSessionId(raw) {
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, MAX_SESSION_ID_LENGTH);
+  return safe.length > 0 ? safe : "unknown-session";
+}
 function getSessionId(input) {
-  return input?.session_id ?? process.env["CLAUDE_SESSION_ID"] ?? `pid-${process.pid}`;
+  const raw = input?.session_id ?? process.env["CLAUDE_SESSION_ID"] ?? `pid-${process.pid}`;
+  return sanitizeSessionId(raw);
 }
 function isInternalInvocation() {
   return process.env["TOM_SWE_INTERNAL"] === "1";
