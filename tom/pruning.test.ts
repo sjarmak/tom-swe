@@ -247,6 +247,62 @@ describe('pruneOldSessions', () => {
     expect(result.sessionsAfterPrune).toBe(2)
   })
 
+  describe('time-keyed Tier 1 expiry', () => {
+    it('expires a Tier 1 log older than the retention window even under the count cap', () => {
+      const tomDir = globalTomDir()
+      // Well under the count cap (100), but its last activity predates the
+      // 30-day retention window — its raw content should not outlive the
+      // window in which its evidence matters.
+      writeSession(tomDir, 'ancient', 40 * DAYS)
+      writeSession(tomDir, 'recent', 3 * HOURS)
+
+      const result = pruneOldSessions(100, 'global', 30)
+
+      expect(result.prunedSessionIds).toEqual(['ancient'])
+      expect(result.sessionsAfterPrune).toBe(1)
+      const sessionsDir = path.join(tomDir, 'sessions')
+      expect(fs.existsSync(path.join(sessionsDir, 'ancient.json'))).toBe(false)
+      expect(fs.existsSync(path.join(sessionsDir, 'recent.json'))).toBe(true)
+    })
+
+    it('keeps a log within the retention window when under the count cap', () => {
+      const tomDir = globalTomDir()
+      writeSession(tomDir, 'within-window', 20 * DAYS)
+
+      const result = pruneOldSessions(100, 'global', 30)
+
+      expect(result.prunedSessionIds).toEqual([])
+      expect(result.sessionsAfterPrune).toBe(1)
+    })
+
+    it('deletes each session once when both over the cap and past the window', () => {
+      const tomDir = globalTomDir()
+      // Two ancient logs (past the window) plus a fresh one; cap of 1.
+      // Both ancient logs are count-cap victims AND time-expired — each
+      // must appear once, not twice, in the result.
+      writeSession(tomDir, 'old-a', 50 * DAYS)
+      writeSession(tomDir, 'old-b', 45 * DAYS)
+      writeSession(tomDir, 'fresh', 2 * HOURS)
+
+      const result = pruneOldSessions(1, 'global', 30)
+
+      // Ascending last-activity order: the 50-day log precedes the 45-day one.
+      expect(result.prunedSessionIds).toEqual(['old-a', 'old-b'])
+      expect(result.sessionsAfterPrune).toBe(1)
+    })
+
+    it('does not time-expire when the retention window is not exceeded', () => {
+      const tomDir = globalTomDir()
+      // 10-day-old logs under a 30-day window and under the cap: kept.
+      writeSession(tomDir, 's1', 10 * DAYS)
+      writeSession(tomDir, 's2', 12 * DAYS)
+
+      const result = pruneOldSessions(100, 'global', 30)
+
+      expect(result.prunedSessionIds).toEqual([])
+    })
+  })
+
   it('handles missing session model files gracefully', () => {
     const tomDir = globalTomDir()
     writeSession(tomDir, 'session-1', 80 * HOURS)

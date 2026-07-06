@@ -1,9 +1,14 @@
 /**
- * Store pruning: count-capped Tier 1, time-expired Tier 2.
+ * Store pruning: count- and time-bounded Tier 1, time-expired Tier 2.
  *
- * Tier 1 session logs are pruned past maxSessionsRetained, ordered by last
- * activity (file mtime, including the .jsonl capture sidecar), with an
- * active-session guard so a long-running session is never unlinked mid-use.
+ * Tier 1 session logs leave the store when EITHER bound is hit: the count cap
+ * (keep at most maxSessionsRetained, evicting oldest last-activity first) or
+ * the retention window (a log whose last activity predates the decay window,
+ * so its redacted content does not outlive the window in which its evidence
+ * matters). Last activity is file mtime, including the .jsonl capture sidecar.
+ * An active-session guard protects count-cap eviction so a long-running
+ * session is never unlinked mid-use; a log past the retention window is
+ * definitionally inactive, so the guard does not apply to it.
  *
  * Tier 2 session models — and their user-model-history snapshots — are NOT
  * deleted with their logs: they are the evidence Tier 3 rebuilds fold, and
@@ -223,8 +228,9 @@ function findExpiredModelIds(
 
 /**
  * Prunes the store:
- * - Tier 1 logs (+ capture sidecars) past maxSessionsRetained, oldest
- *   activity first, never touching a session active within the guard window.
+ * - Tier 1 logs (+ capture sidecars) past maxSessionsRetained (oldest
+ *   activity first, never touching a session active within the guard window)
+ *   OR past modelRetentionDays of inactivity, whichever bound hits first.
  * - Tier 2 models and their snapshots past modelRetentionDays (endedAt-keyed).
  * - Stale atomic-write temps and orphaned analysis locks.
  *
@@ -241,16 +247,35 @@ export function pruneOldSessions(
   const sessions = listSessionActivity(scope)
   const sessionsBeforePrune = sessions.length
 
+  const now = Date.now()
+  const activeCutoffMs = now - ACTIVE_SESSION_GUARD_MS
+  const timeExpiredCutoffMs = now - modelRetentionDays * MS_PER_DAY
+  const sorted = [...sessions].sort((a, b) => a.activityMs - b.activityMs)
+  const excess = Math.max(0, sorted.length - maxSessionsRetained)
+
+  // Single oldest-first pass: a session leaves as a count-cap victim (up to
+  // `excess`, stopping at the active guard) OR because its activity predates
+  // the retention window. Visiting each session once dedupes the overlap so a
+  // log that is both over-cap and time-expired is removed a single time, and
+  // preserves ascending-activity order in the result.
   const prunedIds: string[] = []
-  if (sessions.length > maxSessionsRetained) {
-    const sorted = [...sessions].sort((a, b) => a.activityMs - b.activityMs)
-    const activeCutoffMs = Date.now() - ACTIVE_SESSION_GUARD_MS
-    const excess = sorted.length - maxSessionsRetained
-    for (const session of sorted.slice(0, excess)) {
-      // Ascending order: the first still-active session means every
-      // remaining candidate is at least as recent — stop pruning. The cap
-      // is deliberately soft under a burst of live sessions.
-      if (session.activityMs >= activeCutoffMs) break
+  let countCapRemaining = excess
+  let countCapStopped = false
+  for (const session of sorted) {
+    let isCountVictim = false
+    if (!countCapStopped && countCapRemaining > 0) {
+      // The first session inside the active guard stops count-cap eviction:
+      // every later one is at least as recent (the cap is deliberately soft
+      // under a burst of live sessions).
+      if (session.activityMs >= activeCutoffMs) {
+        countCapStopped = true
+      } else {
+        isCountVictim = true
+        countCapRemaining--
+      }
+    }
+    const isTimeExpired = session.activityMs < timeExpiredCutoffMs
+    if (isCountVictim || isTimeExpired) {
       deleteSessionFiles(session.sessionId, scope)
       prunedIds.push(session.sessionId)
     }
