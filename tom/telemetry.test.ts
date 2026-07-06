@@ -90,6 +90,37 @@ describe('computeTelemetrySummary', () => {
     expect(summary.analysis.fallbackRuns).toBe(1)
   })
 
+  it('aggregates vocabulary-echo entries into rates over returned prefs', () => {
+    const summary = computeTelemetrySummary([
+      entry({
+        operation: 'analysis-vocabulary-echo',
+        detail: { injected: 4, returned: 3, echoedKeyValue: 2, echoedKey: 3 },
+      }),
+      entry({
+        operation: 'analysis-vocabulary-echo',
+        detail: { injected: 4, returned: 1, echoedKeyValue: 0, echoedKey: 1 },
+      }),
+    ])
+
+    const ve = summary.analysis.vocabularyEcho
+    expect(ve.analyses).toBe(2)
+    expect(ve.injectedTotal).toBe(8)
+    expect(ve.returnedTotal).toBe(4)
+    expect(ve.echoedKeyValueTotal).toBe(2)
+    expect(ve.echoedKeyTotal).toBe(4)
+    // 2/4 = 50% key+value; 4/4 = 100% key.
+    expect(ve.keyValueEchoRate).toBe(50)
+    expect(ve.keyEchoRate).toBe(100)
+  })
+
+  it('leaves vocabulary-echo rates null when nothing was returned', () => {
+    const summary = computeTelemetrySummary([])
+    const ve = summary.analysis.vocabularyEcho
+    expect(ve.analyses).toBe(0)
+    expect(ve.keyValueEchoRate).toBeNull()
+    expect(ve.keyEchoRate).toBeNull()
+  })
+
   it('counts derivability-gate spawns and includes their tokens in the ToM share', () => {
     const summary = computeTelemetrySummary([
       entry({
@@ -287,6 +318,26 @@ describe('formatTelemetry', () => {
     expect(text).toContain('1 LLM / 1 fallback (50%)')
     expect(text).toContain('spawn-error×1')
     expect(text).toContain('p50 25ms')
+  })
+
+  it('renders the vocabulary-anchoring line when echo entries exist', () => {
+    const lines = formatTelemetry(
+      computeTelemetrySummary([
+        entry({
+          operation: 'session-analysis',
+          model: 'haiku',
+          detail: { path: 'llm' },
+        }),
+        entry({
+          operation: 'analysis-vocabulary-echo',
+          detail: { injected: 4, returned: 4, echoedKeyValue: 3, echoedKey: 4 },
+        }),
+      ])
+    )
+    const text = lines.join('\n')
+    expect(text).toContain('Vocabulary anchoring: 1 analyses')
+    expect(text).toContain('3/4 returned prefs echo injected vocab')
+    expect(text).toContain('75% key+value, 100% key')
   })
 
   it('reports skipped invalid lines', () => {

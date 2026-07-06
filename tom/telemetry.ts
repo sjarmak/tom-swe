@@ -16,6 +16,24 @@ export interface WindowedAnalysisCounts {
   readonly fallbackRuns: number
 }
 
+/**
+ * Vocabulary-anchoring echo rollup: how much of what the analyzer returns is a
+ * verbatim echo of the injected vocabulary. A baseline to evaluate any future
+ * anti-anchoring prompt change against — not a control input.
+ */
+export interface VocabularyEchoTelemetry {
+  /** Successful analyses that had vocabulary injected. */
+  readonly analyses: number
+  readonly injectedTotal: number
+  readonly returnedTotal: number
+  readonly echoedKeyValueTotal: number
+  readonly echoedKeyTotal: number
+  /** echoedKeyValueTotal / returnedTotal, as a percentage (null if no returns). */
+  readonly keyValueEchoRate: number | null
+  /** echoedKeyTotal / returnedTotal, as a percentage (null if no returns). */
+  readonly keyEchoRate: number | null
+}
+
 export interface AnalysisTelemetry {
   readonly llmRuns: number
   readonly fallbackRuns: number
@@ -31,6 +49,7 @@ export interface AnalysisTelemetry {
    * live regression — the lifetime rate once read 19% while live was 1%. */
   readonly last24h: WindowedAnalysisCounts
   readonly last7d: WindowedAnalysisCounts
+  readonly vocabularyEcho: VocabularyEchoTelemetry
 }
 
 export interface GateTelemetry {
@@ -164,6 +183,16 @@ export function computeTelemetrySummary(
   const gateOutcome = countByDetailString(gates, 'outcome')
   const gateTokens = gates.reduce((sum, e) => sum + e.tokenCount, 0)
 
+  const echoEntries = byOp('analysis-vocabulary-echo')
+  const echoSum = (key: string): number =>
+    echoEntries.reduce((sum, e) => sum + (detailNumber(e, key) ?? 0), 0)
+  const echoReturnedTotal = echoSum('returned')
+  const echoedKeyValueTotal = echoSum('echoedKeyValue')
+  const echoedKeyTotal = echoSum('echoedKey')
+  // One decimal place; null when there is nothing to divide by.
+  const echoRate = (n: number): number | null =>
+    echoReturnedTotal > 0 ? Math.round((n / echoReturnedTotal) * 1000) / 10 : null
+
   const promptHook = byOp('prompt-hook')
   const promptDurations = durations(promptHook)
 
@@ -209,6 +238,15 @@ export function computeTelemetrySummary(
       totalTokens: llm.reduce((sum, e) => sum + e.tokenCount, 0),
       last24h: windowCounts(24 * 60 * 60 * 1000),
       last7d: windowCounts(7 * 24 * 60 * 60 * 1000),
+      vocabularyEcho: {
+        analyses: echoEntries.length,
+        injectedTotal: echoSum('injected'),
+        returnedTotal: echoReturnedTotal,
+        echoedKeyValueTotal,
+        echoedKeyTotal,
+        keyValueEchoRate: echoRate(echoedKeyValueTotal),
+        keyEchoRate: echoRate(echoedKeyTotal),
+      },
     },
     gate: {
       count: gates.length,
@@ -305,6 +343,14 @@ export function formatTelemetry(summary: TelemetrySummary): string[] {
         a.fallbackAvgDurationMs !== null ? `; fallback avg ${a.fallbackAvgDurationMs}ms` : ''
       lines.push(
         `- Analysis duration: ${llmPart}${fallbackPart}; total tokens: ${a.totalTokens}`
+      )
+    }
+    const ve = a.vocabularyEcho
+    if (ve.analyses > 0) {
+      lines.push(
+        `- Vocabulary anchoring: ${ve.analyses} analyses; ` +
+          `${ve.echoedKeyValueTotal}/${ve.returnedTotal} returned prefs echo injected vocab ` +
+          `(${ve.keyValueEchoRate ?? '?'}% key+value, ${ve.keyEchoRate ?? '?'}% key)`
       )
     }
   }

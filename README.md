@@ -174,6 +174,8 @@ Entry shape (validated by `UsageLogEntrySchema`, exported from `tom/routing.ts`;
 | `analysis-debounced` | Stop re-fired within the 90s debounce of a fresh analysis | `ageMs`, `debounceMs` |
 | `analysis-skipped-no-new-evidence` | The Tier 1 log gained no new user messages since the last successful analysis (the watermark gate) | `userMessageCount`, `analyzedUserMessageCount` |
 | `analysis-in-flight` | A concurrent Stop for the same session holds the analysis lock | `lockPath` |
+| `analysis-log-truncated` | The bounded session log dropped interactions and/or user messages to fit the prompt budget (never silent) | `dropped`, `droppedUserMessages` |
+| `analysis-vocabulary-echo` | Per successful LLM analysis with vocabulary injected: how much of the returned model is a verbatim echo of the injected vocabulary (anchoring baseline instrument, not a control input) | `injected`, `returned`, `echoedKeyValue`, `echoedKey` |
 | `derivability-gate` | One agentic gate spawn judging project-promotion candidates | `outcome` (`ok`\|`unavailable`), `candidates`, `passed` |
 | `session-usage` | Host session's own token usage, parsed from the transcript at Stop (deduplicated by message id; sidechains included). Logged once per Stop fire with **cumulative** totals — consumers dedupe by `sessionId`, last entry wins | `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`, `assistantMessages` |
 | `session-usage-error` | Transcript missing or unreadable | — |

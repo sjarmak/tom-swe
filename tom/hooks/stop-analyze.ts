@@ -28,6 +28,7 @@ import { buildMemoryIndex } from '../agent/tools.js'
 import { getModelForOperation, logUsage, rotateUsageLogIfNeeded } from '../routing.js'
 import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
+import { computeVocabularyEcho } from '../vocabulary-echo.js'
 import { extractSessionModel } from '../session-extract.js'
 import { runPromotion } from '../promotion.js'
 import { isLegacyGenericKey } from '../preferences.js'
@@ -279,6 +280,27 @@ export async function analyzeCompletedSession(
         durationMs: analysisDurationMs,
         detail: { path: 'llm' },
       })
+      // Vocabulary-anchoring instrument: measure how much of this fresh
+      // extraction is a verbatim echo of the vocabulary we injected. Logged
+      // only when vocabulary was actually injected, and only on the LLM path
+      // (a preserved prior model is not this session's analysis). Purely
+      // observational — the number feeds a future prompt-change evaluation.
+      if (vocabulary.length > 0) {
+        const echo = computeVocabularyEcho(vocabulary, extracted)
+        logUsage({
+          timestamp: new Date().toISOString(),
+          operation: 'analysis-vocabulary-echo',
+          model: NO_MODEL,
+          tokenCount: 0,
+          sessionId,
+          detail: {
+            injected: echo.injected,
+            returned: echo.returned,
+            echoedKeyValue: echo.echoedKeyValue,
+            echoedKey: echo.echoedKey,
+          },
+        })
+      }
     } else {
       // Preserve-on-failure: post-0.5.1 the residual failures are uncorrelated
       // timeouts (see tom-swe-j7c). A transient failure must not DOWNGRADE an
