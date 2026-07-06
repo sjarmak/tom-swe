@@ -1,9 +1,11 @@
 /**
  * LLM-based Tier 2 session analysis.
  *
- * Spawns the claude CLI headlessly (`claude -p --model <model> --output-format json`)
- * to extract a SessionModel from a Tier 1 SessionLog. The session log was already
- * sanitized/redacted at capture time, so it is safe to embed in the prompt.
+ * Spawns the claude CLI headlessly (`claude -p --model <model> --output-format
+ * json --tools "" --strict-mcp-config`) to extract a SessionModel from a Tier 1
+ * SessionLog. The session log was already sanitized/redacted at capture time,
+ * and the spawn runs with zero tools (least privilege), so it is safe to embed
+ * in the prompt.
  *
  * Recursion guard: the spawned claude instance inherits TOM_SWE_INTERNAL=1,
  * which makes every tom-swe hook entry point exit silently. There is no
@@ -371,10 +373,31 @@ export async function analyzeSessionWithLlm(
       // session transcript on argv overflows the OS ARG_MAX and fails the
       // spawn with E2BIG. `claude -p` (no prompt arg) reads the prompt from
       // stdin, so argv length stays constant regardless of session size.
-      child = spawn('claude', ['-p', '--model', model, '--output-format', 'json'], {
-        env: { ...process.env, TOM_SWE_INTERNAL: '1' },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
+      //
+      // Least privilege: the analyzer's only job is text -> JSON, so it needs
+      // zero tools. `--tools ""` disables the entire built-in tool set and
+      // `--strict-mcp-config` (with no --mcp-config) loads no MCP servers, so a
+      // prompt-injection surviving redaction in the session log cannot make the
+      // spawned instance execute a tool. Both flags are inert to the JSON
+      // contract (verified: exit 0, wrapper unchanged) — belt-and-suspenders
+      // alongside the TOM_SWE_INTERNAL recursion guard.
+      child = spawn(
+        'claude',
+        [
+          '-p',
+          '--model',
+          model,
+          '--output-format',
+          'json',
+          '--tools',
+          '',
+          '--strict-mcp-config',
+        ],
+        {
+          env: { ...process.env, TOM_SWE_INTERNAL: '1' },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       settle({ ok: false, reason: 'spawn-error', detail: truncateDetail(message) })

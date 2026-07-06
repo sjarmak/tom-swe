@@ -264,6 +264,21 @@ describe('analyzeSessionWithLlm', () => {
     expect(options.env['TOM_SWE_INTERNAL']).toBe('1')
   })
 
+  it('spawns with zero tools for least privilege (built-in and MCP)', async () => {
+    spawnEmitting(wrapperOutput(JSON.stringify(makeSessionModel())), 0)
+
+    await analyzeSessionWithLlm(makeSessionLog(), 'haiku')
+
+    const [, args] = mockSpawn.mock.calls[0] as unknown as [string, string[], unknown]
+    // `--tools ""` disables the built-in tool set; the empty string is the
+    // documented "disable all" value and must be its argv-adjacent argument.
+    const toolsIdx = args.indexOf('--tools')
+    expect(toolsIdx).toBeGreaterThanOrEqual(0)
+    expect(args[toolsIdx + 1]).toBe('')
+    // `--strict-mcp-config` (with no --mcp-config) loads no MCP servers.
+    expect(args).toContain('--strict-mcp-config')
+  })
+
   it('passes the prompt via stdin, never argv, so argv stays bounded (E2BIG defense)', async () => {
     // A large session would, on the old argv path, push the prompt past the OS
     // ARG_MAX and fail with spawn E2BIG. Piping it via stdin removes the ceiling.
