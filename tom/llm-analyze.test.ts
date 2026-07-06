@@ -9,6 +9,7 @@ import {
   boundSessionLog,
   LLM_ANALYSIS_TIMEOUT_MS,
   MAX_PROMPT_INTERACTIONS,
+  MAX_PROMPT_USER_MESSAGES,
 } from './llm-analyze'
 import type { SessionLog, SessionModel } from './schemas'
 
@@ -66,6 +67,21 @@ function makeSessionLogWithInteractions(
       outcomeSummary: 'success',
       timestamp: '2026-06-10T10:30:00.000Z',
     })),
+  }
+}
+
+/**
+ * Builds a log with uniquely-numbered userMessages (msg-0..msg-N), so a test
+ * can assert exactly which survive bounding.
+ */
+function makeSessionLogWithUserMessages(
+  interactionCount: number,
+  userMessageCount: number,
+  sessionId = 'um-session'
+): SessionLog {
+  return {
+    ...makeSessionLogWithInteractions(interactionCount, sessionId),
+    userMessages: Array.from({ length: userMessageCount }, (_, i) => `msg-${i}`),
   }
 }
 
@@ -547,6 +563,54 @@ describe('boundSessionLog', () => {
     boundSessionLog(log)
     expect(log.interactions).toHaveLength(MAX_PROMPT_INTERACTIONS + 5)
   })
+
+  it('reports zero userMessages dropped for a log without the field', () => {
+    const result = boundSessionLog(makeSessionLogWithInteractions(1))
+    expect(result.droppedUserMessages).toBe(0)
+  })
+
+  it('passes within-budget userMessages through unchanged (same object reference)', () => {
+    const log = makeSessionLogWithUserMessages(1, MAX_PROMPT_USER_MESSAGES)
+    const result = boundSessionLog(log)
+
+    // Within budget on BOTH axes → the original object is returned.
+    expect(result.dropped).toBe(0)
+    expect(result.droppedUserMessages).toBe(0)
+    expect(result.sessionLog).toBe(log)
+  })
+
+  it('drops the oldest userMessages just over the cap, keeping the tail', () => {
+    const log = makeSessionLogWithUserMessages(1, MAX_PROMPT_USER_MESSAGES + 2)
+    const result = boundSessionLog(log)
+
+    expect(result.droppedUserMessages).toBe(2)
+    expect(result.dropped).toBe(0) // interactions untouched
+    expect(result.sessionLog.userMessages).toHaveLength(MAX_PROMPT_USER_MESSAGES)
+    // The two oldest (msg-0, msg-1) are dropped; the tail is retained.
+    expect(result.sessionLog.userMessages?.[0]).toBe('msg-2')
+    expect(result.sessionLog.userMessages?.at(-1)).toBe(
+      `msg-${MAX_PROMPT_USER_MESSAGES + 1}`
+    )
+  })
+
+  it('bounds interactions and userMessages independently in one pass', () => {
+    const log = makeSessionLogWithUserMessages(
+      MAX_PROMPT_INTERACTIONS + 5,
+      MAX_PROMPT_USER_MESSAGES + 3
+    )
+    const result = boundSessionLog(log)
+
+    expect(result.dropped).toBe(5)
+    expect(result.droppedUserMessages).toBe(3)
+    expect(result.sessionLog.interactions).toHaveLength(MAX_PROMPT_INTERACTIONS)
+    expect(result.sessionLog.userMessages).toHaveLength(MAX_PROMPT_USER_MESSAGES)
+  })
+
+  it('does not mutate the input userMessages', () => {
+    const log = makeSessionLogWithUserMessages(1, MAX_PROMPT_USER_MESSAGES + 4)
+    boundSessionLog(log)
+    expect(log.userMessages).toHaveLength(MAX_PROMPT_USER_MESSAGES + 4)
+  })
 })
 
 describe('analyzeSessionWithLlm prompt bounding', () => {
@@ -588,5 +652,21 @@ describe('analyzeSessionWithLlm prompt bounding', () => {
 
     expect(result.ok).toBe(false)
     expect(result.dropped).toBe(7)
+  })
+
+  it('surfaces droppedUserMessages on the result and bounds the prompt', async () => {
+    const log = makeSessionLogWithUserMessages(1, MAX_PROMPT_USER_MESSAGES + 4)
+    const child = spawnEmitting(
+      wrapperOutput(JSON.stringify(makeSessionModel(log.sessionId))),
+      0
+    )
+
+    const result = await analyzeSessionWithLlm(log, 'haiku')
+
+    expect(result.droppedUserMessages).toBe(4)
+    // The prompt embeds only the bounded userMessages, not the oversized list.
+    expect(child.stdin.write.mock.calls[0]?.[0]).toBe(
+      buildAnalysisPrompt(boundSessionLog(log).sessionLog)
+    )
   })
 })

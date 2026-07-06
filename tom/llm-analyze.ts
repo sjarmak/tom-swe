@@ -30,6 +30,19 @@ export const LLM_ANALYSIS_TIMEOUT_MS = 90_000
  */
 export const MAX_PROMPT_INTERACTIONS = 400
 
+/**
+ * Maximum number of redacted user messages embedded in the analysis prompt.
+ * userMessages is the second unbounded array in the session log (interactions
+ * is the first, capped above), and it is embedded verbatim via JSON.stringify.
+ * A pathological or adversarial session with thousands of prompts would inflate
+ * the prompt the same way an oversized interaction list does, so it is bounded
+ * symmetrically: the tail is kept (recent turns carry the session's final
+ * state and its corrections), and the drop count is surfaced separately so the
+ * truncation is never silent. The default is generous — well above a normal
+ * session's user-turn count — so it only trips the pathological case.
+ */
+export const MAX_PROMPT_USER_MESSAGES = 200
+
 export type LlmAnalysisFailureReason =
   | 'spawn-error'
   | 'timeout'
@@ -45,6 +58,8 @@ export interface LlmAnalysisSuccess {
   readonly path: 'llm'
   /** Interactions dropped to keep the prompt within budget (0 when none). */
   readonly dropped: number
+  /** User messages dropped to keep the prompt within budget (0 when none). */
+  readonly droppedUserMessages: number
 }
 
 export interface LlmAnalysisFailure {
@@ -53,6 +68,8 @@ export interface LlmAnalysisFailure {
   readonly detail: string
   /** Interactions dropped to keep the prompt within budget (0 when none). */
   readonly dropped: number
+  /** User messages dropped to keep the prompt within budget (0 when none). */
+  readonly droppedUserMessages: number
 }
 
 export type LlmAnalysisResult = LlmAnalysisSuccess | LlmAnalysisFailure
@@ -69,28 +86,44 @@ export interface VocabularyEntry {
 /** A session log bounded to the prompt budget, plus how many were dropped. */
 export interface BoundedSessionLog {
   readonly sessionLog: SessionLog
+  /** Interactions removed to fit MAX_PROMPT_INTERACTIONS. */
   readonly dropped: number
+  /** User messages removed to fit MAX_PROMPT_USER_MESSAGES. */
+  readonly droppedUserMessages: number
 }
 
 /**
- * Deterministically caps the session log's interactions to
- * MAX_PROMPT_INTERACTIONS, keeping the most recent ones (the tail carries the
- * session's outcome). Within budget the original log object is returned
- * unchanged, so the resulting prompt is byte-identical to today's. Over
- * budget, `dropped` reports the count removed so the caller can log it.
+ * Deterministically caps the session log's two unbounded arrays to their
+ * prompt budgets, keeping the most recent entries of each (the tail carries
+ * the session's outcome and its corrections). Within budget on both axes the
+ * original log object is returned unchanged, so the resulting prompt is
+ * byte-identical to today's. Over budget, `dropped` / `droppedUserMessages`
+ * report the counts removed so the caller can log them (never silent).
  */
 export function boundSessionLog(sessionLog: SessionLog): BoundedSessionLog {
-  const total = sessionLog.interactions.length
-  if (total <= MAX_PROMPT_INTERACTIONS) {
-    return { sessionLog, dropped: 0 }
+  const totalInteractions = sessionLog.interactions.length
+  const totalUserMessages = sessionLog.userMessages?.length ?? 0
+  const dropped = Math.max(0, totalInteractions - MAX_PROMPT_INTERACTIONS)
+  const droppedUserMessages = Math.max(0, totalUserMessages - MAX_PROMPT_USER_MESSAGES)
+
+  if (dropped === 0 && droppedUserMessages === 0) {
+    return { sessionLog, dropped: 0, droppedUserMessages: 0 }
   }
-  const dropped = total - MAX_PROMPT_INTERACTIONS
+
   return {
     sessionLog: {
       ...sessionLog,
-      interactions: sessionLog.interactions.slice(dropped),
+      interactions:
+        dropped > 0 ? sessionLog.interactions.slice(dropped) : sessionLog.interactions,
+      // Only re-key userMessages when it exists and was actually trimmed, so
+      // an absent field stays absent (byte-identical prompt) and an untrimmed
+      // one keeps its reference.
+      ...(droppedUserMessages > 0 && sessionLog.userMessages !== undefined
+        ? { userMessages: sessionLog.userMessages.slice(droppedUserMessages) }
+        : {}),
     },
     dropped,
+    droppedUserMessages,
   }
 }
 
@@ -246,6 +279,7 @@ export function parseAnalysisOutput(
       reason: 'no-json-found',
       detail: truncateDetail(`no JSON object in output: ${modelText}`),
       dropped: 0,
+      droppedUserMessages: 0,
     }
   }
 
@@ -259,6 +293,7 @@ export function parseAnalysisOutput(
       reason: 'invalid-json',
       detail: truncateDetail(message),
       dropped: 0,
+      droppedUserMessages: 0,
     }
   }
 
@@ -269,6 +304,7 @@ export function parseAnalysisOutput(
       reason: 'schema-mismatch',
       detail: truncateDetail(parsed.error.message),
       dropped: 0,
+      droppedUserMessages: 0,
     }
   }
 
@@ -281,6 +317,7 @@ export function parseAnalysisOutput(
     tokensUsed,
     path: 'llm',
     dropped: 0,
+    droppedUserMessages: 0,
   }
 }
 
@@ -302,20 +339,21 @@ export async function analyzeSessionWithLlm(
 ): Promise<LlmAnalysisResult> {
   const timeoutMs = options.timeoutMs ?? LLM_ANALYSIS_TIMEOUT_MS
   // Bound the log BEFORE the spawn: oversized logs are what stall the CLI.
-  // `dropped` is stamped onto every outcome so the caller can log it.
-  const { sessionLog: boundedLog, dropped } = boundSessionLog(sessionLog)
+  // The drop counts are stamped onto every outcome so the caller can log them.
+  const { sessionLog: boundedLog, dropped, droppedUserMessages } =
+    boundSessionLog(sessionLog)
   const prompt = buildAnalysisPrompt(boundedLog, options.vocabulary ?? [])
 
   return new Promise<LlmAnalysisResult>((resolve) => {
     let settled = false
     let timer: NodeJS.Timeout | null = null
 
-    // settle accepts results without `dropped`; it stamps the bounded-log
-    // drop count onto every outcome so there is a single source for it.
+    // settle accepts results without the bounded-log drop counts; it stamps
+    // them onto every outcome so there is a single source for each.
     const settle = (
       result:
-        | Omit<LlmAnalysisSuccess, 'dropped'>
-        | Omit<LlmAnalysisFailure, 'dropped'>
+        | Omit<LlmAnalysisSuccess, 'dropped' | 'droppedUserMessages'>
+        | Omit<LlmAnalysisFailure, 'dropped' | 'droppedUserMessages'>
     ): void => {
       if (settled) {
         return
@@ -324,7 +362,7 @@ export async function analyzeSessionWithLlm(
       if (timer !== null) {
         clearTimeout(timer)
       }
-      resolve({ ...result, dropped })
+      resolve({ ...result, dropped, droppedUserMessages })
     }
 
     let child: ReturnType<typeof spawn>
