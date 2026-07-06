@@ -273,6 +273,85 @@ describe('analyzeCompletedSession', () => {
       .map(line => JSON.parse(line) as Record<string, unknown>)
   }
 
+  function seedUserModel(cluster: Record<string, unknown>): void {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(tomDir, 'user-model.json'),
+      JSON.stringify({
+        preferencesClusters: [cluster],
+        interactionStyleSummary: '',
+        codingStyleSummary: '',
+        projectOverrides: {},
+      }),
+      'utf-8'
+    )
+  }
+
+  it('logs vocabulary echo when a fresh LLM analysis reuses injected vocabulary', async () => {
+    // A non-legacy cluster is injected as vocabulary; the returned model echoes
+    // its key+value verbatim, so the instrument records a full echo.
+    seedUserModel({
+      category: 'interactionStyle',
+      key: 'verbosity',
+      value: 'concise',
+      confidence: 0.7,
+      lastUpdated: new Date().toISOString(),
+      sessionCount: 4,
+    })
+    writeSessionFile('vocab-echo-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'vocab-echo-test',
+        intent: 'work',
+        interactionPatterns: [{ key: 'verbosity', value: 'concise' }],
+        codingPreferences: [],
+        corrections: [],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('vocab-echo-test')
+
+    const echo = readUsageEntries().find(
+      (e) => e['operation'] === 'analysis-vocabulary-echo'
+    )
+    expect(echo).toBeDefined()
+    expect(echo?.['detail']).toMatchObject({
+      injected: 1,
+      returned: 1,
+      echoedKeyValue: 1,
+      echoedKey: 1,
+    })
+  })
+
+  it('does not log vocabulary echo when no vocabulary was injected', async () => {
+    // No user-model.json → empty vocabulary → the echo instrument is skipped
+    // even though the LLM path succeeded and returned keyed preferences.
+    writeSessionFile('no-vocab-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'no-vocab-test',
+        intent: 'work',
+        interactionPatterns: [{ key: 'verbosity', value: 'concise' }],
+        codingPreferences: [],
+        corrections: [],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('no-vocab-test')
+
+    const echo = readUsageEntries().find(
+      (e) => e['operation'] === 'analysis-vocabulary-echo'
+    )
+    expect(echo).toBeUndefined()
+  })
+
   it('logs host-session usage from the transcript with deduplicated buckets', async () => {
     writeSessionFile('usage-test')
     mockAnalyzeWithLlm.mockResolvedValue({

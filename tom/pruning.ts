@@ -6,9 +6,9 @@
  * the retention window (a log whose last activity predates the decay window,
  * so its redacted content does not outlive the window in which its evidence
  * matters). Last activity is file mtime, including the .jsonl capture sidecar.
- * An active-session guard protects count-cap eviction so a long-running
- * session is never unlinked mid-use; a log past the retention window is
- * definitionally inactive, so the guard does not apply to it.
+ * An active-session guard protects BOTH removal paths so a long-running
+ * session is never unlinked mid-use — even a small (misconfigured) retention
+ * window cannot expire a log whose last activity is within the guard window.
  *
  * Tier 2 session models — and their user-model-history snapshots — are NOT
  * deleted with their logs: they are the evidence Tier 3 rebuilds fold, and
@@ -274,7 +274,12 @@ export function pruneOldSessions(
         countCapRemaining--
       }
     }
-    const isTimeExpired = session.activityMs < timeExpiredCutoffMs
+    // Time-expiry is also gated by the active guard: never unlink a session
+    // whose last activity is within the guard window, even if a small
+    // (misconfigured) retention window would otherwise mark it expired —
+    // unlinking a live log recreates an amputated stub on the next capture.
+    const isTimeExpired =
+      session.activityMs < timeExpiredCutoffMs && session.activityMs < activeCutoffMs
     if (isCountVictim || isTimeExpired) {
       deleteSessionFiles(session.sessionId, scope)
       prunedIds.push(session.sessionId)

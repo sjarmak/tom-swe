@@ -301,6 +301,20 @@ describe('pruneOldSessions', () => {
 
       expect(result.prunedSessionIds).toEqual([])
     })
+
+    it('never time-expires a session active within the guard window, even at a zero retention window', () => {
+      const tomDir = globalTomDir()
+      // A pathological retentionDays=0 would put the expiry cutoff at "now",
+      // marking a session active 5 minutes ago as expired. The active guard
+      // must still protect it — unlinking a live log recreates an amputated
+      // stub on the next capture (the regression the guard exists for).
+      writeSession(tomDir, 'live', 5 * 60 * 1000)
+
+      const result = pruneOldSessions(100, 'global', 0)
+
+      expect(result.prunedSessionIds).toEqual([])
+      expect(fs.existsSync(path.join(tomDir, 'sessions', 'live.json'))).toBe(true)
+    })
   })
 
   it('handles missing session model files gracefully', () => {

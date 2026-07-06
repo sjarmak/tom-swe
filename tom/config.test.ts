@@ -100,6 +100,16 @@ describe('TomConfigSchema', () => {
     expect(() => TomConfigSchema.parse({ promotion: { minSessions: 2.5 } })).toThrow()
   })
 
+  it('should reject preferenceDecayDays below the 1-day floor', () => {
+    // A sub-2h window would let Tier 1 time-expiry unlink a still-active log.
+    expect(() => TomConfigSchema.parse({ preferenceDecayDays: 0 })).toThrow()
+    expect(() => TomConfigSchema.parse({ preferenceDecayDays: 0.05 })).toThrow()
+  })
+
+  it('should accept preferenceDecayDays at the 1-day floor', () => {
+    expect(TomConfigSchema.parse({ preferenceDecayDays: 1 }).preferenceDecayDays).toBe(1)
+  })
+
   it('should default correctionPenalty to 0.5', () => {
     const result = TomConfigSchema.parse({ enabled: true })
     expect(result.correctionPenalty).toBe(0.5)
