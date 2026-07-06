@@ -15,6 +15,7 @@ import {
   projectTomDir,
 } from '../memory-io.js'
 import { readTomConfig } from '../config.js'
+import { sanitizeSessionId } from '../hooks/hook-input.js'
 import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { buildMemoryIndex } from '../agent/tools.js'
 import { atomicWriteFileSync } from '../fs-atomic.js'
@@ -82,7 +83,16 @@ function sessionModelFileExists(sessionId: string, scope: 'global' | 'project'):
  * config-driven decay and correction penalty) with promoted flags carried
  * from the previous model.
  */
-export function forgetSession(sessionId: string): ForgetResult {
+export function forgetSession(rawSessionId: string): ForgetResult {
+  // The session id is CLI-supplied (via the /tom-forget slash command) and is
+  // interpolated into the delete paths below — including two unconditional
+  // fs.rmSync(..., { force: true }) calls. Sanitize it to a safe filename
+  // component first so a '..' or path separator cannot escape the tom dir into
+  // an arbitrary-file delete (the same boundary hardening getSessionId applies
+  // to hook input). A malformed id degrades to a name that matches no real
+  // session, so forget safely reports "not found" instead of deleting.
+  const sessionId = sanitizeSessionId(rawSessionId)
+
   let tier1Deleted = false
   let tier2Deleted = false
   let tier3Rebuilt = false

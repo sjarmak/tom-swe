@@ -184,6 +184,24 @@ describe('forgetSession', () => {
     expect(result.tier3Rebuilt).toBe(false)
   })
 
+  it('does not delete files outside the tom dir via a path-traversal session id', () => {
+    createSettings({ enabled: true })
+    // A file outside the tom dir, reachable via ../ from the sessions dir
+    // (sessions -> tom -> .claude -> tempDir). Before sanitization, both the
+    // existence-gated delete and the unconditional fs.rmSync(force:true) paths
+    // resolved here and removed it.
+    const victimPath = path.join(tempDir, 'victim.json')
+    fs.writeFileSync(victimPath, '{"secret":true}', 'utf-8')
+
+    const result = forgetSession('../../../victim')
+
+    // The traversal id is sanitized to a component matching no real session.
+    expect(result.tier1Deleted).toBe(false)
+    expect(result.tier2Deleted).toBe(false)
+    // The out-of-tree file survives.
+    expect(fs.existsSync(victimPath)).toBe(true)
+  })
+
   it('deletes Tier 1 session log from global scope', () => {
     createSettings({ enabled: true })
     createSessionLog('sess-1', '2026-01-01T00:00:00.000Z', 'global')

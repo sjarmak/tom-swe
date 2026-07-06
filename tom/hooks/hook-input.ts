@@ -66,13 +66,41 @@ export async function readHookInput(
   return result.success ? result.data : null
 }
 
+// A session id is used verbatim to build storage paths (sessions/<id>.json,
+// session-models/<id>.json, and the sidecar), so it must reduce to a single
+// safe filename component. Bound the length so a pathological id can't produce
+// an unwieldy filename.
+export const MAX_SESSION_ID_LENGTH = 128
+
+/**
+ * Reduces a raw session identifier to a safe filename component. The id
+ * normally comes from Claude Code (a UUID) or the pid fallback, but both the
+ * payload `session_id` and `CLAUDE_SESSION_ID` are externally settable, so it
+ * is untrusted input at this boundary — a value carrying a path separator or a
+ * `..` segment would otherwise escape the tom sessions dir.
+ *
+ * Allows only [A-Za-z0-9_-] (UUIDs and the `pid-<n>` fallback pass through
+ * unchanged) and collapses every other character — including `/`, `\`, and `.`
+ * — to `_`, so no separator or dot survives to form a traversal. Deterministic:
+ * the same session always maps to the same files. Empty input (or an id made
+ * entirely of stripped characters reducing to nothing) falls back to a fixed
+ * safe name rather than an empty filename.
+ */
+export function sanitizeSessionId(raw: string): string {
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, MAX_SESSION_ID_LENGTH)
+  return safe.length > 0 ? safe : 'unknown-session'
+}
+
 /**
  * Session identity precedence: payload session_id, then CLAUDE_SESSION_ID,
  * then a pid-based last resort (each hook invocation is a fresh process,
- * so the pid fallback fragments sessions and must stay last).
+ * so the pid fallback fragments sessions and must stay last). The resolved id
+ * is sanitized to a safe filename component before any consumer builds a path.
  */
 export function getSessionId(input: HookInput | null): string {
-  return input?.session_id ?? process.env['CLAUDE_SESSION_ID'] ?? `pid-${process.pid}`
+  const raw =
+    input?.session_id ?? process.env['CLAUDE_SESSION_ID'] ?? `pid-${process.pid}`
+  return sanitizeSessionId(raw)
 }
 
 /**
