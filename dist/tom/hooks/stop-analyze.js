@@ -14513,7 +14513,10 @@ var TomConfigSchema = external_exports.strictObject({
     memoryUpdate: external_exports.string().default("haiku"),
     consultation: external_exports.string().default("sonnet")
   }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
-  preferenceDecayDays: external_exports.number().default(30),
+  // Floored at 1 day: a sub-2h window would let Tier 1 time-expiry unlink a
+  // still-active session's log (defeating the prune active guard), and a
+  // near-zero decay window collapses Tier 2 retention and the decay half-life.
+  preferenceDecayDays: external_exports.number().min(1).default(30),
   maxSessionsRetained: external_exports.number().default(100),
   // Confidence multiplier applied to a stored preference when a session
   // correction contradicts it (post-action feedback). Corrections cut
@@ -14784,18 +14787,26 @@ function readTranscriptUsage(transcriptPath) {
 var import_node_child_process = require("node:child_process");
 var LLM_ANALYSIS_TIMEOUT_MS = 9e4;
 var MAX_PROMPT_INTERACTIONS = 400;
+var MAX_PROMPT_USER_MESSAGES = 200;
 function boundSessionLog(sessionLog) {
-  const total = sessionLog.interactions.length;
-  if (total <= MAX_PROMPT_INTERACTIONS) {
-    return { sessionLog, dropped: 0 };
+  const totalInteractions = sessionLog.interactions.length;
+  const totalUserMessages = sessionLog.userMessages?.length ?? 0;
+  const dropped = Math.max(0, totalInteractions - MAX_PROMPT_INTERACTIONS);
+  const droppedUserMessages = Math.max(0, totalUserMessages - MAX_PROMPT_USER_MESSAGES);
+  if (dropped === 0 && droppedUserMessages === 0) {
+    return { sessionLog, dropped: 0, droppedUserMessages: 0 };
   }
-  const dropped = total - MAX_PROMPT_INTERACTIONS;
   return {
     sessionLog: {
       ...sessionLog,
-      interactions: sessionLog.interactions.slice(dropped)
+      interactions: dropped > 0 ? sessionLog.interactions.slice(dropped) : sessionLog.interactions,
+      // Only re-key userMessages when it exists and was actually trimmed, so
+      // an absent field stays absent (byte-identical prompt) and an untrimmed
+      // one keeps its reference.
+      ...droppedUserMessages > 0 && sessionLog.userMessages !== void 0 ? { userMessages: sessionLog.userMessages.slice(droppedUserMessages) } : {}
     },
-    dropped
+    dropped,
+    droppedUserMessages
   };
 }
 function buildAnalysisPrompt(sessionLog, vocabulary = []) {
@@ -14911,7 +14922,8 @@ function parseAnalysisOutput(stdout, expectedSessionId) {
       ok: false,
       reason: "no-json-found",
       detail: truncateDetail(`no JSON object in output: ${modelText}`),
-      dropped: 0
+      dropped: 0,
+      droppedUserMessages: 0
     };
   }
   let candidate;
@@ -14923,7 +14935,8 @@ function parseAnalysisOutput(stdout, expectedSessionId) {
       ok: false,
       reason: "invalid-json",
       detail: truncateDetail(message),
-      dropped: 0
+      dropped: 0,
+      droppedUserMessages: 0
     };
   }
   const parsed = SessionModelSchema.safeParse(candidate);
@@ -14932,7 +14945,8 @@ function parseAnalysisOutput(stdout, expectedSessionId) {
       ok: false,
       reason: "schema-mismatch",
       detail: truncateDetail(parsed.error.message),
-      dropped: 0
+      dropped: 0,
+      droppedUserMessages: 0
     };
   }
   const model = { ...parsed.data, sessionId: expectedSessionId };
@@ -14941,12 +14955,13 @@ function parseAnalysisOutput(stdout, expectedSessionId) {
     model,
     tokensUsed,
     path: "llm",
-    dropped: 0
+    dropped: 0,
+    droppedUserMessages: 0
   };
 }
 async function analyzeSessionWithLlm(sessionLog, model, options = {}) {
   const timeoutMs = options.timeoutMs ?? LLM_ANALYSIS_TIMEOUT_MS;
-  const { sessionLog: boundedLog, dropped } = boundSessionLog(sessionLog);
+  const { sessionLog: boundedLog, dropped, droppedUserMessages } = boundSessionLog(sessionLog);
   const prompt = buildAnalysisPrompt(boundedLog, options.vocabulary ?? []);
   return new Promise((resolve) => {
     let settled = false;
@@ -14959,14 +14974,27 @@ async function analyzeSessionWithLlm(sessionLog, model, options = {}) {
       if (timer !== null) {
         clearTimeout(timer);
       }
-      resolve({ ...result, dropped });
+      resolve({ ...result, dropped, droppedUserMessages });
     };
     let child;
     try {
-      child = (0, import_node_child_process.spawn)("claude", ["-p", "--model", model, "--output-format", "json"], {
-        env: { ...process.env, TOM_SWE_INTERNAL: "1" },
-        stdio: ["pipe", "pipe", "pipe"]
-      });
+      child = (0, import_node_child_process.spawn)(
+        "claude",
+        [
+          "-p",
+          "--model",
+          model,
+          "--output-format",
+          "json",
+          "--tools",
+          "",
+          "--strict-mcp-config"
+        ],
+        {
+          env: { ...process.env, TOM_SWE_INTERNAL: "1" },
+          stdio: ["pipe", "pipe", "pipe"]
+        }
+      );
     } catch (error48) {
       const message = error48 instanceof Error ? error48.message : String(error48);
       settle({ ok: false, reason: "spawn-error", detail: truncateDetail(message) });
@@ -15007,6 +15035,40 @@ async function analyzeSessionWithLlm(sessionLog, model, options = {}) {
       settle(parseAnalysisOutput(stdout, sessionLog.sessionId));
     });
   });
+}
+
+// tom/vocabulary-echo.ts
+function keyId(category, key) {
+  return JSON.stringify([category, key]);
+}
+function keyValueId(category, key, value) {
+  return JSON.stringify([category, key, value]);
+}
+function computeVocabularyEcho(vocabulary, model) {
+  const keyValueSet = new Set(
+    vocabulary.map((v) => keyValueId(v.category, v.key, v.value))
+  );
+  const keySet = new Set(vocabulary.map((v) => keyId(v.category, v.key)));
+  let returned = 0;
+  let echoedKeyValue = 0;
+  let echoedKey = 0;
+  const scan = (entries, category) => {
+    for (const entry of entries) {
+      if (typeof entry === "string") {
+        continue;
+      }
+      returned++;
+      if (keyValueSet.has(keyValueId(category, entry.key, entry.value))) {
+        echoedKeyValue++;
+      }
+      if (keySet.has(keyId(category, entry.key))) {
+        echoedKey++;
+      }
+    }
+  };
+  scan(model.interactionPatterns, "interactionStyle");
+  scan(model.codingPreferences, "codingPreferences");
+  return { injected: vocabulary.length, returned, echoedKeyValue, echoedKey };
 }
 
 // tom/promotion.ts
@@ -15506,13 +15568,26 @@ function pruneOldSessions(maxSessionsRetained, scope, modelRetentionDays) {
   const staleTempFilesRemoved = sweepStaleTempFiles(scope);
   const sessions = listSessionActivity(scope);
   const sessionsBeforePrune = sessions.length;
+  const now = Date.now();
+  const activeCutoffMs = now - ACTIVE_SESSION_GUARD_MS;
+  const timeExpiredCutoffMs = now - modelRetentionDays * MS_PER_DAY2;
+  const sorted = [...sessions].sort((a, b) => a.activityMs - b.activityMs);
+  const excess = Math.max(0, sorted.length - maxSessionsRetained);
   const prunedIds = [];
-  if (sessions.length > maxSessionsRetained) {
-    const sorted = [...sessions].sort((a, b) => a.activityMs - b.activityMs);
-    const activeCutoffMs = Date.now() - ACTIVE_SESSION_GUARD_MS;
-    const excess = sorted.length - maxSessionsRetained;
-    for (const session of sorted.slice(0, excess)) {
-      if (session.activityMs >= activeCutoffMs) break;
+  let countCapRemaining = excess;
+  let countCapStopped = false;
+  for (const session of sorted) {
+    let isCountVictim = false;
+    if (!countCapStopped && countCapRemaining > 0) {
+      if (session.activityMs >= activeCutoffMs) {
+        countCapStopped = true;
+      } else {
+        isCountVictim = true;
+        countCapRemaining--;
+      }
+    }
+    const isTimeExpired = session.activityMs < timeExpiredCutoffMs && session.activityMs < activeCutoffMs;
+    if (isCountVictim || isTimeExpired) {
       deleteSessionFiles(session.sessionId, scope);
       prunedIds.push(session.sessionId);
     }
@@ -15718,14 +15793,17 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
       vocabulary
     });
     const analysisDurationMs = Date.now() - analysisStartedAt;
-    if (llmResult.dropped > 0) {
+    if (llmResult.dropped > 0 || llmResult.droppedUserMessages > 0) {
       logUsage({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         operation: "analysis-log-truncated",
         model: NO_MODEL,
         tokenCount: 0,
         sessionId,
-        detail: { dropped: llmResult.dropped }
+        detail: {
+          dropped: llmResult.dropped,
+          droppedUserMessages: llmResult.droppedUserMessages
+        }
       });
     }
     let extracted;
@@ -15741,6 +15819,22 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
         durationMs: analysisDurationMs,
         detail: { path: "llm" }
       });
+      if (vocabulary.length > 0) {
+        const echo = computeVocabularyEcho(vocabulary, extracted);
+        logUsage({
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          operation: "analysis-vocabulary-echo",
+          model: NO_MODEL,
+          tokenCount: 0,
+          sessionId,
+          detail: {
+            injected: echo.injected,
+            returned: echo.returned,
+            echoedKeyValue: echo.echoedKeyValue,
+            echoedKey: echo.echoedKey
+          }
+        });
+      }
     } else {
       preservedPrior = priorModel !== null;
       logUsage({

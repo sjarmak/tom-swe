@@ -14189,7 +14189,10 @@ var TomConfigSchema = external_exports.strictObject({
     memoryUpdate: external_exports.string().default("haiku"),
     consultation: external_exports.string().default("sonnet")
   }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
-  preferenceDecayDays: external_exports.number().default(30),
+  // Floored at 1 day: a sub-2h window would let Tier 1 time-expiry unlink a
+  // still-active session's log (defeating the prune active guard), and a
+  // near-zero decay window collapses Tier 2 retention and the decay half-life.
+  preferenceDecayDays: external_exports.number().min(1).default(30),
   maxSessionsRetained: external_exports.number().default(100),
   // Confidence multiplier applied to a stored preference when a session
   // correction contradicts it (post-action feedback). Corrections cut

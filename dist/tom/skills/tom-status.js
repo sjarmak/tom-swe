@@ -14084,7 +14084,10 @@ var TomConfigSchema = external_exports.strictObject({
     memoryUpdate: external_exports.string().default("haiku"),
     consultation: external_exports.string().default("sonnet")
   }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
-  preferenceDecayDays: external_exports.number().default(30),
+  // Floored at 1 day: a sub-2h window would let Tier 1 time-expiry unlink a
+  // still-active session's log (defeating the prune active guard), and a
+  // near-zero decay window collapses Tier 2 retention and the decay half-life.
+  preferenceDecayDays: external_exports.number().min(1).default(30),
   maxSessionsRetained: external_exports.number().default(100),
   // Confidence multiplier applied to a stored preference when a session
   // correction contradicts it (post-action feedback). Corrections cut
@@ -14189,6 +14192,12 @@ function computeTelemetrySummary(entries, invalidLines = 0, now = /* @__PURE__ *
   const gates = byOp("derivability-gate");
   const gateOutcome = countByDetailString(gates, "outcome");
   const gateTokens = gates.reduce((sum, e) => sum + e.tokenCount, 0);
+  const echoEntries = byOp("analysis-vocabulary-echo");
+  const echoSum = (key) => echoEntries.reduce((sum, e) => sum + (detailNumber(e, key) ?? 0), 0);
+  const echoReturnedTotal = echoSum("returned");
+  const echoedKeyValueTotal = echoSum("echoedKeyValue");
+  const echoedKeyTotal = echoSum("echoedKey");
+  const echoRate = (n) => echoReturnedTotal > 0 ? Math.round(n / echoReturnedTotal * 1e3) / 10 : null;
   const promptHook = byOp("prompt-hook");
   const promptDurations = durations(promptHook);
   const consultations = byOp("ambiguity-consultation");
@@ -14217,7 +14226,16 @@ function computeTelemetrySummary(entries, invalidLines = 0, now = /* @__PURE__ *
       fallbackAvgDurationMs: average(fallbackDurations),
       totalTokens: llm.reduce((sum, e) => sum + e.tokenCount, 0),
       last24h: windowCounts(24 * 60 * 60 * 1e3),
-      last7d: windowCounts(7 * 24 * 60 * 60 * 1e3)
+      last7d: windowCounts(7 * 24 * 60 * 60 * 1e3),
+      vocabularyEcho: {
+        analyses: echoEntries.length,
+        injectedTotal: echoSum("injected"),
+        returnedTotal: echoReturnedTotal,
+        echoedKeyValueTotal,
+        echoedKeyTotal,
+        keyValueEchoRate: echoRate(echoedKeyValueTotal),
+        keyEchoRate: echoRate(echoedKeyTotal)
+      }
     },
     gate: {
       count: gates.length,
@@ -14290,6 +14308,12 @@ function formatTelemetry(summary) {
       const fallbackPart = a.fallbackAvgDurationMs !== null ? `; fallback avg ${a.fallbackAvgDurationMs}ms` : "";
       lines.push(
         `- Analysis duration: ${llmPart}${fallbackPart}; total tokens: ${a.totalTokens}`
+      );
+    }
+    const ve = a.vocabularyEcho;
+    if (ve.analyses > 0) {
+      lines.push(
+        `- Vocabulary anchoring: ${ve.analyses} analyses; ${ve.echoedKeyValueTotal}/${ve.returnedTotal} returned prefs echo injected vocab (${ve.keyValueEchoRate ?? "?"}% key+value, ${ve.keyEchoRate ?? "?"}% key)`
       );
     }
   }
