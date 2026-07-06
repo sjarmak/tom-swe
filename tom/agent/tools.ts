@@ -25,7 +25,8 @@ import {
   globalTomDir,
   projectTomDir,
 } from '../memory-io.js'
-import { aggregateSessionIntoModel } from '../aggregation.js'
+import { readTomConfig } from '../config.js'
+import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { extractSessionModel } from '../session-extract.js'
 import { MEMORY_OPERATION_TOOLS, isMemoryOperationAllowed } from './config.js'
 
@@ -109,6 +110,17 @@ function listJsonFiles(dirPath: string): readonly string[] {
 }
 
 /**
+ * Renders a Tier 2 preference entry as index text. Post-migration entries
+ * are keyed objects ({key, value}); joining them raw would stringify to
+ * '[object Object]', dropping the preference tokens from the index.
+ */
+function preferenceEntryText(
+  entry: string | { readonly key: string; readonly value: string }
+): string {
+  return typeof entry === 'string' ? entry : `${entry.key} ${entry.value}`
+}
+
+/**
  * Builds a BM25 index from all available memory files across tiers.
  */
 export function buildMemoryIndex(scope: 'global' | 'project' = 'global'): BM25Index {
@@ -138,8 +150,8 @@ export function buildMemoryIndex(scope: 'global' | 'project' = 'global'): BM25In
     if (model) {
       const content = [
         model.intent,
-        ...model.interactionPatterns,
-        ...model.codingPreferences,
+        ...model.interactionPatterns.map(preferenceEntryText),
+        ...model.codingPreferences.map(preferenceEntryText),
       ].join(' ')
       documents.push({ id: `model:${sessionId}`, content, tier: 2 })
     }
@@ -266,31 +278,24 @@ export function initializeUserProfile(
     return { created: false, sessionCount: 0 }
   }
 
-  const emptyModel: UserModel = {
-    preferencesClusters: [],
-    interactionStyleSummary: '',
-    codingStyleSummary: '',
-    projectOverrides: {},
-  }
+  // Bootstrap from available session models via the canonical rebuild:
+  // chronological (endedAt) fold with config-driven decay and correction
+  // penalty. No previous model exists here (guarded above), so the
+  // promoted-flag carry is a structural no-op.
+  const config = readTomConfig()
+  const rebuilt = rebuildUserModelFromTier2(
+    scope,
+    config.preferenceDecayDays,
+    config.correctionPenalty,
+    null
+  )
+  writeUserModel(carryPromotedFlags(rebuilt, null), scope)
 
-  // Bootstrap from available session models
   const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
   const modelsDir = path.join(tomDir, 'session-models')
-  const modelFiles = listJsonFiles(modelsDir)
-
-  let model = emptyModel
-  let sessionCount = 0
-
-  for (const file of modelFiles) {
-    const sessionId = file.replace('.json', '')
-    const sessionModel = readSessionModel(sessionId, scope)
-    if (sessionModel) {
-      model = aggregateSessionIntoModel(model, sessionModel)
-      sessionCount++
-    }
-  }
-
-  writeUserModel(model, scope)
+  const sessionCount = listJsonFiles(modelsDir).filter(
+    file => readSessionModel(file.replace('.json', ''), scope) !== null
+  ).length
 
   return { created: true, sessionCount }
 }

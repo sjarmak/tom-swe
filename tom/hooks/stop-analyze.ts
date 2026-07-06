@@ -14,8 +14,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type { SessionLog, SessionModel } from '../schemas.js'
-import { SessionLogSchema } from '../schemas.js'
 import {
+  readSessionLog,
   readUserModel,
   readSessionModel,
   writeSessionModel,
@@ -25,7 +25,7 @@ import {
 import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
-import { getModelForOperation, logUsage } from '../routing.js'
+import { getModelForOperation, logUsage, rotateUsageLogIfNeeded } from '../routing.js'
 import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { extractSessionModel } from '../session-extract.js'
@@ -48,27 +48,14 @@ const NO_MODEL = 'none'
  */
 const ANALYSIS_DEBOUNCE_MS = 90_000
 
-// --- Helpers ---
-
-function getSessionFilePath(sessionId: string): string {
-  return path.join(globalTomDir(), 'sessions', `${sessionId}.json`)
-}
-
 // --- Session Analysis ---
 
 /**
- * Reads a raw Tier 1 session log from disk.
+ * Reads the Tier 1 session log — the folded view of the .json stub (or a
+ * complete pre-sidecar log) plus the append-only capture sidecar.
  */
 export function readRawSessionLog(sessionId: string): SessionLog | null {
-  try {
-    const filePath = getSessionFilePath(sessionId)
-    const content = fs.readFileSync(filePath, 'utf-8')
-    const raw = JSON.parse(content) as unknown
-    const result = SessionLogSchema.safeParse(raw)
-    return result.success ? result.data : null
-  } catch {
-    return null
-  }
+  return readSessionLog(sessionId, 'global')
 }
 
 // --- Main Analysis Pipeline ---
@@ -155,7 +142,8 @@ export async function analyzeCompletedSession(
   // re-analysis when this session was analyzed moments ago — the rebuild
   // keeps Tier 3 idempotent, so the only loss is at most the debounce
   // window's worth of tail content, replaced by the next qualifying fire.
-  const tier2Path = path.join(globalTomDir(), 'session-models', `${sessionId}.json`)
+  const modelsDir = path.join(globalTomDir(), 'session-models')
+  const tier2Path = path.join(modelsDir, `${sessionId}.json`)
   try {
     const ageMs = Date.now() - fs.statSync(tier2Path).mtimeMs
     if (ageMs < ANALYSIS_DEBOUNCE_MS) {
@@ -179,6 +167,68 @@ export async function analyzeCompletedSession(
     // No Tier 2 model yet — first analysis for this session, proceed.
   }
 
+  // Watermark: re-analysis needs new evidence, not just elapsed time. The
+  // debounce alone re-analyzed unchanged sessions on every >90s turn (78%
+  // of analysis spend went to sessions already analyzed). userMessages are
+  // the analyzer's primary evidence source, so an unchanged count means a
+  // tool-only continuation with nothing new to learn. The watermark only
+  // advances on successful extraction, so a failed analysis stays
+  // retryable on the next turn without new messages.
+  const priorModel = readSessionModel(sessionId, 'global')
+  const userMessageCount = sessionLog.userMessages?.length ?? 0
+  if (
+    priorModel?.analyzedUserMessageCount !== undefined &&
+    userMessageCount <= priorModel.analyzedUserMessageCount
+  ) {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'analysis-skipped-no-new-evidence',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: {
+        userMessageCount,
+        analyzedUserMessageCount: priorModel.analyzedUserMessageCount,
+      },
+    })
+    return {
+      success: true,
+      sessionId,
+      sessionModel: null,
+      userModelUpdated: false,
+      indexRebuilt: false,
+    }
+  }
+
+  // In-flight lock: the debounce stats a file only written AFTER the LLM
+  // call completes (up to 90s), so concurrent Stop fires for the same
+  // session each passed it and spawned duplicate analyses (~2.3% of spend,
+  // and the stale snapshot could publish last). O_EXCL creation is the
+  // arbiter; orphaned locks are age-swept by pruning.
+  const lockPath = path.join(modelsDir, `${sessionId}.lock`)
+  let lockFd: number | null = null
+  try {
+    fs.mkdirSync(modelsDir, { recursive: true })
+    lockFd = fs.openSync(lockPath, 'wx')
+    fs.writeSync(lockFd, `${process.pid} ${new Date().toISOString()}`)
+  } catch {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'analysis-in-flight',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: { lockPath },
+    })
+    return {
+      success: true,
+      sessionId,
+      sessionModel: null,
+      userModelUpdated: false,
+      indexRebuilt: false,
+    }
+  }
+
   // Step 2: Extract Tier 2 session model — headless claude with the
   // configured memoryUpdate model, falling back loudly to the heuristic
   // extractor when the LLM path fails for any reason.
@@ -191,76 +241,94 @@ export async function analyzeCompletedSession(
   const vocabulary = (readUserModel('global')?.preferencesClusters ?? [])
     .filter((p) => !isLegacyGenericKey(p.key))
     .map((p) => ({ category: p.category, key: p.key, value: p.value }))
-  const analysisStartedAt = Date.now()
-  const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel, {
-    vocabulary,
-  })
-  const analysisDurationMs = Date.now() - analysisStartedAt
+  let sessionModel: SessionModel
+  try {
+    const analysisStartedAt = Date.now()
+    const llmResult = await analyzeSessionWithLlm(sessionLog, configuredModel, {
+      vocabulary,
+    })
+    const analysisDurationMs = Date.now() - analysisStartedAt
 
-  // Observable truncation: when the log was bounded for the prompt, record
-  // how many interactions were dropped (never silent — see anti-slop).
-  if (llmResult.dropped > 0) {
-    logUsage({
-      timestamp: new Date().toISOString(),
-      operation: 'analysis-log-truncated',
-      model: NO_MODEL,
-      tokenCount: 0,
-      sessionId,
-      detail: { dropped: llmResult.dropped },
-    })
-  }
+    // Observable truncation: when the log was bounded for the prompt, record
+    // how many interactions were dropped (never silent — see anti-slop).
+    if (llmResult.dropped > 0) {
+      logUsage({
+        timestamp: new Date().toISOString(),
+        operation: 'analysis-log-truncated',
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        detail: { dropped: llmResult.dropped },
+      })
+    }
 
-  let extracted: SessionModel
-  let preservedPrior = false
-  if (llmResult.ok) {
-    extracted = llmResult.model
-    logUsage({
-      timestamp: new Date().toISOString(),
-      operation: 'session-analysis',
-      model: configuredModel,
-      tokenCount: llmResult.tokensUsed ?? 0,
-      sessionId,
-      durationMs: analysisDurationMs,
-      detail: { path: 'llm' },
-    })
-  } else {
-    // Preserve-on-failure: post-0.5.1 the residual failures are uncorrelated
-    // timeouts (see tom-swe-j7c). A transient failure must not DOWNGRADE an
-    // existing Tier 2 model to the heuristic extractor — keep the prior model
-    // when one exists, and only synthesize a heuristic for a session never
-    // analyzed before (no regression). Leaving the prior file untouched also
-    // keeps its mtime aged, so the debounce permits a fresh LLM attempt next
-    // turn (81% of timed-out sessions recover on a later turn).
-    const prior = readSessionModel(sessionId, 'global')
-    preservedPrior = prior !== null
-    logUsage({
-      timestamp: new Date().toISOString(),
-      operation: 'session-analysis-fallback',
-      model: NO_MODEL,
-      tokenCount: 0,
-      sessionId,
-      durationMs: analysisDurationMs,
-      reason: `${llmResult.reason}: ${llmResult.detail}`,
-      detail: {
-        path: preservedPrior ? 'preserved' : 'heuristic',
-        failure: llmResult.reason,
-      },
-    })
-    extracted = prior ?? extractSessionModel(sessionLog)
-  }
-  // endedAt is stamped mechanically from the Tier 1 log (never produced by
-  // the LLM): it grounds decay when Tier 3 is rebuilt from Tier 2. On
-  // preservation the prior model is kept exactly as persisted (its own
-  // endedAt) so the in-memory model never diverges from disk; only a freshly
-  // extracted (LLM or heuristic) model is stamped with this turn's endedAt.
-  const sessionModel: SessionModel = preservedPrior
-    ? extracted
-    : { ...extracted, endedAt: sessionLog.endedAt }
-  // On preservation the on-disk Tier 2 model is already authoritative; skip the
-  // rewrite so its mtime stays aged (re-attempt next turn) and avoid a
-  // redundant non-atomic write (tom-swe-ur0).
-  if (!preservedPrior) {
-    writeSessionModel(sessionModel, 'global')
+    let extracted: SessionModel
+    let preservedPrior = false
+    if (llmResult.ok) {
+      extracted = llmResult.model
+      logUsage({
+        timestamp: new Date().toISOString(),
+        operation: 'session-analysis',
+        model: configuredModel,
+        tokenCount: llmResult.tokensUsed ?? 0,
+        sessionId,
+        durationMs: analysisDurationMs,
+        detail: { path: 'llm' },
+      })
+    } else {
+      // Preserve-on-failure: post-0.5.1 the residual failures are uncorrelated
+      // timeouts (see tom-swe-j7c). A transient failure must not DOWNGRADE an
+      // existing Tier 2 model to the heuristic extractor — keep the prior model
+      // when one exists, and only synthesize a heuristic for a session never
+      // analyzed before (no regression). Leaving the prior file untouched also
+      // keeps its watermark and mtime aged, so a fresh LLM attempt is
+      // permitted next turn (81% of timed-out sessions recover on a later turn).
+      preservedPrior = priorModel !== null
+      logUsage({
+        timestamp: new Date().toISOString(),
+        operation: 'session-analysis-fallback',
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        durationMs: analysisDurationMs,
+        reason: `${llmResult.reason}: ${llmResult.detail}`,
+        detail: {
+          path: preservedPrior ? 'preserved' : 'heuristic',
+          failure: llmResult.reason,
+        },
+      })
+      extracted = priorModel ?? extractSessionModel(sessionLog)
+    }
+    // endedAt and the userMessage watermark are stamped mechanically from
+    // the Tier 1 log (never produced by the LLM): endedAt grounds decay in
+    // Tier 3 rebuilds; the watermark gates re-analysis. On preservation the
+    // prior model is kept exactly as persisted (its own stamps) so the
+    // in-memory model never diverges from disk.
+    sessionModel = preservedPrior
+      ? extracted
+      : {
+          ...extracted,
+          endedAt: sessionLog.endedAt,
+          analyzedUserMessageCount: userMessageCount,
+        }
+    // On preservation the on-disk Tier 2 model is already authoritative; skip the
+    // rewrite so its mtime stays aged (re-attempt next turn) and avoid a
+    // redundant non-atomic write (tom-swe-ur0).
+    if (!preservedPrior) {
+      writeSessionModel(sessionModel, 'global')
+    }
+  } finally {
+    // Release the in-flight lock as soon as Tier 2 is published — the
+    // downstream rebuild/promotion/index steps are idempotent and safe to
+    // overlap across sessions.
+    try {
+      if (lockFd !== null) {
+        fs.closeSync(lockFd)
+        fs.unlinkSync(lockPath)
+      }
+    } catch {
+      // Already swept as stale by a concurrent prune — nothing to release.
+    }
   }
 
   // Step 3: Rebuild Tier 3 from ALL Tier 2 models. Stop fires per turn-end,
@@ -309,7 +377,10 @@ export async function analyzeCompletedSession(
     if (promotion.model !== aggregatedUserModel) {
       writeUserModel(promotion.model, 'global')
     }
-    if (promotion.promoted.length > 0) {
+    // Log only when a memory file actually changed: idempotent block
+    // regenerations used to fire this event on every qualifying Stop
+    // (452 spurious rewrites in 24 days).
+    if (promotion.promoted.length > 0 && promotion.targets.length > 0) {
       logUsage({
         timestamp: new Date().toISOString(),
         operation: 'preference-promotion',
@@ -357,15 +428,19 @@ export async function analyzeCompletedSession(
     })
   }
 
-  // Step 6: Rebuild BM25 index
-  const index = buildMemoryIndex('global')
-  const indexPath = path.join(globalTomDir(), 'bm25-index.json')
-  atomicWriteFileSync(indexPath, JSON.stringify(index))
-
-  // Step 7: Prune Tier 1/2 (and matching snapshots) past the retention cap.
-  // Designed for this hook since US-013 but never wired until now.
+  // Step 6: Prune Tier 1 past the retention cap and expire Tier 2 models
+  // (and snapshots) past the decay window. Runs BEFORE the index build so
+  // the single build below reflects the post-prune store — pruning used to
+  // rebuild the index internally, duplicating the build every fire.
   try {
-    pruneOldSessions(config.maxSessionsRetained)
+    pruneOldSessions(
+      config.maxSessionsRetained,
+      'global',
+      config.preferenceDecayDays
+    )
+    // usage.log is the one store file pruning doesn't govern: archive it
+    // past the size threshold (archives preserved for eval consumers).
+    rotateUsageLogIfNeeded()
   } catch (error) {
     logUsage({
       timestamp: new Date().toISOString(),
@@ -376,6 +451,11 @@ export async function analyzeCompletedSession(
       reason: error instanceof Error ? error.message : String(error),
     })
   }
+
+  // Step 7: Rebuild the BM25 index once per qualifying Stop.
+  const index = buildMemoryIndex('global')
+  const indexPath = path.join(globalTomDir(), 'bm25-index.json')
+  atomicWriteFileSync(indexPath, JSON.stringify(index))
 
   return {
     success: true,

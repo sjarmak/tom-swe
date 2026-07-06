@@ -19,6 +19,18 @@ import * as crypto from 'node:crypto'
  * goal here — only atomicity. This is POSIX-correct, not portable-atomic.
  */
 
+/**
+ * Owner-only modes for the tom store. It holds redacted-but-sensitive
+ * interaction data — the same data class as Claude Code's own transcript
+ * store (700 dirs / 600 files). Modes are applied at creation time only:
+ * mkdir and open honor them for new paths, and the atomic rename publishes
+ * the temp's 0o600 onto a replaced target. A umask can only clear bits, so
+ * owner-only modes survive any umask. Exported so setup's one-time
+ * hardening pass uses the same values.
+ */
+export const TOM_DIR_MODE = 0o700
+export const TOM_FILE_MODE = 0o600
+
 let tempCounter = 0
 
 function tempPathFor(filePath: string): string {
@@ -32,7 +44,7 @@ function tempPathFor(filePath: string): string {
 function ensureDirectoryExists(filePath: string): void {
   const dir = path.dirname(filePath)
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
+    fs.mkdirSync(dir, { recursive: true, mode: TOM_DIR_MODE })
   }
 }
 
@@ -47,7 +59,7 @@ export function atomicWriteFileSync(
   ensureDirectoryExists(filePath)
   const tempPath = tempPathFor(filePath)
   try {
-    fs.writeFileSync(tempPath, data, 'utf-8')
+    fs.writeFileSync(tempPath, data, { encoding: 'utf-8', mode: TOM_FILE_MODE })
     fs.renameSync(tempPath, filePath)
   } catch (error) {
     try {
@@ -79,7 +91,7 @@ export function atomicWriteFile(
     onError(err as NodeJS.ErrnoException)
     return
   }
-  fs.writeFile(tempPath, data, 'utf-8', (writeErr) => {
+  fs.writeFile(tempPath, data, { encoding: 'utf-8', mode: TOM_FILE_MODE }, (writeErr) => {
     if (writeErr) {
       onError(writeErr)
       return

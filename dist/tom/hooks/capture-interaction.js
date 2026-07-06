@@ -36,47 +36,17 @@ __export(capture_interaction_exports, {
   summarizeToolResponse: () => summarizeToolResponse
 });
 module.exports = __toCommonJS(capture_interaction_exports);
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
-var os2 = __toESM(require("node:os"));
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
+var os4 = __toESM(require("node:os"));
 var import_node_child_process = require("node:child_process");
 
 // tom/fs-atomic.ts
 var fs = __toESM(require("node:fs"));
 var path = __toESM(require("node:path"));
 var crypto = __toESM(require("node:crypto"));
-var tempCounter = 0;
-function tempPathFor(filePath) {
-  const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
-  return `${filePath}.${suffix}.tmp`;
-}
-function ensureDirectoryExists(filePath) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
-function atomicWriteFile(filePath, data, onError) {
-  let tempPath;
-  try {
-    ensureDirectoryExists(filePath);
-    tempPath = tempPathFor(filePath);
-  } catch (err) {
-    onError(err);
-    return;
-  }
-  fs.writeFile(tempPath, data, "utf-8", (writeErr) => {
-    if (writeErr) {
-      onError(writeErr);
-      return;
-    }
-    fs.rename(tempPath, filePath, (renameErr) => {
-      if (renameErr) {
-        fs.unlink(tempPath, () => onError(renameErr));
-      }
-    });
-  });
-}
+var TOM_DIR_MODE = 448;
+var TOM_FILE_MODE = 384;
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -845,10 +815,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1231,11 +1201,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1418,7 +1388,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path4 = []) => {
+  const processError = (error49, path6 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1428,7 +1398,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1460,8 +1430,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path4) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13438,13 +13408,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path4 = ref.slice(1).split("/").filter(Boolean);
-  if (path4.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path4[0] === defsKey) {
-    const key = path4[1];
+  if (path6[0] === defsKey) {
+    const key = path6[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13914,6 +13884,8 @@ function toRecord(value) {
 }
 
 // tom/secrets.ts
+var REDACTED = "[REDACTED]";
+var MAX_VALUE_LENGTH = 200;
 var SECRET_PATTERNS = [
   /^sk-[a-zA-Z0-9_-]+$/,
   // OpenAI-style keys
@@ -13950,10 +13922,32 @@ var SECRET_PATTERNS = [
   /[A-Z_]+_KEY=[^\s]+/i
   // API_KEY=value patterns
 ];
-var REDACTED = "[REDACTED]";
-var MAX_VALUE_LENGTH = 200;
+var EMBEDDED_SECRET_PATTERNS = [
+  // Authorization header values anywhere in a command. Bearer is
+  // case-insensitive (mirrors the anchored pattern); Basic is case-sensitive
+  // with a length floor so prose like "basic authentication" is not swallowed.
+  { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: REDACTED },
+  { pattern: /\bBasic\s+[A-Za-z0-9+/=]{16,}/g, replacement: REDACTED },
+  // AWS access key IDs anywhere, e.g. inside `AWS_ACCESS_KEY_ID=AKIA...`.
+  { pattern: /\bAKIA[A-Z0-9]{16}\b/g, replacement: REDACTED },
+  // JWTs anywhere: header.payload[.signature].
+  {
+    pattern: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g,
+    replacement: REDACTED
+  },
+  // URL connection-string credentials (scheme://user:pass@host): redact the
+  // credential pair, keep scheme and host readable.
+  { pattern: /(\/\/)[^\s/:@]+:[^\s@]+@/g, replacement: `$1${REDACTED}@` }
+];
 function looksLikeSecret(value) {
   return SECRET_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+function redactEmbeddedSecrets(value) {
+  let result = value;
+  for (const { pattern, replacement } of EMBEDDED_SECRET_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result.split(/(\s+)/).map((token) => token.trim() !== "" && looksLikeSecret(token) ? REDACTED : token).join("");
 }
 function sanitizeValue(value) {
   if (looksLikeSecret(value)) {
@@ -13962,13 +13956,180 @@ function sanitizeValue(value) {
   if (value.length > MAX_VALUE_LENGTH) {
     return REDACTED;
   }
-  return value;
+  return redactEmbeddedSecrets(value);
 }
 
 // tom/config.ts
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
+
+// tom/routing.ts
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os2 = __toESM(require("node:os"));
+
+// tom/memory-io.ts
 var fs2 = __toESM(require("node:fs"));
 var path2 = __toESM(require("node:path"));
 var os = __toESM(require("node:os"));
+
+// tom/schemas.ts
+var InteractionSchema = external_exports.strictObject({
+  toolName: external_exports.string(),
+  parameterShape: external_exports.record(external_exports.string(), external_exports.string()),
+  outcomeSummary: external_exports.string(),
+  timestamp: external_exports.string().datetime()
+});
+var SessionLogSchema = external_exports.strictObject({
+  sessionId: external_exports.string(),
+  startedAt: external_exports.string().datetime(),
+  endedAt: external_exports.string().datetime(),
+  interactions: external_exports.array(InteractionSchema),
+  // Redacted user prompt text captured by the UserPromptSubmit hook.
+  // Optional for backward compatibility with logs written before capture.
+  userMessages: external_exports.array(external_exports.string()).optional(),
+  // Join fields for the external work-audit graph: session working
+  // directory and git branch, set once per session by the capture hooks.
+  // A bead/work-item id is mechanically resolvable from these.
+  cwd: external_exports.string().optional(),
+  gitBranch: external_exports.string().optional()
+});
+var SidecarLineSchema = external_exports.discriminatedUnion("type", [
+  external_exports.strictObject({
+    type: external_exports.literal("interaction"),
+    toolName: external_exports.string(),
+    parameterShape: external_exports.record(external_exports.string(), external_exports.string()),
+    outcomeSummary: external_exports.string(),
+    timestamp: external_exports.string().datetime()
+  }),
+  external_exports.strictObject({
+    type: external_exports.literal("userMessage"),
+    message: external_exports.string(),
+    timestamp: external_exports.string().datetime(),
+    // cwd join field for sessions whose prompt arrives before any tool
+    // call (the stub — which normally carries it — is capture-created).
+    cwd: external_exports.string().optional()
+  })
+]);
+var SatisfactionSignalsSchema = external_exports.strictObject({
+  frustration: external_exports.boolean(),
+  satisfaction: external_exports.boolean(),
+  urgency: external_exports.enum(["low", "medium", "high"])
+});
+var PreferenceCategorySchema = external_exports.enum([
+  "interactionStyle",
+  "codingPreferences"
+]);
+var CorrectionSchema = external_exports.strictObject({
+  category: PreferenceCategorySchema,
+  key: external_exports.string(),
+  // The value the user corrected TO, when one was expressed. Optional: a
+  // correction can be a pure rejection without a replacement value.
+  correctedValue: external_exports.string().optional(),
+  // Short evidence string (quote or paraphrase of the correcting moment).
+  evidence: external_exports.string()
+});
+var PreferenceEntrySchema = external_exports.strictObject({
+  key: external_exports.string(),
+  value: external_exports.string()
+});
+var SessionModelSchema = external_exports.strictObject({
+  sessionId: external_exports.string(),
+  intent: external_exports.string(),
+  interactionPatterns: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
+  codingPreferences: external_exports.array(external_exports.union([external_exports.string(), PreferenceEntrySchema])),
+  // Deprecated and no longer produced; optional so legacy session models that
+  // still carry it parse cleanly under strictObject (see tom-swe-l35).
+  satisfactionSignals: SatisfactionSignalsSchema.optional(),
+  // Corrections extracted from the session. Optional for backward
+  // compatibility with session models written before this field existed;
+  // consumers treat absence as an empty array.
+  corrections: external_exports.array(CorrectionSchema).optional(),
+  // When the session's evidence applies (copied mechanically from the Tier 1
+  // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
+  // Optional for session models written before rebuilds existed.
+  endedAt: external_exports.string().datetime().optional(),
+  // Watermark: how many redacted userMessages the Tier 1 log carried when
+  // this model was extracted (stamped mechanically, never LLM-produced).
+  // Re-analysis is gated on growth past this count — user messages are the
+  // analyzer's primary evidence, so an unchanged count means nothing new to
+  // learn. Advances only on successful extraction, so a failed analysis
+  // stays retryable. Optional for models written before the watermark.
+  analyzedUserMessageCount: external_exports.number().int().min(0).optional()
+});
+var PreferenceClusterSchema = external_exports.strictObject({
+  category: external_exports.string(),
+  key: external_exports.string(),
+  value: external_exports.string(),
+  confidence: external_exports.number().min(0).max(1),
+  lastUpdated: external_exports.string().datetime(),
+  sessionCount: external_exports.number().int().min(0),
+  // True when the preference has been promoted into a durable CLAUDE.md
+  // marker block and retired from per-session injection. Optional for
+  // backward compatibility with user models written before promotion existed.
+  promoted: external_exports.boolean().optional(),
+  // Provenance: a preference born from a user correction is non-obvious by
+  // construction (the agent got it wrong first) and gets promotion priority
+  // plus negative "avoid X" rendering. Optional; absent means observation.
+  learnedVia: external_exports.enum(["correction", "observation"]).optional(),
+  // The value the user corrected AWAY from, when known — the "what not to
+  // do" half of a correction-derived preference.
+  correctedFrom: external_exports.string().optional(),
+  // Persisted derivability-gate rejection: the exact value the gate judged
+  // statically derivable, and when. While the value is unchanged and the
+  // verdict fresh, the candidate skips re-judgment (each judgment is an
+  // agentic LLM spawn; one candidate was re-judged 64 times before this).
+  // Carried across rebuilds like `promoted`. Optional for older models.
+  gateRejectedValue: external_exports.string().optional(),
+  gateRejectedAt: external_exports.string().datetime().optional()
+});
+var UserModelSchema = external_exports.strictObject({
+  preferencesClusters: external_exports.array(PreferenceClusterSchema),
+  interactionStyleSummary: external_exports.string(),
+  codingStyleSummary: external_exports.string(),
+  projectOverrides: external_exports.record(external_exports.string(), external_exports.array(PreferenceClusterSchema))
+});
+var ToMSuggestionSchema = external_exports.strictObject({
+  type: external_exports.enum(["preference", "disambiguation", "style"]),
+  content: external_exports.string(),
+  confidence: external_exports.number().min(0).max(1),
+  sourceSessions: external_exports.array(external_exports.string())
+});
+
+// tom/memory-io.ts
+function globalTomDir() {
+  return path2.join(os.homedir(), ".claude", "tom");
+}
+
+// tom/routing.ts
+var TELEMETRY_SCHEMA_VERSION = 1;
+var UsageLogEntrySchema = external_exports.looseObject({
+  v: external_exports.number().optional(),
+  timestamp: external_exports.string(),
+  operation: external_exports.string(),
+  model: external_exports.string(),
+  tokenCount: external_exports.number(),
+  sessionId: external_exports.string().optional(),
+  durationMs: external_exports.number().optional(),
+  reason: external_exports.string().optional(),
+  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+var LOG_DIR_MODE = 448;
+var LOG_FILE_MODE = 384;
+function logUsage(entry) {
+  const logPath = path3.join(globalTomDir(), "usage.log");
+  const dir = path3.dirname(logPath);
+  if (!fs3.existsSync(dir)) {
+    fs3.mkdirSync(dir, { recursive: true, mode: LOG_DIR_MODE });
+  }
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
+  fs3.appendFileSync(logPath, line, { encoding: "utf-8", mode: LOG_FILE_MODE });
+}
+var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
+
+// tom/config.ts
 var TomConfigSchema = external_exports.strictObject({
   enabled: external_exports.boolean().default(false),
   consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
@@ -13988,20 +14149,45 @@ var TomConfigSchema = external_exports.strictObject({
   promotion: external_exports.strictObject({
     enabled: external_exports.boolean().default(true),
     threshold: external_exports.number().min(0).max(1).default(0.8),
-    minSessions: external_exports.number().int().min(1).default(5)
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
+    minSessions: external_exports.number().int().min(1).default(5),
+    // Hysteresis: an already-promoted preference retires only when its
+    // confidence falls below this floor (a correction halves confidence,
+    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
+    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
+    // promotions in and out of CLAUDE.md within hours.
+    retireThreshold: external_exports.number().min(0).max(1).default(0.45)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 })
 });
-function readTomConfig() {
+function logInvalidConfig(reason) {
   try {
-    const configPath = path2.join(os.homedir(), ".claude", "tom", "config.json");
-    const content = fs2.readFileSync(configPath, "utf-8");
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "config-invalid",
+      model: "none",
+      tokenCount: 0,
+      reason: reason.slice(0, 500)
+    });
+  } catch {
+  }
+}
+function readTomConfig() {
+  const configPath = path4.join(os3.homedir(), ".claude", "tom", "config.json");
+  let content;
+  try {
+    content = fs4.readFileSync(configPath, "utf-8");
+  } catch {
+    return TomConfigSchema.parse({});
+  }
+  try {
     const raw = JSON.parse(content);
     const result = TomConfigSchema.safeParse(raw);
     if (result.success) {
       return result.data;
     }
+    logInvalidConfig(result.error.message);
     return TomConfigSchema.parse({});
-  } catch {
+  } catch (error48) {
+    logInvalidConfig(error48 instanceof Error ? error48.message : String(error48));
     return TomConfigSchema.parse({});
   }
 }
@@ -14044,9 +14230,14 @@ function summarizeToolResponse(toolResponse) {
   }
   return JSON.stringify(toolResponse);
 }
+function getSessionsDir() {
+  return path5.join(os4.homedir(), ".claude", "tom", "sessions");
+}
 function getSessionFilePath(sessionId) {
-  const tomDir = path3.join(os2.homedir(), ".claude", "tom", "sessions");
-  return path3.join(tomDir, `${sessionId}.json`);
+  return path5.join(getSessionsDir(), `${sessionId}.json`);
+}
+function getSidecarPath(sessionId) {
+  return path5.join(getSessionsDir(), `${sessionId}.jsonl`);
 }
 function resolveGitBranch(cwd) {
   try {
@@ -14060,34 +14251,45 @@ function resolveGitBranch(cwd) {
     return void 0;
   }
 }
-function captureInteraction(sessionId, toolName, toolInput, toolOutput, cwd) {
-  const filePath = getSessionFilePath(sessionId);
-  const entry = buildInteractionEntry(toolName, toolInput, toolOutput);
-  let sessionData;
-  try {
-    const existing = fs3.readFileSync(filePath, "utf-8");
-    sessionData = JSON.parse(existing);
-  } catch {
-    sessionData = {
-      sessionId,
-      startedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      endedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      interactions: []
-    };
+function ensureSessionStub(sessionId, cwd) {
+  const stubPath = getSessionFilePath(sessionId);
+  if (fs5.existsSync(stubPath)) {
+    return;
   }
-  const joinCwd = sessionData.cwd ?? cwd;
-  const joinBranch = sessionData.gitBranch ?? (joinCwd ? resolveGitBranch(joinCwd) : void 0);
-  const updated = {
-    ...sessionData,
-    endedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    interactions: [...sessionData.interactions, entry],
-    ...joinCwd !== void 0 ? { cwd: joinCwd } : {},
-    ...joinBranch !== void 0 ? { gitBranch: joinBranch } : {}
+  const gitBranch = cwd !== void 0 ? resolveGitBranch(cwd) : void 0;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const stub = {
+    sessionId,
+    startedAt: now,
+    endedAt: now,
+    interactions: [],
+    ...cwd !== void 0 ? { cwd } : {},
+    ...gitBranch !== void 0 ? { gitBranch } : {}
   };
-  atomicWriteFile(filePath, JSON.stringify(updated, null, 2), (err) => {
-    process.stderr.write(`ToM capture-interaction write error: ${err.message}
+  try {
+    fs5.writeFileSync(stubPath, JSON.stringify(stub, null, 2), {
+      encoding: "utf-8",
+      flag: "wx",
+      mode: TOM_FILE_MODE
+    });
+  } catch {
+  }
+}
+function captureInteraction(sessionId, toolName, toolInput, toolOutput, cwd) {
+  const entry = buildInteractionEntry(toolName, toolInput, toolOutput);
+  try {
+    fs5.mkdirSync(getSessionsDir(), { recursive: true, mode: TOM_DIR_MODE });
+    ensureSessionStub(sessionId, cwd);
+    fs5.appendFileSync(
+      getSidecarPath(sessionId),
+      JSON.stringify({ type: "interaction", ...entry }) + "\n",
+      { encoding: "utf-8", mode: TOM_FILE_MODE }
+    );
+  } catch (error48) {
+    const message = error48 instanceof Error ? error48.message : String(error48);
+    process.stderr.write(`ToM capture-interaction write error: ${message}
 `);
-  });
+  }
 }
 async function main(stream = process.stdin) {
   if (isExcludedSession()) {

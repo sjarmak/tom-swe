@@ -100,6 +100,37 @@ describe('rebuildUserModelFromTier2', () => {
     expect(rebuilt.codingStyleSummary).toBe('typescript focused')
   })
 
+  it('folds undated models at the earliest dated endedAt, never amplifying confidence', () => {
+    // Anti-decay overflow regression: an undated (pre-v0.3.1) model used to
+    // fold at wall-clock "now" — later than every dated session's endedAt —
+    // so later folds computed negative day gaps and a decay factor > 1,
+    // compounding confidence past 1.0 and failing write validation.
+    const dated = '2026-06-10T10:00:00.000Z'
+    const undated: SessionModel = {
+      sessionId: 'legacy',
+      intent: 'test',
+      interactionPatterns: [],
+      codingPreferences: [
+        { key: 'shared_pref', value: 'v' },
+        { key: 'legacy_only', value: 'w' },
+      ],
+    }
+    writeTier2(undated)
+    writeTier2(sessionModel('dated', dated, [{ key: 'shared_pref', value: 'v' }]))
+
+    const model = rebuildUserModelFromTier2('global', 30, 0.5, null)
+
+    for (const cluster of model.preferencesClusters) {
+      expect(cluster.confidence).toBeLessThanOrEqual(1)
+    }
+    // Two reinforcements with a zero-day gap: exactly 0.1 + 0.1.
+    const shared = model.preferencesClusters.find((p) => p.key === 'shared_pref')
+    expect(shared?.confidence).toBeCloseTo(0.2)
+    // The undated fold is pinned to the earliest dated endedAt, not wall clock.
+    const legacyOnly = model.preferencesClusters.find((p) => p.key === 'legacy_only')
+    expect(legacyOnly?.lastUpdated).toBe(dated)
+  })
+
   it('skips unreadable Tier 2 files instead of failing the rebuild', () => {
     writeTier2(sessionModel('good', '2026-06-10T10:00:00.000Z', [{ key: 'k', value: 'v' }]))
     const dir = path.join(tempDir, '.claude', 'tom', 'session-models')
@@ -111,6 +142,45 @@ describe('rebuildUserModelFromTier2', () => {
 })
 
 describe('carryPromotedFlags', () => {
+  it('carries persisted gate rejections onto matching rebuilt clusters', () => {
+    const previous: UserModel = {
+      preferencesClusters: [
+        {
+          category: 'codingPreferences',
+          key: 'test_runner',
+          value: 'vitest',
+          confidence: 0.9,
+          lastUpdated: '2026-06-01T00:00:00.000Z',
+          sessionCount: 9,
+          gateRejectedValue: 'vitest',
+          gateRejectedAt: '2026-06-20T00:00:00.000Z',
+        },
+      ],
+      interactionStyleSummary: '',
+      codingStyleSummary: '',
+      projectOverrides: {},
+    }
+    const rebuilt: UserModel = {
+      ...previous,
+      preferencesClusters: [
+        {
+          category: 'codingPreferences',
+          key: 'test_runner',
+          value: 'vitest',
+          confidence: 0.85,
+          lastUpdated: '2026-06-25T00:00:00.000Z',
+          sessionCount: 10,
+        },
+      ],
+    }
+
+    const carried = carryPromotedFlags(rebuilt, previous)
+
+    const pref = carried.preferencesClusters[0]
+    expect(pref?.gateRejectedValue).toBe('vitest')
+    expect(pref?.gateRejectedAt).toBe('2026-06-20T00:00:00.000Z')
+  })
+
   it('restores promoted flags onto matching rebuilt clusters', () => {
     const previous: UserModel = {
       preferencesClusters: [

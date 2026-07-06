@@ -58,6 +58,25 @@ function countJsonFiles(dirPath: string): number {
   }
 }
 
+/**
+ * Counts Tier 1 sessions as the union of .json and .jsonl basenames: a
+ * session whose prompt arrived before any tool call has only a capture
+ * sidecar.
+ */
+function countSessions(dirPath: string): number {
+  try {
+    const ids = new Set(
+      fs
+        .readdirSync(dirPath)
+        .filter((e) => e.endsWith('.json') || e.endsWith('.jsonl'))
+        .map((e) => e.replace(/\.jsonl?$/, ''))
+    )
+    return ids.size
+  } catch {
+    return 0
+  }
+}
+
 function getFileSize(filePath: string): number {
   try {
     const stat = fs.statSync(filePath)
@@ -79,7 +98,7 @@ function getStorageStats(): StorageStats {
 
   return {
     tier1SessionCount:
-      countJsonFiles(globalSessions) + countJsonFiles(projectSessions),
+      countSessions(globalSessions) + countSessions(projectSessions),
     tier2ModelCount:
       countJsonFiles(globalModels) + countJsonFiles(projectModels),
     tier3SizeBytes:
@@ -203,8 +222,14 @@ export function formatStatus(status: StatusOutput): string {
     return lines.join('\n')
   }
 
-  lines.push('## Sessions Analyzed')
-  lines.push(`- Total: ${status.storage.tier1SessionCount}`)
+  // The Tier 2 model count is what actually feeds the user model — the
+  // Tier 1 file count (this section's previous label, "Sessions Analyzed")
+  // is just the raw-log retention window.
+  lines.push('## Sessions')
+  lines.push(
+    `- Informing the user model (Tier 2 models): ${status.storage.tier2ModelCount}`
+  )
+  lines.push(`- Raw logs retained (Tier 1): ${status.storage.tier1SessionCount}`)
   lines.push('')
 
   // Top Preferences

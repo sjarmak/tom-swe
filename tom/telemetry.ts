@@ -10,12 +10,33 @@ import type { UsageLogEntry } from './routing.js'
 
 // --- Types ---
 
+/** llm/fallback counts within a trailing time window. */
+export interface WindowedAnalysisCounts {
+  readonly llmRuns: number
+  readonly fallbackRuns: number
+}
+
 export interface AnalysisTelemetry {
   readonly llmRuns: number
   readonly fallbackRuns: number
   readonly fallbackReasons: Readonly<Record<string, number>>
+  /** Duration stats for successful LLM analyses only — pooling them with
+   * timeout fallbacks (fixed ~90s each) described neither population. */
   readonly avgDurationMs: number | null
   readonly maxDurationMs: number | null
+  /** Average duration of fallback runs (dominated by the timeout ceiling). */
+  readonly fallbackAvgDurationMs: number | null
+  readonly totalTokens: number
+  /** Trailing windows so a fixed historical cluster can't mask (or fake) a
+   * live regression — the lifetime rate once read 19% while live was 1%. */
+  readonly last24h: WindowedAnalysisCounts
+  readonly last7d: WindowedAnalysisCounts
+}
+
+export interface GateTelemetry {
+  readonly count: number
+  readonly okCount: number
+  readonly unavailableCount: number
   readonly totalTokens: number
 }
 
@@ -44,10 +65,11 @@ export interface SessionUsageTelemetry {
   readonly cacheCreationTokens: number
   readonly cacheReadTokens: number
   /**
-   * ToM analysis tokens over host-session input+output tokens, as a
-   * percentage. Unweighted by per-model pricing — cache buckets are
-   * excluded from the denominator; consumers needing cost-true overhead
-   * should weight the raw buckets themselves.
+   * ToM tokens (analysis + derivability-gate spawns) over host-session
+   * input+output tokens, as a percentage. The denominator dedupes the
+   * per-fire cumulative session-usage entries by session (last wins).
+   * Unweighted by per-model pricing — cache buckets are excluded; consumers
+   * needing cost-true overhead should weight the raw buckets themselves.
    */
   readonly tomShareOfInOutPercent: number | null
 }
@@ -56,6 +78,7 @@ export interface TelemetrySummary {
   readonly totalEntries: number
   readonly invalidLines: number
   readonly analysis: AnalysisTelemetry
+  readonly gate: GateTelemetry
   readonly promptHook: PromptHookTelemetry
   readonly consultations: ConsultationTelemetry
   readonly sessionStartInjections: InjectionTelemetry
@@ -118,14 +141,28 @@ function countByDetailString(
 
 export function computeTelemetrySummary(
   entries: readonly UsageLogEntry[],
-  invalidLines: number = 0
+  invalidLines: number = 0,
+  now: Date = new Date()
 ): TelemetrySummary {
   const byOp = (op: string): UsageLogEntry[] =>
     entries.filter((e) => e.operation === op)
 
   const llm = byOp('session-analysis')
   const fallback = byOp('session-analysis-fallback')
-  const analysisDurations = durations([...llm, ...fallback])
+  const llmDurations = durations(llm)
+  const fallbackDurations = durations(fallback)
+
+  const windowCounts = (windowMs: number): WindowedAnalysisCounts => {
+    const cutoff = new Date(now.getTime() - windowMs).toISOString()
+    return {
+      llmRuns: llm.filter((e) => e.timestamp >= cutoff).length,
+      fallbackRuns: fallback.filter((e) => e.timestamp >= cutoff).length,
+    }
+  }
+
+  const gates = byOp('derivability-gate')
+  const gateOutcome = countByDetailString(gates, 'outcome')
+  const gateTokens = gates.reduce((sum, e) => sum + e.tokenCount, 0)
 
   const promptHook = byOp('prompt-hook')
   const promptDurations = durations(promptHook)
@@ -143,11 +180,21 @@ export function computeTelemetrySummary(
   const corrections = byOp('preference-correction')
   const promotions = byOp('preference-promotion')
 
-  const usageEntries = byOp('session-usage')
+  // session-usage entries hold CUMULATIVE transcript totals and are logged
+  // once per Stop FIRE, not per session (max 99 for one session on this
+  // rig): summing them inflated the host-token denominator ~5x, flattering
+  // the overhead metric. Dedupe by session — the last entry carries the
+  // session's final totals.
+  const usageBySession = new Map<string, UsageLogEntry>()
+  for (const e of byOp('session-usage')) {
+    usageBySession.set(e.sessionId ?? '', e)
+  }
+  const usageEntries = [...usageBySession.values()]
   const sumDetail = (key: string): number =>
     usageEntries.reduce((sum, e) => sum + (detailNumber(e, key) ?? 0), 0)
   const hostInOut = sumDetail('inputTokens') + sumDetail('outputTokens')
-  const tomTokens = llm.reduce((sum, e) => sum + e.tokenCount, 0)
+  // Numerator covers every headless spawn: analyses AND gate judgments.
+  const tomTokens = llm.reduce((sum, e) => sum + e.tokenCount, 0) + gateTokens
 
   return {
     totalEntries: entries.length,
@@ -156,10 +203,18 @@ export function computeTelemetrySummary(
       llmRuns: llm.length,
       fallbackRuns: fallback.length,
       fallbackReasons: countByDetailString(fallback, 'failure'),
-      avgDurationMs: average(analysisDurations),
-      maxDurationMs:
-        analysisDurations.length > 0 ? Math.max(...analysisDurations) : null,
+      avgDurationMs: average(llmDurations),
+      maxDurationMs: llmDurations.length > 0 ? Math.max(...llmDurations) : null,
+      fallbackAvgDurationMs: average(fallbackDurations),
       totalTokens: llm.reduce((sum, e) => sum + e.tokenCount, 0),
+      last24h: windowCounts(24 * 60 * 60 * 1000),
+      last7d: windowCounts(7 * 24 * 60 * 60 * 1000),
+    },
+    gate: {
+      count: gates.length,
+      okCount: gateOutcome['ok'] ?? 0,
+      unavailableCount: gateOutcome['unavailable'] ?? 0,
+      totalTokens: gateTokens,
     },
     promptHook: {
       count: promptHook.length,
@@ -227,19 +282,38 @@ export function formatTelemetry(summary: TelemetrySummary): string[] {
   const a = summary.analysis
   const analysisRuns = a.llmRuns + a.fallbackRuns
   if (analysisRuns > 0) {
+    const rate = (w: WindowedAnalysisCounts): string => {
+      const total = w.llmRuns + w.fallbackRuns
+      if (total === 0) return 'no runs'
+      return `${w.llmRuns} LLM / ${w.fallbackRuns} fallback (${Math.round((w.fallbackRuns / total) * 100)}%)`
+    }
     const fallbackPercent = Math.round((a.fallbackRuns / analysisRuns) * 100)
     const reasonList = Object.entries(a.fallbackReasons)
       .map(([reason, count]) => `${reason}×${count}`)
       .join(', ')
     lines.push(
-      `- Session analysis: ${a.llmRuns} LLM / ${a.fallbackRuns} fallback (${fallbackPercent}%)` +
+      `- Session analysis (lifetime): ${a.llmRuns} LLM / ${a.fallbackRuns} fallback (${fallbackPercent}%)` +
         (reasonList ? ` [${reasonList}]` : '')
     )
-    if (a.avgDurationMs !== null) {
+    lines.push(`- Session analysis (24h): ${rate(a.last24h)}; (7d): ${rate(a.last7d)}`)
+    if (a.avgDurationMs !== null || a.fallbackAvgDurationMs !== null) {
+      const llmPart =
+        a.avgDurationMs !== null
+          ? `LLM avg ${a.avgDurationMs}ms, max ${a.maxDurationMs}ms`
+          : 'no successful LLM runs'
+      const fallbackPart =
+        a.fallbackAvgDurationMs !== null ? `; fallback avg ${a.fallbackAvgDurationMs}ms` : ''
       lines.push(
-        `- Analysis duration: avg ${a.avgDurationMs}ms, max ${a.maxDurationMs}ms; total tokens: ${a.totalTokens}`
+        `- Analysis duration: ${llmPart}${fallbackPart}; total tokens: ${a.totalTokens}`
       )
     }
+  }
+
+  const g = summary.gate
+  if (g.count > 0) {
+    lines.push(
+      `- Derivability gate: ${g.count} spawns (ok×${g.okCount}, unavailable×${g.unavailableCount}); tokens: ${g.totalTokens}`
+    )
   }
 
   if (summary.promptHook.count > 0) {
@@ -268,7 +342,7 @@ export function formatTelemetry(summary: TelemetrySummary): string[] {
   const u = summary.sessionUsage
   if (u.sessions > 0) {
     lines.push(
-      `- Host sessions: ${u.sessions} measured; in ${u.inputTokens} / out ${u.outputTokens} (cache: +${u.cacheCreationTokens} created, ${u.cacheReadTokens} read)`
+      `- Host sessions: ${u.sessions} distinct measured; in ${u.inputTokens} / out ${u.outputTokens} (cache: +${u.cacheCreationTokens} created, ${u.cacheReadTokens} read)`
     )
     if (u.tomShareOfInOutPercent !== null) {
       lines.push(

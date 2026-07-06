@@ -139,6 +139,30 @@ function createUserModel(scope: 'global' | 'project'): void {
   )
 }
 
+function createKeyedSessionModel(
+  sessionId: string,
+  codingPreferences: SessionModel['codingPreferences'],
+  scope: 'global' | 'project'
+): void {
+  const baseDir =
+    scope === 'global'
+      ? path.join(tempDir, '.claude', 'tom')
+      : path.join(projectDir, '.claude', 'tom')
+  const modelsDir = path.join(baseDir, 'session-models')
+  fs.mkdirSync(modelsDir, { recursive: true })
+  const model: SessionModel = {
+    sessionId,
+    intent: `Intent for ${sessionId}`,
+    interactionPatterns: [],
+    codingPreferences,
+  }
+  fs.writeFileSync(
+    path.join(modelsDir, `${sessionId}.json`),
+    JSON.stringify(model),
+    'utf-8'
+  )
+}
+
 function createUsageLog(entries: string[]): void {
   const tomDir = path.join(tempDir, '.claude', 'tom')
   fs.mkdirSync(tomDir, { recursive: true })
@@ -242,6 +266,80 @@ describe('forgetSession', () => {
 
     const indexPath = path.join(tempDir, '.claude', 'tom', 'bm25-index.json')
     expect(fs.existsSync(indexPath)).toBe(true)
+  })
+
+  it('preserves promoted flags on untouched preferences across the rebuild', () => {
+    createSettings({ enabled: true })
+    createSessionLog('sess-1', '2026-01-01T00:00:00.000Z', 'global')
+    createSessionModel('sess-1', 'global')
+    createKeyedSessionModel(
+      'sess-2',
+      [{ key: 'issue_tracking', value: 'beads' }],
+      'global'
+    )
+
+    // Previous user model: the sess-2-derived preference was promoted.
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    const previous: UserModel = {
+      preferencesClusters: [
+        {
+          category: 'codingPreferences',
+          key: 'issue_tracking',
+          value: 'beads',
+          confidence: 0.9,
+          lastUpdated: '2026-01-15T00:00:00.000Z',
+          sessionCount: 6,
+          promoted: true,
+        },
+      ],
+      interactionStyleSummary: '',
+      codingStyleSummary: '',
+      projectOverrides: {},
+    }
+    fs.writeFileSync(
+      path.join(tomDir, 'user-model.json'),
+      JSON.stringify(previous),
+      'utf-8'
+    )
+
+    const result = forgetSession('sess-1')
+    expect(result.tier3Rebuilt).toBe(true)
+
+    const rebuilt = JSON.parse(
+      fs.readFileSync(path.join(tomDir, 'user-model.json'), 'utf-8')
+    ) as UserModel
+    const cluster = rebuilt.preferencesClusters.find(
+      c => c.category === 'codingPreferences' && c.key === 'issue_tracking'
+    )
+    expect(cluster).toBeDefined()
+    expect(cluster?.value).toBe('beads')
+    expect(cluster?.promoted).toBe(true)
+  })
+
+  it('removes the user-model-history snapshot for the forgotten session', () => {
+    createSettings({ enabled: true })
+    createSessionLog('sess-1', '2026-01-01T00:00:00.000Z', 'global')
+    const historyDir = path.join(tempDir, '.claude', 'tom', 'user-model-history')
+    fs.mkdirSync(historyDir, { recursive: true })
+    const snapshotPath = path.join(historyDir, 'sess-1.json')
+    fs.writeFileSync(snapshotPath, '{}', 'utf-8')
+
+    forgetSession('sess-1')
+
+    expect(fs.existsSync(snapshotPath)).toBe(false)
+  })
+
+  it('removes the sessions/<id>.jsonl sidecar when present', () => {
+    createSettings({ enabled: true })
+    createSessionLog('sess-1', '2026-01-01T00:00:00.000Z', 'global')
+    const sidecarPath = path.join(
+      tempDir, '.claude', 'tom', 'sessions', 'sess-1.jsonl'
+    )
+    fs.writeFileSync(sidecarPath, '{"line":1}\n', 'utf-8')
+
+    forgetSession('sess-1')
+
+    expect(fs.existsSync(sidecarPath)).toBe(false)
   })
 })
 

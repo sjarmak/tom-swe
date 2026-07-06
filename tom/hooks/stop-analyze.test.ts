@@ -45,10 +45,12 @@ function createTempDir(): string {
 }
 
 function createSessionLog(sessionId: string, interactions: readonly object[] = []) {
+  // Recent timestamps: Tier 2 expiry is endedAt-keyed, so a fixture that
+  // ended months ago would be expired by the prune step in the same run.
   return {
     sessionId,
-    startedAt: '2026-02-02T10:00:00.000Z',
-    endedAt: '2026-02-02T11:00:00.000Z',
+    startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    endedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
     interactions,
   }
 }
@@ -386,20 +388,21 @@ describe('analyzeCompletedSession', () => {
       detail: 'claude not found',
     })
 
-    // Three sessions, distinct start times; oldest must be pruned.
+    // Three sessions; the one with the oldest activity (mtime) must be
+    // pruned. All are aged past the 2h active-session guard except the one
+    // being analyzed now.
     writeSessionFile('prune-old')
     writeSessionFile('prune-mid')
     writeSessionFile('prune-new')
     const sessionsDir = path.join(tomDir, 'sessions')
-    const stamp = (id: string, startedAt: string): void => {
-      const p = path.join(sessionsDir, `${id}.json`)
-      const log = JSON.parse(fs.readFileSync(p, 'utf-8'))
-      fs.writeFileSync(p, JSON.stringify({ ...log, startedAt }), 'utf-8')
+    const age = (id: string, hoursAgo: number): void => {
+      const when = new Date(Date.now() - hoursAgo * 60 * 60 * 1000)
+      fs.utimesSync(path.join(sessionsDir, `${id}.json`), when, when)
     }
-    stamp('prune-old', '2026-01-01T00:00:00.000Z')
-    stamp('prune-mid', '2026-02-01T00:00:00.000Z')
-    stamp('prune-new', '2026-03-01T00:00:00.000Z')
-    // Pre-existing snapshot for the session about to be pruned.
+    age('prune-old', 72)
+    age('prune-mid', 48)
+    // Pre-existing snapshot for the session about to be pruned: snapshots
+    // now expire with their Tier 2 model (decay window), NOT with the log.
     const historyDir = path.join(tomDir, 'user-model-history')
     fs.mkdirSync(historyDir, { recursive: true })
     fs.writeFileSync(path.join(historyDir, 'prune-old.json'), '{}', 'utf-8')
@@ -407,7 +410,7 @@ describe('analyzeCompletedSession', () => {
     await analyzeCompletedSession('prune-new')
 
     expect(fs.existsSync(path.join(sessionsDir, 'prune-old.json'))).toBe(false)
-    expect(fs.existsSync(path.join(historyDir, 'prune-old.json'))).toBe(false)
+    expect(fs.existsSync(path.join(historyDir, 'prune-old.json'))).toBe(true)
     expect(fs.existsSync(path.join(sessionsDir, 'prune-mid.json'))).toBe(true)
     expect(fs.existsSync(path.join(sessionsDir, 'prune-new.json'))).toBe(true)
   })
@@ -491,7 +494,9 @@ describe('analyzeCompletedSession', () => {
   it('preserves an existing Tier 2 model on LLM failure instead of downgrading to the heuristic', async () => {
     writeSessionFile('preserve-test')
     // A prior (richer) Tier 2 model already on disk, aged past the debounce
-    // window so re-analysis is attempted again this turn.
+    // window so re-analysis is attempted again this turn. Its endedAt is
+    // recent (within the decay window) so Tier 2 expiry leaves it alone.
+    const priorEndedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
     const modelDir = path.join(tempDir, '.claude', 'tom', 'session-models')
     fs.mkdirSync(modelDir, { recursive: true })
     const modelPath = path.join(modelDir, 'preserve-test.json')
@@ -502,7 +507,7 @@ describe('analyzeCompletedSession', () => {
         intent: 'rich prior analysis worth keeping',
         interactionPatterns: ['reads-before-editing'],
         codingPreferences: ['typescript strict mode'],
-        endedAt: '2026-01-15T08:00:00.000Z',
+        endedAt: priorEndedAt,
       }),
       'utf-8'
     )
@@ -522,7 +527,7 @@ describe('analyzeCompletedSession', () => {
     expect(result.sessionModel?.interactionPatterns).toEqual(['reads-before-editing'])
     // Preserve keeps the prior model's own endedAt (decay anchor) intact —
     // it is NOT overwritten with this turn's Tier 1 endedAt.
-    expect(result.sessionModel?.endedAt).toBe('2026-01-15T08:00:00.000Z')
+    expect(result.sessionModel?.endedAt).toBe(priorEndedAt)
     // On-disk Tier 2 still holds the prior model.
     const persisted = JSON.parse(fs.readFileSync(modelPath, 'utf-8'))
     expect(persisted.intent).toBe('rich prior analysis worth keeping')
@@ -614,8 +619,13 @@ describe('analyzeCompletedSession', () => {
     const result = await analyzeCompletedSession('llm-success-test')
 
     expect(result.success).toBe(true)
-    // endedAt is stamped mechanically from the Tier 1 log.
-    expect(result.sessionModel).toEqual({ ...llmModel, endedAt: expect.any(String) })
+    // endedAt and the userMessage watermark are stamped mechanically from
+    // the Tier 1 log.
+    expect(result.sessionModel).toEqual({
+      ...llmModel,
+      endedAt: expect.any(String),
+      analyzedUserMessageCount: 0,
+    })
 
     // The persisted Tier 2 model is the LLM-derived one, not the heuristic one
     const modelPath = path.join(
@@ -624,6 +634,7 @@ describe('analyzeCompletedSession', () => {
     expect(JSON.parse(fs.readFileSync(modelPath, 'utf-8'))).toEqual({
       ...llmModel,
       endedAt: expect.any(String),
+      analyzedUserMessageCount: 0,
     })
 
     const entries = readUsageEntries()
@@ -1074,6 +1085,134 @@ describe('analyzeCompletedSession', () => {
 
     const entries = readUsageEntries()
     expect(entries.some((e) => e['operation'] === 'analysis-debounced')).toBe(true)
+  })
+
+  it('skips re-analysis when no new user messages arrived since the last analysis', async () => {
+    // First analysis stamps the watermark (0 user messages).
+    writeSessionFile('watermark-test')
+    const first = await analyzeCompletedSession('watermark-test')
+    expect(first.sessionModel).not.toBeNull()
+
+    // Age the Tier 2 mtime past the debounce so only the watermark gates.
+    const modelPath = path.join(
+      tempDir, '.claude', 'tom', 'session-models', 'watermark-test.json'
+    )
+    const aged = new Date(Date.now() - 5 * 60_000)
+    fs.utimesSync(modelPath, aged, aged)
+
+    mockAnalyzeWithLlm.mockClear()
+    const second = await analyzeCompletedSession('watermark-test')
+    expect(second.success).toBe(true)
+    expect(second.sessionModel).toBeNull()
+    expect(mockAnalyzeWithLlm).not.toHaveBeenCalled()
+    expect(
+      readUsageEntries().some(
+        (e) => e['operation'] === 'analysis-skipped-no-new-evidence'
+      )
+    ).toBe(true)
+
+    // A new user message re-opens the gate.
+    const sessionPath = path.join(
+      tempDir, '.claude', 'tom', 'sessions', 'watermark-test.json'
+    )
+    const log = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'))
+    fs.writeFileSync(
+      sessionPath,
+      JSON.stringify({ ...log, userMessages: ['use vitest not jest'] }),
+      'utf-8'
+    )
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'watermark-test',
+        intent: 'fresh analysis',
+        interactionPatterns: [],
+        codingPreferences: [],
+      },
+      tokensUsed: 10,
+      path: 'llm',
+    })
+    const third = await analyzeCompletedSession('watermark-test')
+    expect(third.sessionModel).not.toBeNull()
+    expect(mockAnalyzeWithLlm).toHaveBeenCalledTimes(1)
+    // The watermark advanced with the successful analysis.
+    const persisted = JSON.parse(fs.readFileSync(modelPath, 'utf-8'))
+    expect(persisted.analyzedUserMessageCount).toBe(1)
+  })
+
+  it('does not advance the watermark on a preserved-prior failure, so retry stays open', async () => {
+    writeSessionFile('watermark-retry-test')
+    // Prior model analyzed at watermark 0, aged past the debounce.
+    const modelDir = path.join(tempDir, '.claude', 'tom', 'session-models')
+    fs.mkdirSync(modelDir, { recursive: true })
+    const modelPath = path.join(modelDir, 'watermark-retry-test.json')
+    fs.writeFileSync(
+      modelPath,
+      JSON.stringify({
+        sessionId: 'watermark-retry-test',
+        intent: 'prior',
+        interactionPatterns: [],
+        codingPreferences: [],
+        endedAt: new Date(Date.now() - 60_000).toISOString(),
+        analyzedUserMessageCount: 0,
+      }),
+      'utf-8'
+    )
+    const aged = new Date(Date.now() - 5 * 60_000)
+    fs.utimesSync(modelPath, aged, aged)
+    // New evidence arrives, but the LLM times out this turn.
+    const sessionPath = path.join(
+      tempDir, '.claude', 'tom', 'sessions', 'watermark-retry-test.json'
+    )
+    const log = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'))
+    fs.writeFileSync(
+      sessionPath,
+      JSON.stringify({ ...log, userMessages: ['new evidence'] }),
+      'utf-8'
+    )
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: false,
+      reason: 'timeout',
+      detail: 'claude did not respond within 90000ms',
+    })
+
+    await analyzeCompletedSession('watermark-retry-test')
+
+    // Preserved prior keeps its watermark at 0: the next turn (same message
+    // count) still passes the gate and retries the analysis.
+    const persisted = JSON.parse(fs.readFileSync(modelPath, 'utf-8'))
+    expect(persisted.analyzedUserMessageCount).toBe(0)
+  })
+
+  it('skips analysis when a fresh in-flight lock is held by a concurrent Stop', async () => {
+    writeSessionFile('lock-test')
+    const modelDir = path.join(tempDir, '.claude', 'tom', 'session-models')
+    fs.mkdirSync(modelDir, { recursive: true })
+    const lockPath = path.join(modelDir, 'lock-test.lock')
+    fs.writeFileSync(lockPath, '12345 2026-07-05T00:00:00.000Z', 'utf-8')
+
+    mockAnalyzeWithLlm.mockClear()
+    const result = await analyzeCompletedSession('lock-test')
+
+    expect(result.success).toBe(true)
+    expect(result.sessionModel).toBeNull()
+    expect(mockAnalyzeWithLlm).not.toHaveBeenCalled()
+    expect(fs.existsSync(path.join(modelDir, 'lock-test.json'))).toBe(false)
+    expect(
+      readUsageEntries().some((e) => e['operation'] === 'analysis-in-flight')
+    ).toBe(true)
+    // The lock belongs to the concurrent holder — not released by the skipper.
+    expect(fs.existsSync(lockPath)).toBe(true)
+  })
+
+  it('releases the in-flight lock after publishing the Tier 2 model', async () => {
+    writeSessionFile('lock-release-test')
+
+    await analyzeCompletedSession('lock-release-test')
+
+    const modelDir = path.join(tempDir, '.claude', 'tom', 'session-models')
+    expect(fs.existsSync(path.join(modelDir, 'lock-release-test.json'))).toBe(true)
+    expect(fs.existsSync(path.join(modelDir, 'lock-release-test.lock'))).toBe(false)
   })
 
   it('does not promote preferences below the promotion thresholds', async () => {

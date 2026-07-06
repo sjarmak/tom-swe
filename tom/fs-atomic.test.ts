@@ -118,6 +118,58 @@ describe('atomicWriteFileSync', () => {
   })
 })
 
+// The tom store holds redacted-but-sensitive interaction data — the same data
+// class as Claude Code's own transcript store (700 dirs / 600 files). Modes
+// are set at creation time; a umask can only clear bits, so owner-only modes
+// survive any umask.
+describe('permission modes', () => {
+  it('creates parent directories 0o700 and the file 0o600 (sync)', () => {
+    const target = path.join(testDir, 'deep', 'nested', 'model.json')
+
+    atomicWriteFileSync(target, '{}')
+
+    expect(fs.statSync(path.join(testDir, 'deep')).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(path.join(testDir, 'deep', 'nested')).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(target).mode & 0o777).toBe(0o600)
+  })
+
+  it('creates parent directories 0o700 and the file 0o600 (async)', async () => {
+    const target = path.join(testDir, 'adir', 'session.json')
+
+    await new Promise<void>((resolve, reject) => {
+      atomicWriteFile(target, '{}', reject)
+      const check = () => {
+        if (fs.existsSync(target)) resolve()
+        else setTimeout(check, 5)
+      }
+      setTimeout(check, 5)
+    })
+
+    expect(fs.statSync(path.join(testDir, 'adir')).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(target).mode & 0o777).toBe(0o600)
+  })
+
+  it('hardens a replaced target to 0o600 (rename publishes the temp mode)', () => {
+    const target = path.join(testDir, 'existing.json')
+    fs.writeFileSync(target, '{"old":true}')
+    fs.chmodSync(target, 0o664)
+
+    atomicWriteFileSync(target, '{"new":true}')
+
+    expect(fs.statSync(target).mode & 0o777).toBe(0o600)
+  })
+
+  it('does not change the mode of pre-existing directories', () => {
+    const dir = path.join(testDir, 'already')
+    fs.mkdirSync(dir)
+    fs.chmodSync(dir, 0o755)
+
+    atomicWriteFileSync(path.join(dir, 'x.json'), '{}')
+
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o755)
+  })
+})
+
 describe('atomicWriteFile (async)', () => {
   it('writes the complete content to the target', async () => {
     const target = path.join(testDir, 'session.json')

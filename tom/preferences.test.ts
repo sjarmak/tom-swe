@@ -23,6 +23,23 @@ function makePreference(
   }
 }
 
+describe('decayPreferences clamp', () => {
+  it('never amplifies confidence when lastUpdated is in the future', () => {
+    // An undated legacy Tier 2 fold can stamp lastUpdated later than the
+    // asOf of a subsequent dated fold; the decay factor must clamp at 1
+    // instead of compounding confidence past the cap (anti-decay overflow).
+    const now = new Date('2026-07-01T00:00:00.000Z')
+    const existing = [
+      makePreference({
+        confidence: 0.5,
+        lastUpdated: '2026-07-31T00:00:00.000Z',
+      }),
+    ]
+    const result = decayPreferences(existing, 30, now)
+    expect(result[0]?.confidence).toBe(0.5)
+  })
+})
+
 describe('reinforcePreference', () => {
   it('increases confidence by 0.1 for matching preference', () => {
     const existing = [makePreference({ confidence: 0.5 })]

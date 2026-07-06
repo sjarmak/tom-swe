@@ -13839,6 +13839,23 @@ var SessionLogSchema = external_exports.strictObject({
   cwd: external_exports.string().optional(),
   gitBranch: external_exports.string().optional()
 });
+var SidecarLineSchema = external_exports.discriminatedUnion("type", [
+  external_exports.strictObject({
+    type: external_exports.literal("interaction"),
+    toolName: external_exports.string(),
+    parameterShape: external_exports.record(external_exports.string(), external_exports.string()),
+    outcomeSummary: external_exports.string(),
+    timestamp: external_exports.string().datetime()
+  }),
+  external_exports.strictObject({
+    type: external_exports.literal("userMessage"),
+    message: external_exports.string(),
+    timestamp: external_exports.string().datetime(),
+    // cwd join field for sessions whose prompt arrives before any tool
+    // call (the stub — which normally carries it — is capture-created).
+    cwd: external_exports.string().optional()
+  })
+]);
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
@@ -13876,7 +13893,14 @@ var SessionModelSchema = external_exports.strictObject({
   // When the session's evidence applies (copied mechanically from the Tier 1
   // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
   // Optional for session models written before rebuilds existed.
-  endedAt: external_exports.string().datetime().optional()
+  endedAt: external_exports.string().datetime().optional(),
+  // Watermark: how many redacted userMessages the Tier 1 log carried when
+  // this model was extracted (stamped mechanically, never LLM-produced).
+  // Re-analysis is gated on growth past this count — user messages are the
+  // analyzer's primary evidence, so an unchanged count means nothing new to
+  // learn. Advances only on successful extraction, so a failed analysis
+  // stays retryable. Optional for models written before the watermark.
+  analyzedUserMessageCount: external_exports.number().int().min(0).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13895,7 +13919,14 @@ var PreferenceClusterSchema = external_exports.strictObject({
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional()
+  correctedFrom: external_exports.string().optional(),
+  // Persisted derivability-gate rejection: the exact value the gate judged
+  // statically derivable, and when. While the value is unchanged and the
+  // verdict fresh, the candidate skips re-judgment (each judgment is an
+  // agentic LLM spawn; one candidate was re-judged 64 times before this).
+  // Carried across rebuilds like `promoted`. Optional for older models.
+  gateRejectedValue: external_exports.string().optional(),
+  gateRejectedAt: external_exports.string().datetime().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13938,10 +13969,25 @@ var UsageLogEntrySchema = external_exports.looseObject({
   reason: external_exports.string().optional(),
   detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
 });
+var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
 
 // tom/promotion.ts
 var PROMOTION_BEGIN_MARKER = "<!-- tom-swe:begin (managed by tom-swe; edits inside will be overwritten) -->";
 var PROMOTION_END_MARKER = "<!-- tom-swe:end -->";
+var MS_PER_DAY = 24 * 60 * 60 * 1e3;
+function atomicWriteMemoryFile(filePath, data) {
+  let mode = 420;
+  try {
+    mode = fs4.statSync(filePath).mode & 511;
+  } catch {
+  }
+  const tempPath = path4.join(
+    path4.dirname(filePath),
+    `.tom-swe.${path4.basename(filePath)}.tmp`
+  );
+  fs4.writeFileSync(tempPath, data, { encoding: "utf-8", mode });
+  fs4.renameSync(tempPath, filePath);
+}
 function removePromotionBlock(filePath) {
   let content;
   try {
@@ -13962,7 +14008,7 @@ function removePromotionBlock(filePath) {
   if (content.slice(Math.max(0, beforeBegin - 2), beforeBegin) === "\n\n") {
     beforeBegin -= 1;
   }
-  fs4.writeFileSync(filePath, content.slice(0, beforeBegin) + content.slice(afterEnd), "utf-8");
+  atomicWriteMemoryFile(filePath, content.slice(0, beforeBegin) + content.slice(afterEnd));
   return true;
 }
 function globalMemoryFilePath() {

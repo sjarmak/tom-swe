@@ -107,7 +107,11 @@ export function decayPreferences(
     .map((p) => {
       const lastUpdatedMs = new Date(p.lastUpdated).getTime()
       const daysSinceUpdate = (nowMs - lastUpdatedMs) / (1000 * 60 * 60 * 24)
-      const decayFactor = Math.pow(2, -daysSinceUpdate / halfLifeDays)
+      // Clamp at 1: decay must never amplify. A lastUpdated later than `now`
+      // (e.g. an undated legacy Tier 2 model folded ahead of dated ones)
+      // yields a negative gap; without the clamp that compounds confidence
+      // past the cap and fails write validation downstream.
+      const decayFactor = Math.min(1, Math.pow(2, -daysSinceUpdate / halfLifeDays))
       const decayedConfidence = p.confidence * decayFactor
 
       return {
@@ -120,9 +124,12 @@ export function decayPreferences(
 
 /**
  * Applies post-action corrections (PAHF-style negative feedback) to
- * preferences. Corrections must cut confidence faster than repetition
- * builds it: one 0.5-penalty correction removes more confidence than five
- * +0.1 reinforcements can add.
+ * preferences. The multiplicative penalty removes confidence/2 at the
+ * default 0.5 factor — only at the 1.0 cap does that equal the 0.5 five
+ * +0.1 reinforcements add; at the low confidences typical in practice the
+ * absolute cut is one reinforcement's worth. What actually silences a
+ * corrected-away value is the combination of the penalty, the corrected-to
+ * entry seeded below, and resolveConflicts' recency-weighted collapse.
  *
  * For each correction:
  * - Every preference matching category+key has its confidence multiplied by

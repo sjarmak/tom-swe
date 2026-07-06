@@ -35,8 +35,8 @@ __export(tom_inspect_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(tom_inspect_exports);
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 
 // tom/memory-io.ts
 var fs2 = __toESM(require("node:fs"));
@@ -815,10 +815,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path5) {
-  if (!path5)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path5.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1201,11 +1201,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path5, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path5);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1388,7 +1388,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path5 = []) => {
+  const processError = (error49, path6 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1398,7 +1398,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1430,8 +1430,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path5) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13408,13 +13408,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path5 = ref.slice(1).split("/").filter(Boolean);
-  if (path5.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path5[0] === defsKey) {
-    const key = path5[1];
+  if (path6[0] === defsKey) {
+    const key = path6[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13837,6 +13837,23 @@ var SessionLogSchema = external_exports.strictObject({
   cwd: external_exports.string().optional(),
   gitBranch: external_exports.string().optional()
 });
+var SidecarLineSchema = external_exports.discriminatedUnion("type", [
+  external_exports.strictObject({
+    type: external_exports.literal("interaction"),
+    toolName: external_exports.string(),
+    parameterShape: external_exports.record(external_exports.string(), external_exports.string()),
+    outcomeSummary: external_exports.string(),
+    timestamp: external_exports.string().datetime()
+  }),
+  external_exports.strictObject({
+    type: external_exports.literal("userMessage"),
+    message: external_exports.string(),
+    timestamp: external_exports.string().datetime(),
+    // cwd join field for sessions whose prompt arrives before any tool
+    // call (the stub — which normally carries it — is capture-created).
+    cwd: external_exports.string().optional()
+  })
+]);
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
@@ -13874,7 +13891,14 @@ var SessionModelSchema = external_exports.strictObject({
   // When the session's evidence applies (copied mechanically from the Tier 1
   // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
   // Optional for session models written before rebuilds existed.
-  endedAt: external_exports.string().datetime().optional()
+  endedAt: external_exports.string().datetime().optional(),
+  // Watermark: how many redacted userMessages the Tier 1 log carried when
+  // this model was extracted (stamped mechanically, never LLM-produced).
+  // Re-analysis is gated on growth past this count — user messages are the
+  // analyzer's primary evidence, so an unchanged count means nothing new to
+  // learn. Advances only on successful extraction, so a failed analysis
+  // stays retryable. Optional for models written before the watermark.
+  analyzedUserMessageCount: external_exports.number().int().min(0).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13893,7 +13917,14 @@ var PreferenceClusterSchema = external_exports.strictObject({
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional()
+  correctedFrom: external_exports.string().optional(),
+  // Persisted derivability-gate rejection: the exact value the gate judged
+  // statically derivable, and when. While the value is unchanged and the
+  // verdict fresh, the candidate skips re-judgment (each judgment is an
+  // agentic LLM spawn; one candidate was re-judged 64 times before this).
+  // Carried across rebuilds like `promoted`. Optional for older models.
+  gateRejectedValue: external_exports.string().optional(),
+  gateRejectedAt: external_exports.string().datetime().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13997,9 +14028,41 @@ function readUserModel(scope = "merged") {
 }
 
 // tom/config.ts
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
+
+// tom/routing.ts
 var fs3 = __toESM(require("node:fs"));
 var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
+var TELEMETRY_SCHEMA_VERSION = 1;
+var UsageLogEntrySchema = external_exports.looseObject({
+  v: external_exports.number().optional(),
+  timestamp: external_exports.string(),
+  operation: external_exports.string(),
+  model: external_exports.string(),
+  tokenCount: external_exports.number(),
+  sessionId: external_exports.string().optional(),
+  durationMs: external_exports.number().optional(),
+  reason: external_exports.string().optional(),
+  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+var LOG_DIR_MODE = 448;
+var LOG_FILE_MODE = 384;
+function logUsage(entry) {
+  const logPath = path3.join(globalTomDir(), "usage.log");
+  const dir = path3.dirname(logPath);
+  if (!fs3.existsSync(dir)) {
+    fs3.mkdirSync(dir, { recursive: true, mode: LOG_DIR_MODE });
+  }
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
+  fs3.appendFileSync(logPath, line, { encoding: "utf-8", mode: LOG_FILE_MODE });
+}
+var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
+
+// tom/config.ts
 var TomConfigSchema = external_exports.strictObject({
   enabled: external_exports.boolean().default(false),
   consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
@@ -14019,20 +14082,45 @@ var TomConfigSchema = external_exports.strictObject({
   promotion: external_exports.strictObject({
     enabled: external_exports.boolean().default(true),
     threshold: external_exports.number().min(0).max(1).default(0.8),
-    minSessions: external_exports.number().int().min(1).default(5)
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
+    minSessions: external_exports.number().int().min(1).default(5),
+    // Hysteresis: an already-promoted preference retires only when its
+    // confidence falls below this floor (a correction halves confidence,
+    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
+    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
+    // promotions in and out of CLAUDE.md within hours.
+    retireThreshold: external_exports.number().min(0).max(1).default(0.45)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 })
 });
-function readTomConfig() {
+function logInvalidConfig(reason) {
   try {
-    const configPath = path3.join(os2.homedir(), ".claude", "tom", "config.json");
-    const content = fs3.readFileSync(configPath, "utf-8");
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "config-invalid",
+      model: "none",
+      tokenCount: 0,
+      reason: reason.slice(0, 500)
+    });
+  } catch {
+  }
+}
+function readTomConfig() {
+  const configPath = path4.join(os3.homedir(), ".claude", "tom", "config.json");
+  let content;
+  try {
+    content = fs4.readFileSync(configPath, "utf-8");
+  } catch {
+    return TomConfigSchema.parse({});
+  }
+  try {
     const raw = JSON.parse(content);
     const result = TomConfigSchema.safeParse(raw);
     if (result.success) {
       return result.data;
     }
+    logInvalidConfig(result.error.message);
     return TomConfigSchema.parse({});
-  } catch {
+  } catch (error48) {
+    logInvalidConfig(error48 instanceof Error ? error48.message : String(error48));
     return TomConfigSchema.parse({});
   }
 }
@@ -14041,12 +14129,12 @@ function readTomConfig() {
 function listSessionFiles(dirPath, scope) {
   const results = [];
   try {
-    const entries = fs4.readdirSync(dirPath);
+    const entries = fs5.readdirSync(dirPath);
     for (const entry of entries) {
       if (!entry.endsWith(".json")) continue;
-      const filePath = path4.join(dirPath, entry);
+      const filePath = path5.join(dirPath, entry);
       try {
-        const content = fs4.readFileSync(filePath, "utf-8");
+        const content = fs5.readFileSync(filePath, "utf-8");
         const parsed = JSON.parse(content);
         const sessionId = typeof parsed["sessionId"] === "string" ? parsed["sessionId"] : "";
         const startedAt = typeof parsed["startedAt"] === "string" ? parsed["startedAt"] : "";
@@ -14076,11 +14164,11 @@ function getInspectData() {
   const config2 = readTomConfig();
   const maxRetained = config2.maxSessionsRetained;
   const globalSessions = listSessionFiles(
-    path4.join(globalTomDir(), "sessions"),
+    path5.join(globalTomDir(), "sessions"),
     "global"
   );
   const projectSessions = listSessionFiles(
-    path4.join(projectTomDir(), "sessions"),
+    path5.join(projectTomDir(), "sessions"),
     "project"
   );
   const seenIds = /* @__PURE__ */ new Set();

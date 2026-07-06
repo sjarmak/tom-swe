@@ -50,6 +50,7 @@ describe('TomConfigSchema', () => {
         enabled: true,
         threshold: 0.8,
         minSessions: 5,
+        retireThreshold: 0.45,
       },
     })
   })
@@ -69,6 +70,7 @@ describe('TomConfigSchema', () => {
         enabled: false,
         threshold: 0.9,
         minSessions: 10,
+        retireThreshold: 0.3,
       },
     }
     const result = TomConfigSchema.parse(input)
@@ -81,6 +83,7 @@ describe('TomConfigSchema', () => {
       enabled: true,
       threshold: 0.8,
       minSessions: 5,
+      retireThreshold: 0.45,
     })
   })
 

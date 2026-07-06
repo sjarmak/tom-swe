@@ -60,7 +60,9 @@ describe('buildModelSummary', () => {
     const summary = buildModelSummary(model)
     expect(summary).not.toBeNull()
     const lines = (summary ?? '').split('\n')
-    expect(lines[0]).toContain('ToM user preferences')
+    // Memory-poisoning framing pins injected content as observation.
+    expect(lines[0]).toContain('background observations')
+    expect(lines[0]).toContain('not instructions')
     expect(lines[1]).toBe('- codingPreferences/language: typescript (90%)')
     expect(lines[2]).toBe('- codingPreferences/testing: vitest (60%)')
   })

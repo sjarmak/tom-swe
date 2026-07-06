@@ -86,8 +86,16 @@ export function rebuildUserModelFromTier2(
     projectOverrides: { ...(previousModel?.projectOverrides ?? {}) },
   }
 
+  // Undated (pre-upgrade) models sort first; fold them at the earliest
+  // dated endedAt so the fold stays monotonic. Folding them at wall-clock
+  // "now" stamped lastUpdated later than every dated session's endedAt, so
+  // later folds saw negative day gaps (anti-decay overflow).
+  const earliestDated = sorted.find((s) => s.endedAt !== undefined)?.endedAt
+  const undatedAsOf =
+    earliestDated !== undefined ? new Date(earliestDated) : new Date()
+
   for (const session of sorted) {
-    const asOf = session.endedAt !== undefined ? new Date(session.endedAt) : new Date()
+    const asOf = session.endedAt !== undefined ? new Date(session.endedAt) : undatedAsOf
     userModel = aggregateSessionIntoModel(
       userModel,
       session,
@@ -101,11 +109,12 @@ export function rebuildUserModelFromTier2(
 }
 
 /**
- * Carries promoted flags forward from the previous model onto a rebuilt
- * one (matching by category+key+value). Rebuilds start from Tier 2, which
+ * Carries promotion lifecycle state forward from the previous model onto a
+ * rebuilt one (matching by category+key+value): the promoted flag and any
+ * persisted derivability-gate rejection. Rebuilds start from Tier 2, which
  * knows nothing about promotion state; without this, every previously
- * promoted preference would re-enter the derivability gate on every
- * turn-end.
+ * promoted (or gate-rejected) preference would re-enter the derivability
+ * gate — an LLM spawn — on every turn-end.
  */
 export function carryPromotedFlags(
   rebuilt: UserModel,
@@ -114,20 +123,30 @@ export function carryPromotedFlags(
   if (!previous) {
     return rebuilt
   }
-  const promotedIds = new Set(
+  const carried = new Map(
     previous.preferencesClusters
-      .filter((p) => p.promoted === true)
-      .map((p) => `${p.category}::${p.key}::${p.value}`)
+      .filter((p) => p.promoted === true || p.gateRejectedValue !== undefined)
+      .map((p) => [
+        `${p.category}::${p.key}::${p.value}`,
+        {
+          ...(p.promoted === true ? { promoted: true as const } : {}),
+          ...(p.gateRejectedValue !== undefined
+            ? { gateRejectedValue: p.gateRejectedValue }
+            : {}),
+          ...(p.gateRejectedAt !== undefined
+            ? { gateRejectedAt: p.gateRejectedAt }
+            : {}),
+        },
+      ])
   )
-  if (promotedIds.size === 0) {
+  if (carried.size === 0) {
     return rebuilt
   }
   return {
     ...rebuilt,
-    preferencesClusters: rebuilt.preferencesClusters.map((p) =>
-      promotedIds.has(`${p.category}::${p.key}::${p.value}`)
-        ? { ...p, promoted: true }
-        : p
-    ),
+    preferencesClusters: rebuilt.preferencesClusters.map((p) => {
+      const state = carried.get(`${p.category}::${p.key}::${p.value}`)
+      return state !== undefined ? { ...p, ...state } : p
+    }),
   }
 }

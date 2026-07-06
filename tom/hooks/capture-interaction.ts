@@ -3,7 +3,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { execFileSync } from 'node:child_process'
 
-import { atomicWriteFile } from '../fs-atomic.js'
+import { TOM_DIR_MODE, TOM_FILE_MODE } from '../fs-atomic.js'
 import { readHookInput, getSessionId, isExcludedSession, toRecord } from './hook-input.js'
 import { sanitizeValue, MAX_VALUE_LENGTH } from '../secrets.js'
 import { isTomEnabled } from '../config.js'
@@ -72,9 +72,16 @@ export function summarizeToolResponse(toolResponse: unknown): string {
 
 // --- Session File Management ---
 
+function getSessionsDir(): string {
+  return path.join(os.homedir(), '.claude', 'tom', 'sessions')
+}
+
 function getSessionFilePath(sessionId: string): string {
-  const tomDir = path.join(os.homedir(), '.claude', 'tom', 'sessions')
-  return path.join(tomDir, `${sessionId}.json`)
+  return path.join(getSessionsDir(), `${sessionId}.json`)
+}
+
+function getSidecarPath(sessionId: string): string {
+  return path.join(getSessionsDir(), `${sessionId}.jsonl`)
 }
 
 // --- Main Capture Function ---
@@ -98,6 +105,43 @@ function resolveGitBranch(cwd: string): string | undefined {
   }
 }
 
+/**
+ * Creates the session's create-once stub (identity + join fields) if it
+ * does not exist yet. O_EXCL arbitrates concurrent first-captures — the
+ * loser's stub is equivalent, so EEXIST is silently accepted. The one
+ * git subprocess per session runs only on the creation path.
+ *
+ * Read-modify-write is deliberately absent from this hook: PostToolUse
+ * fires concurrently, and RMW on the shared JSON lost appends (10
+ * simultaneous captures kept 4-5). All per-event data goes to the
+ * append-only sidecar; readSessionLog folds the two at read time.
+ */
+function ensureSessionStub(sessionId: string, cwd?: string): void {
+  const stubPath = getSessionFilePath(sessionId)
+  if (fs.existsSync(stubPath)) {
+    return
+  }
+  const gitBranch = cwd !== undefined ? resolveGitBranch(cwd) : undefined
+  const now = new Date().toISOString()
+  const stub = {
+    sessionId,
+    startedAt: now,
+    endedAt: now,
+    interactions: [],
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(gitBranch !== undefined ? { gitBranch } : {}),
+  }
+  try {
+    fs.writeFileSync(stubPath, JSON.stringify(stub, null, 2), {
+      encoding: 'utf-8',
+      flag: 'wx',
+      mode: TOM_FILE_MODE,
+    })
+  } catch {
+    // EEXIST: a concurrent first-capture won the race — theirs is equivalent.
+  }
+}
+
 export function captureInteraction(
   sessionId: string,
   toolName: string,
@@ -105,53 +149,22 @@ export function captureInteraction(
   toolOutput: string,
   cwd?: string
 ): void {
-  const filePath = getSessionFilePath(sessionId)
   const entry = buildInteractionEntry(toolName, toolInput, toolOutput)
 
-  // Read existing session log or create new one
-  let sessionData: {
-    sessionId: string
-    startedAt: string
-    endedAt: string
-    interactions: InteractionEntry[]
-    cwd?: string
-    gitBranch?: string
-  }
-
   try {
-    const existing = fs.readFileSync(filePath, 'utf-8')
-    sessionData = JSON.parse(existing) as typeof sessionData
-  } catch {
-    sessionData = {
-      sessionId,
-      startedAt: new Date().toISOString(),
-      endedAt: new Date().toISOString(),
-      interactions: [],
-    }
+    fs.mkdirSync(getSessionsDir(), { recursive: true, mode: TOM_DIR_MODE })
+    ensureSessionStub(sessionId, cwd)
+    // O_APPEND: concurrent captures interleave whole lines instead of
+    // losing each other's writes.
+    fs.appendFileSync(
+      getSidecarPath(sessionId),
+      JSON.stringify({ type: 'interaction', ...entry }) + '\n',
+      { encoding: 'utf-8', mode: TOM_FILE_MODE }
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`ToM capture-interaction write error: ${message}\n`)
   }
-
-  // Join fields, set once per session: cwd from the payload, branch from
-  // one lazy git call (skipped on every subsequent capture).
-  const joinCwd = sessionData.cwd ?? cwd
-  const joinBranch =
-    sessionData.gitBranch ?? (joinCwd ? resolveGitBranch(joinCwd) : undefined)
-
-  // Append interaction (async-safe: write full file with new entry)
-  const updated = {
-    ...sessionData,
-    endedAt: new Date().toISOString(),
-    interactions: [...sessionData.interactions, entry],
-    ...(joinCwd !== undefined ? { cwd: joinCwd } : {}),
-    ...(joinBranch !== undefined ? { gitBranch: joinBranch } : {}),
-  }
-
-  // Async atomic write for speed — not awaited, but failures must surface
-  // (stderr, matching the other hooks' error pattern), never be silently
-  // discarded. Atomic temp+rename prevents a concurrent reader (or another
-  // capture/Stop fire) from seeing a torn session log.
-  atomicWriteFile(filePath, JSON.stringify(updated, null, 2), (err) => {
-    process.stderr.write(`ToM capture-interaction write error: ${err.message}\n`)
-  })
 }
 
 // --- CLI Entry Point ---

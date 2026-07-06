@@ -38,8 +38,8 @@ __export(tom_forget_export_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(tom_forget_export_exports);
-var fs5 = __toESM(require("node:fs"));
-var path5 = __toESM(require("node:path"));
+var fs7 = __toESM(require("node:fs"));
+var path7 = __toESM(require("node:path"));
 
 // tom/memory-io.ts
 var fs2 = __toESM(require("node:fs"));
@@ -50,6 +50,8 @@ var os = __toESM(require("node:os"));
 var fs = __toESM(require("node:fs"));
 var path = __toESM(require("node:path"));
 var crypto = __toESM(require("node:crypto"));
+var TOM_DIR_MODE = 448;
+var TOM_FILE_MODE = 384;
 var tempCounter = 0;
 function tempPathFor(filePath) {
   const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
@@ -58,14 +60,14 @@ function tempPathFor(filePath) {
 function ensureDirectoryExists(filePath) {
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: TOM_DIR_MODE });
   }
 }
 function atomicWriteFileSync(filePath, data) {
   ensureDirectoryExists(filePath);
   const tempPath = tempPathFor(filePath);
   try {
-    fs.writeFileSync(tempPath, data, "utf-8");
+    fs.writeFileSync(tempPath, data, { encoding: "utf-8", mode: TOM_FILE_MODE });
     fs.renameSync(tempPath, filePath);
   } catch (error48) {
     try {
@@ -843,10 +845,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path6) {
-  if (!path6)
+function getElementAtPath(obj, path8) {
+  if (!path8)
     return obj;
-  return path6.reduce((acc, key) => acc?.[key], obj);
+  return path8.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1229,11 +1231,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path8, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path8);
     return iss;
   });
 }
@@ -1416,7 +1418,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path6 = []) => {
+  const processError = (error49, path8 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1426,7 +1428,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path8, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1458,8 +1460,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path6) {
+  const path8 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path8) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13436,13 +13438,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path6 = ref.slice(1).split("/").filter(Boolean);
-  if (path6.length === 0) {
+  const path8 = ref.slice(1).split("/").filter(Boolean);
+  if (path8.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path6[0] === defsKey) {
-    const key = path6[1];
+  if (path8[0] === defsKey) {
+    const key = path8[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13865,6 +13867,23 @@ var SessionLogSchema = external_exports.strictObject({
   cwd: external_exports.string().optional(),
   gitBranch: external_exports.string().optional()
 });
+var SidecarLineSchema = external_exports.discriminatedUnion("type", [
+  external_exports.strictObject({
+    type: external_exports.literal("interaction"),
+    toolName: external_exports.string(),
+    parameterShape: external_exports.record(external_exports.string(), external_exports.string()),
+    outcomeSummary: external_exports.string(),
+    timestamp: external_exports.string().datetime()
+  }),
+  external_exports.strictObject({
+    type: external_exports.literal("userMessage"),
+    message: external_exports.string(),
+    timestamp: external_exports.string().datetime(),
+    // cwd join field for sessions whose prompt arrives before any tool
+    // call (the stub — which normally carries it — is capture-created).
+    cwd: external_exports.string().optional()
+  })
+]);
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
@@ -13902,7 +13921,14 @@ var SessionModelSchema = external_exports.strictObject({
   // When the session's evidence applies (copied mechanically from the Tier 1
   // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
   // Optional for session models written before rebuilds existed.
-  endedAt: external_exports.string().datetime().optional()
+  endedAt: external_exports.string().datetime().optional(),
+  // Watermark: how many redacted userMessages the Tier 1 log carried when
+  // this model was extracted (stamped mechanically, never LLM-produced).
+  // Re-analysis is gated on growth past this count — user messages are the
+  // analyzer's primary evidence, so an unchanged count means nothing new to
+  // learn. Advances only on successful extraction, so a failed analysis
+  // stays retryable. Optional for models written before the watermark.
+  analyzedUserMessageCount: external_exports.number().int().min(0).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13921,7 +13947,14 @@ var PreferenceClusterSchema = external_exports.strictObject({
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional()
+  correctedFrom: external_exports.string().optional(),
+  // Persisted derivability-gate rejection: the exact value the gate judged
+  // statically derivable, and when. While the value is unchanged and the
+  // verdict fresh, the candidate skips re-judgment (each judgment is an
+  // agentic LLM spawn; one candidate was re-judged 64 times before this).
+  // Carried across rebuilds like `promoted`. Optional for older models.
+  gateRejectedValue: external_exports.string().optional(),
+  gateRejectedAt: external_exports.string().datetime().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13972,12 +14005,80 @@ function readJsonFile(filePath) {
 function writeJsonFile(filePath, data) {
   atomicWriteFileSync(filePath, JSON.stringify(data, null, 2));
 }
+function sessionSidecarPath(sessionId, scope) {
+  const dir = scope === "global" ? globalTomDir() : projectTomDir();
+  return path2.join(dir, "sessions", `${sessionId}.jsonl`);
+}
+function readSidecarLines(sessionId, scope) {
+  let text;
+  try {
+    text = fs2.readFileSync(sessionSidecarPath(sessionId, scope), "utf-8");
+  } catch {
+    return [];
+  }
+  const lines = [];
+  let corrupt = 0;
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      const parsed = SidecarLineSchema.safeParse(JSON.parse(line));
+      if (parsed.success) {
+        lines.push(parsed.data);
+      } else {
+        corrupt++;
+      }
+    } catch {
+      corrupt++;
+    }
+  }
+  if (corrupt > 0) {
+    process.stderr.write(
+      `ToM: skipped ${corrupt} corrupt sidecar line(s) for session ${sessionId}
+`
+    );
+  }
+  return lines;
+}
+function foldSessionLog(sessionId, base, lines) {
+  const interactions = [...base?.interactions ?? []];
+  const userMessages = [...base?.userMessages ?? []];
+  let cwd = base?.cwd;
+  let startedAt = base?.startedAt;
+  let endedAt = base?.endedAt;
+  for (const line of lines) {
+    if (line.type === "interaction") {
+      const { type: _type, ...interaction } = line;
+      interactions.push(interaction);
+    } else {
+      userMessages.push(line.message);
+      cwd = cwd ?? line.cwd;
+    }
+    if (startedAt === void 0 || line.timestamp < startedAt) {
+      startedAt = line.timestamp;
+    }
+    if (endedAt === void 0 || line.timestamp > endedAt) {
+      endedAt = line.timestamp;
+    }
+  }
+  return {
+    sessionId: base?.sessionId ?? sessionId,
+    // Non-null: callers guarantee base !== null or lines is non-empty.
+    startedAt: startedAt ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    endedAt: endedAt ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    interactions,
+    ...userMessages.length > 0 || base?.userMessages !== void 0 ? { userMessages } : {},
+    ...cwd !== void 0 ? { cwd } : {},
+    ...base?.gitBranch !== void 0 ? { gitBranch: base.gitBranch } : {}
+  };
+}
 function readSessionLog(sessionId, scope = "global") {
   const filePath = scope === "global" ? globalSessionPath(sessionId) : projectSessionPath(sessionId);
   const raw = readJsonFile(filePath);
-  if (raw === null) return null;
-  const result = SessionLogSchema.safeParse(raw);
-  return result.success ? result.data : null;
+  const result = raw !== null ? SessionLogSchema.safeParse(raw) : null;
+  const base = result?.success === true ? result.data : null;
+  const lines = readSidecarLines(sessionId, scope);
+  if (base === null && lines.length === 0) return null;
+  return foldSessionLog(sessionId, base, lines);
 }
 function readSessionModel(sessionId, scope = "global") {
   const filePath = scope === "global" ? globalSessionModelPath(sessionId) : projectSessionModelPath(sessionId);
@@ -14046,9 +14147,41 @@ function writeUserModel(userModel, scope = "global") {
 }
 
 // tom/config.ts
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
+
+// tom/routing.ts
 var fs3 = __toESM(require("node:fs"));
 var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
+var TELEMETRY_SCHEMA_VERSION = 1;
+var UsageLogEntrySchema = external_exports.looseObject({
+  v: external_exports.number().optional(),
+  timestamp: external_exports.string(),
+  operation: external_exports.string(),
+  model: external_exports.string(),
+  tokenCount: external_exports.number(),
+  sessionId: external_exports.string().optional(),
+  durationMs: external_exports.number().optional(),
+  reason: external_exports.string().optional(),
+  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+var LOG_DIR_MODE = 448;
+var LOG_FILE_MODE = 384;
+function logUsage(entry) {
+  const logPath = path3.join(globalTomDir(), "usage.log");
+  const dir = path3.dirname(logPath);
+  if (!fs3.existsSync(dir)) {
+    fs3.mkdirSync(dir, { recursive: true, mode: LOG_DIR_MODE });
+  }
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
+  fs3.appendFileSync(logPath, line, { encoding: "utf-8", mode: LOG_FILE_MODE });
+}
+var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
+
+// tom/config.ts
 var TomConfigSchema = external_exports.strictObject({
   enabled: external_exports.boolean().default(false),
   consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
@@ -14068,23 +14201,52 @@ var TomConfigSchema = external_exports.strictObject({
   promotion: external_exports.strictObject({
     enabled: external_exports.boolean().default(true),
     threshold: external_exports.number().min(0).max(1).default(0.8),
-    minSessions: external_exports.number().int().min(1).default(5)
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
+    minSessions: external_exports.number().int().min(1).default(5),
+    // Hysteresis: an already-promoted preference retires only when its
+    // confidence falls below this floor (a correction halves confidence,
+    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
+    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
+    // promotions in and out of CLAUDE.md within hours.
+    retireThreshold: external_exports.number().min(0).max(1).default(0.45)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 })
 });
-function readTomConfig() {
+function logInvalidConfig(reason) {
   try {
-    const configPath = path3.join(os2.homedir(), ".claude", "tom", "config.json");
-    const content = fs3.readFileSync(configPath, "utf-8");
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "config-invalid",
+      model: "none",
+      tokenCount: 0,
+      reason: reason.slice(0, 500)
+    });
+  } catch {
+  }
+}
+function readTomConfig() {
+  const configPath = path4.join(os3.homedir(), ".claude", "tom", "config.json");
+  let content;
+  try {
+    content = fs4.readFileSync(configPath, "utf-8");
+  } catch {
+    return TomConfigSchema.parse({});
+  }
+  try {
     const raw = JSON.parse(content);
     const result = TomConfigSchema.safeParse(raw);
     if (result.success) {
       return result.data;
     }
+    logInvalidConfig(result.error.message);
     return TomConfigSchema.parse({});
-  } catch {
+  } catch (error48) {
+    logInvalidConfig(error48 instanceof Error ? error48.message : String(error48));
     return TomConfigSchema.parse({});
   }
 }
+
+// tom/rebuild.ts
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 
 // tom/preferences.ts
 var CONFIDENCE_INCREMENT = 0.1;
@@ -14131,7 +14293,7 @@ function decayPreferences(preferences, halfLifeDays, now = /* @__PURE__ */ new D
   return preferences.map((p) => {
     const lastUpdatedMs = new Date(p.lastUpdated).getTime();
     const daysSinceUpdate = (nowMs - lastUpdatedMs) / (1e3 * 60 * 60 * 24);
-    const decayFactor = Math.pow(2, -daysSinceUpdate / halfLifeDays);
+    const decayFactor = Math.min(1, Math.pow(2, -daysSinceUpdate / halfLifeDays));
     const decayedConfidence = p.confidence * decayFactor;
     return {
       ...p,
@@ -14265,9 +14427,93 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
   };
 }
 
+// tom/rebuild.ts
+var EMPTY_MODEL = {
+  preferencesClusters: [],
+  interactionStyleSummary: "",
+  codingStyleSummary: "",
+  projectOverrides: {}
+};
+function readSessionModels(scope) {
+  const dir = path5.join(
+    scope === "global" ? globalTomDir() : projectTomDir(),
+    "session-models"
+  );
+  let files;
+  try {
+    files = fs5.readdirSync(dir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const models = [];
+  for (const file2 of files.sort()) {
+    try {
+      const raw = JSON.parse(fs5.readFileSync(path5.join(dir, file2), "utf-8"));
+      const parsed = SessionModelSchema.safeParse(raw);
+      if (parsed.success) {
+        models.push(parsed.data);
+      }
+    } catch {
+    }
+  }
+  return models;
+}
+function rebuildUserModelFromTier2(scope, decayDays, correctionPenalty, previousModel) {
+  const models = readSessionModels(scope);
+  const sorted = [...models].sort((a, b) => {
+    const aTime = a.endedAt ?? "";
+    const bTime = b.endedAt ?? "";
+    return aTime.localeCompare(bTime) || a.sessionId.localeCompare(b.sessionId);
+  });
+  let userModel = {
+    ...EMPTY_MODEL,
+    interactionStyleSummary: previousModel?.interactionStyleSummary ?? "",
+    codingStyleSummary: previousModel?.codingStyleSummary ?? "",
+    projectOverrides: { ...previousModel?.projectOverrides ?? {} }
+  };
+  const earliestDated = sorted.find((s) => s.endedAt !== void 0)?.endedAt;
+  const undatedAsOf = earliestDated !== void 0 ? new Date(earliestDated) : /* @__PURE__ */ new Date();
+  for (const session of sorted) {
+    const asOf = session.endedAt !== void 0 ? new Date(session.endedAt) : undatedAsOf;
+    userModel = aggregateSessionIntoModel(
+      userModel,
+      session,
+      decayDays,
+      correctionPenalty,
+      asOf
+    );
+  }
+  return userModel;
+}
+function carryPromotedFlags(rebuilt, previous) {
+  if (!previous) {
+    return rebuilt;
+  }
+  const carried = new Map(
+    previous.preferencesClusters.filter((p) => p.promoted === true || p.gateRejectedValue !== void 0).map((p) => [
+      `${p.category}::${p.key}::${p.value}`,
+      {
+        ...p.promoted === true ? { promoted: true } : {},
+        ...p.gateRejectedValue !== void 0 ? { gateRejectedValue: p.gateRejectedValue } : {},
+        ...p.gateRejectedAt !== void 0 ? { gateRejectedAt: p.gateRejectedAt } : {}
+      }
+    ])
+  );
+  if (carried.size === 0) {
+    return rebuilt;
+  }
+  return {
+    ...rebuilt,
+    preferencesClusters: rebuilt.preferencesClusters.map((p) => {
+      const state = carried.get(`${p.category}::${p.key}::${p.value}`);
+      return state !== void 0 ? { ...p, ...state } : p;
+    })
+  };
+}
+
 // tom/agent/tools.ts
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
+var fs6 = __toESM(require("node:fs"));
+var path6 = __toESM(require("node:path"));
 
 // tom/bm25.ts
 function tokenize(text) {
@@ -14318,16 +14564,19 @@ function buildIndex(documents) {
 // tom/agent/tools.ts
 function listJsonFiles(dirPath) {
   try {
-    const files = fs4.readdirSync(dirPath);
+    const files = fs6.readdirSync(dirPath);
     return files.filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
 }
+function preferenceEntryText(entry) {
+  return typeof entry === "string" ? entry : `${entry.key} ${entry.value}`;
+}
 function buildMemoryIndex(scope = "global") {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
   const documents = [];
-  const sessionsDir = path4.join(tomDir, "sessions");
+  const sessionsDir = path6.join(tomDir, "sessions");
   const sessionFiles = listJsonFiles(sessionsDir);
   for (const file2 of sessionFiles) {
     const sessionId = file2.replace(".json", "");
@@ -14337,7 +14586,7 @@ function buildMemoryIndex(scope = "global") {
       documents.push({ id: `session:${sessionId}`, content, tier: 1 });
     }
   }
-  const modelsDir = path4.join(tomDir, "session-models");
+  const modelsDir = path6.join(tomDir, "session-models");
   const modelFiles = listJsonFiles(modelsDir);
   for (const file2 of modelFiles) {
     const sessionId = file2.replace(".json", "");
@@ -14345,8 +14594,8 @@ function buildMemoryIndex(scope = "global") {
     if (model) {
       const content = [
         model.intent,
-        ...model.interactionPatterns,
-        ...model.codingPreferences
+        ...model.interactionPatterns.map(preferenceEntryText),
+        ...model.codingPreferences.map(preferenceEntryText)
       ].join(" ");
       documents.push({ id: `model:${sessionId}`, content, tier: 2 });
     }
@@ -14366,7 +14615,7 @@ function buildMemoryIndex(scope = "global") {
 // tom/skills/tom-forget-export.ts
 function deleteFile(filePath) {
   try {
-    fs5.unlinkSync(filePath);
+    fs7.unlinkSync(filePath);
     return true;
   } catch {
     return false;
@@ -14374,48 +14623,27 @@ function deleteFile(filePath) {
 }
 function listJsonFiles2(dirPath) {
   try {
-    return fs5.readdirSync(dirPath).filter((f) => f.endsWith(".json"));
+    return fs7.readdirSync(dirPath).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
 }
 function sessionFileExists(sessionId, scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const filePath = path5.join(tomDir, "sessions", `${sessionId}.json`);
-  return fs5.existsSync(filePath) ? filePath : null;
+  const filePath = path7.join(tomDir, "sessions", `${sessionId}.json`);
+  return fs7.existsSync(filePath) ? filePath : null;
 }
 function sessionModelFileExists(sessionId, scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const filePath = path5.join(tomDir, "session-models", `${sessionId}.json`);
-  return fs5.existsSync(filePath) ? filePath : null;
-}
-function rebuildUserModel(scope) {
-  const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const modelsDir = path5.join(tomDir, "session-models");
-  const files = listJsonFiles2(modelsDir);
-  const config2 = readTomConfig();
-  const emptyModel = {
-    preferencesClusters: [],
-    interactionStyleSummary: "",
-    codingStyleSummary: "",
-    projectOverrides: {}
-  };
-  let model = emptyModel;
-  const sortedFiles = [...files].sort();
-  for (const file2 of sortedFiles) {
-    const sessionId = file2.replace(".json", "");
-    const sessionModel = readSessionModel(sessionId, scope);
-    if (sessionModel) {
-      model = aggregateSessionIntoModel(model, sessionModel, config2.preferenceDecayDays);
-    }
-  }
-  writeUserModel(model, scope);
+  const filePath = path7.join(tomDir, "session-models", `${sessionId}.json`);
+  return fs7.existsSync(filePath) ? filePath : null;
 }
 function forgetSession(sessionId) {
   let tier1Deleted = false;
   let tier2Deleted = false;
   let tier3Rebuilt = false;
   for (const scope of ["global", "project"]) {
+    const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
     const sessionPath = sessionFileExists(sessionId, scope);
     if (sessionPath) {
       tier1Deleted = deleteFile(sessionPath) || tier1Deleted;
@@ -14424,12 +14652,25 @@ function forgetSession(sessionId) {
     if (modelPath) {
       tier2Deleted = deleteFile(modelPath) || tier2Deleted;
     }
+    fs7.rmSync(path7.join(tomDir, "user-model-history", `${sessionId}.json`), {
+      force: true
+    });
+    fs7.rmSync(path7.join(tomDir, "sessions", `${sessionId}.jsonl`), {
+      force: true
+    });
     if (tier1Deleted || tier2Deleted) {
-      rebuildUserModel(scope);
+      const config2 = readTomConfig();
+      const previous = readUserModel(scope);
+      const rebuilt = rebuildUserModelFromTier2(
+        scope,
+        config2.preferenceDecayDays,
+        config2.correctionPenalty,
+        previous
+      );
+      writeUserModel(carryPromotedFlags(rebuilt, previous), scope);
       tier3Rebuilt = true;
       const index = buildMemoryIndex(scope);
-      const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-      const indexPath = path5.join(tomDir, "bm25-index.json");
+      const indexPath = path7.join(tomDir, "bm25-index.json");
       atomicWriteFileSync(indexPath, JSON.stringify(index));
     }
   }
@@ -14450,9 +14691,9 @@ function formatForgetResult(result) {
   return lines.join("\n");
 }
 function readUsageLog() {
-  const logPath = path5.join(globalTomDir(), "usage.log");
+  const logPath = path7.join(globalTomDir(), "usage.log");
   try {
-    const content = fs5.readFileSync(logPath, "utf-8");
+    const content = fs7.readFileSync(logPath, "utf-8");
     return content.split("\n").filter((line) => line.trim().length > 0);
   } catch {
     return [];
@@ -14460,7 +14701,7 @@ function readUsageLog() {
 }
 function readAllSessions(scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const sessionsDir = path5.join(tomDir, "sessions");
+  const sessionsDir = path7.join(tomDir, "sessions");
   const files = listJsonFiles2(sessionsDir);
   const sessions = [];
   for (const file2 of files) {
@@ -14474,7 +14715,7 @@ function readAllSessions(scope) {
 }
 function readAllSessionModels(scope) {
   const tomDir = scope === "global" ? globalTomDir() : projectTomDir();
-  const modelsDir = path5.join(tomDir, "session-models");
+  const modelsDir = path7.join(tomDir, "session-models");
   const files = listJsonFiles2(modelsDir);
   const models = [];
   for (const file2 of files) {
@@ -14527,7 +14768,7 @@ function exportToFile() {
   const data = collectExportData();
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
   const filename = `tom-export-${timestamp}.json`;
-  const filePath = path5.join(process.cwd(), filename);
+  const filePath = path7.join(process.cwd(), filename);
   atomicWriteFileSync(filePath, JSON.stringify(data, null, 2));
   return filePath;
 }

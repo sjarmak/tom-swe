@@ -24,6 +24,36 @@ export const SessionLogSchema = z.strictObject({
   gitBranch: z.string().optional(),
 })
 
+/**
+ * One line of the append-only capture sidecar (sessions/<id>.jsonl).
+ *
+ * Capture hooks run as concurrent processes; read-modify-write on the JSON
+ * log lost appends (10 simultaneous captures kept 4-5). O_APPEND line
+ * appends interleave without loss, and readSessionLog folds the sidecar
+ * into the SessionLog shape at read time. The .json file remains as a
+ * create-once stub carrying identity and join fields (and as the complete
+ * log for sessions captured before the sidecar existed).
+ */
+export const SidecarLineSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('interaction'),
+    toolName: z.string(),
+    parameterShape: z.record(z.string(), z.string()),
+    outcomeSummary: z.string(),
+    timestamp: z.string().datetime(),
+  }),
+  z.strictObject({
+    type: z.literal('userMessage'),
+    message: z.string(),
+    timestamp: z.string().datetime(),
+    // cwd join field for sessions whose prompt arrives before any tool
+    // call (the stub — which normally carries it — is capture-created).
+    cwd: z.string().optional(),
+  }),
+])
+
+export type SidecarLine = z.infer<typeof SidecarLineSchema>
+
 // --- Tier 2: Session Model ---
 
 // Deprecated: emotional signals (frustration/satisfaction/urgency) were
@@ -53,8 +83,9 @@ export const PreferenceCategorySchema = z.enum([
 /**
  * A post-action correction (PAHF-style negative feedback): a moment where the
  * user contradicted, overrode, or re-edited away a previously suggested or
- * observed preference. Corrections cut confidence faster than repetition
- * builds it (see applyCorrections in preferences.ts).
+ * observed preference. Corrections halve the contradicted preference's
+ * confidence and seed the corrected-to value as fresh evidence (see
+ * applyCorrections in preferences.ts).
  */
 export const CorrectionSchema = z.strictObject({
   category: PreferenceCategorySchema,
@@ -93,6 +124,13 @@ export const SessionModelSchema = z.strictObject({
   // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
   // Optional for session models written before rebuilds existed.
   endedAt: z.string().datetime().optional(),
+  // Watermark: how many redacted userMessages the Tier 1 log carried when
+  // this model was extracted (stamped mechanically, never LLM-produced).
+  // Re-analysis is gated on growth past this count — user messages are the
+  // analyzer's primary evidence, so an unchanged count means nothing new to
+  // learn. Advances only on successful extraction, so a failed analysis
+  // stays retryable. Optional for models written before the watermark.
+  analyzedUserMessageCount: z.number().int().min(0).optional(),
 })
 
 // --- Tier 3: User Model ---
@@ -115,6 +153,13 @@ const PreferenceClusterSchema = z.strictObject({
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
   correctedFrom: z.string().optional(),
+  // Persisted derivability-gate rejection: the exact value the gate judged
+  // statically derivable, and when. While the value is unchanged and the
+  // verdict fresh, the candidate skips re-judgment (each judgment is an
+  // agentic LLM spawn; one candidate was re-judged 64 times before this).
+  // Carried across rebuilds like `promoted`. Optional for older models.
+  gateRejectedValue: z.string().optional(),
+  gateRejectedAt: z.string().datetime().optional(),
 })
 
 export const UserModelSchema = z.strictObject({

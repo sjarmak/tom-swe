@@ -42,9 +42,9 @@ var path6 = __toESM(require("node:path"));
 var os4 = __toESM(require("node:os"));
 
 // tom/config.ts
-var fs = __toESM(require("node:fs"));
-var path = __toESM(require("node:path"));
-var os = __toESM(require("node:os"));
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -13814,47 +13814,22 @@ function date4(params) {
 // node_modules/zod/v4/classic/external.js
 config(en_default());
 
-// tom/config.ts
-var TomConfigSchema = external_exports.strictObject({
-  enabled: external_exports.boolean().default(false),
-  consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
-  models: external_exports.strictObject({
-    memoryUpdate: external_exports.string().default("haiku"),
-    consultation: external_exports.string().default("sonnet")
-  }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
-  preferenceDecayDays: external_exports.number().default(30),
-  maxSessionsRetained: external_exports.number().default(100),
-  // Confidence multiplier applied to a stored preference when a session
-  // correction contradicts it (post-action feedback). Corrections cut
-  // confidence faster than repetition builds it.
-  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
-  // Promotion lifecycle: stable high-confidence preferences graduate from
-  // per-session injection into durable CLAUDE.md marker blocks and are
-  // retired from injection (candidate → promoted → retired, simplified).
-  promotion: external_exports.strictObject({
-    enabled: external_exports.boolean().default(true),
-    threshold: external_exports.number().min(0).max(1).default(0.8),
-    minSessions: external_exports.number().int().min(1).default(5)
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
-});
-function readTomConfig() {
-  try {
-    const configPath = path.join(os.homedir(), ".claude", "tom", "config.json");
-    const content = fs.readFileSync(configPath, "utf-8");
-    const raw = JSON.parse(content);
-    const result = TomConfigSchema.safeParse(raw);
-    if (result.success) {
-      return result.data;
-    }
-    return TomConfigSchema.parse({});
-  } catch {
-    return TomConfigSchema.parse({});
-  }
-}
+// tom/routing.ts
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os2 = __toESM(require("node:os"));
 
-// tom/consult.ts
-var fs5 = __toESM(require("node:fs"));
-var path5 = __toESM(require("node:path"));
+// tom/memory-io.ts
+var fs2 = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
+var os = __toESM(require("node:os"));
+
+// tom/fs-atomic.ts
+var fs = __toESM(require("node:fs"));
+var path = __toESM(require("node:path"));
+var crypto = __toESM(require("node:crypto"));
+var TOM_DIR_MODE = 448;
+var TOM_FILE_MODE = 384;
 
 // tom/schemas.ts
 var InteractionSchema = external_exports.strictObject({
@@ -13877,6 +13852,23 @@ var SessionLogSchema = external_exports.strictObject({
   cwd: external_exports.string().optional(),
   gitBranch: external_exports.string().optional()
 });
+var SidecarLineSchema = external_exports.discriminatedUnion("type", [
+  external_exports.strictObject({
+    type: external_exports.literal("interaction"),
+    toolName: external_exports.string(),
+    parameterShape: external_exports.record(external_exports.string(), external_exports.string()),
+    outcomeSummary: external_exports.string(),
+    timestamp: external_exports.string().datetime()
+  }),
+  external_exports.strictObject({
+    type: external_exports.literal("userMessage"),
+    message: external_exports.string(),
+    timestamp: external_exports.string().datetime(),
+    // cwd join field for sessions whose prompt arrives before any tool
+    // call (the stub — which normally carries it — is capture-created).
+    cwd: external_exports.string().optional()
+  })
+]);
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
@@ -13914,7 +13906,14 @@ var SessionModelSchema = external_exports.strictObject({
   // When the session's evidence applies (copied mechanically from the Tier 1
   // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
   // Optional for session models written before rebuilds existed.
-  endedAt: external_exports.string().datetime().optional()
+  endedAt: external_exports.string().datetime().optional(),
+  // Watermark: how many redacted userMessages the Tier 1 log carried when
+  // this model was extracted (stamped mechanically, never LLM-produced).
+  // Re-analysis is gated on growth past this count — user messages are the
+  // analyzer's primary evidence, so an unchanged count means nothing new to
+  // learn. Advances only on successful extraction, so a failed analysis
+  // stays retryable. Optional for models written before the watermark.
+  analyzedUserMessageCount: external_exports.number().int().min(0).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13933,7 +13932,14 @@ var PreferenceClusterSchema = external_exports.strictObject({
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional()
+  correctedFrom: external_exports.string().optional(),
+  // Persisted derivability-gate rejection: the exact value the gate judged
+  // statically derivable, and when. While the value is unchanged and the
+  // verdict fresh, the candidate skips re-judgment (each judgment is an
+  // agentic LLM spawn; one candidate was re-judged 64 times before this).
+  // Carried across rebuilds like `promoted`. Optional for older models.
+  gateRejectedValue: external_exports.string().optional(),
+  gateRejectedAt: external_exports.string().datetime().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13948,152 +13954,22 @@ var ToMSuggestionSchema = external_exports.strictObject({
   sourceSessions: external_exports.array(external_exports.string())
 });
 
-// tom/ambiguity.ts
-var THRESHOLD_VALUES = {
-  low: 0.3,
-  medium: 0.5,
-  high: 0.7
-};
-var FILE_PATH_PATTERN = /(?:\/[\w.-]+)+(?:\.\w+)?/;
-var SHORT_MESSAGE_WORD_LIMIT = 10;
-var PREFERENCE_KEYWORDS = [
-  "style",
-  "pattern",
-  "architecture",
-  "library",
-  "framework",
-  "convention",
-  "approach",
-  "design",
-  "structure",
-  "organize",
-  "refactor",
-  "naming",
-  "format"
-];
-var VAGUE_KEYWORDS = [
-  "fix",
-  "improve",
-  "update",
-  "change",
-  "make",
-  "do",
-  "handle",
-  "better",
-  "clean",
-  "nice"
-];
-function detectAmbiguity(input) {
-  const threshold = input.threshold ?? "medium";
-  const thresholdValue = THRESHOLD_VALUES[threshold];
-  const reasons = [];
-  const triggers = [];
-  let totalScore = 0;
-  const shortVagueScore = scoreShortVagueInstruction(input.prompt);
-  if (shortVagueScore > 0) {
-    totalScore += shortVagueScore;
-    reasons.push("Short or vague user instruction without specific file paths");
-    triggers.push("short-vague");
-  }
-  const preferenceScore = scorePreferenceSensitive(input.prompt);
-  if (preferenceScore > 0) {
-    totalScore += preferenceScore;
-    reasons.push("Decision involves style, architecture, or library preferences");
-    triggers.push("preference-sensitive");
-  }
-  const noModelScore = scoreNoUserModel(input.hasUserModel ?? true);
-  if (noModelScore > 0) {
-    totalScore += noModelScore;
-    reasons.push("No user model exists for this project");
-    triggers.push("no-user-model");
-  }
-  const clampedScore = Math.min(totalScore, 1);
-  const reason = reasons.length > 0 ? reasons.join("; ") : "No ambiguity detected";
-  return {
-    isAmbiguous: clampedScore > thresholdValue,
-    score: Math.round(clampedScore * 100) / 100,
-    reason,
-    triggers
-  };
-}
-function scoreShortVagueInstruction(prompt) {
-  if (prompt.length === 0) return 0.2;
-  const words = prompt.trim().split(/\s+/);
-  const wordCount = words.length;
-  const hasFilePath = FILE_PATH_PATTERN.test(prompt);
-  if (wordCount >= SHORT_MESSAGE_WORD_LIMIT) return 0;
-  let score = 0;
-  if (!hasFilePath) {
-    score += 0.15;
-  }
-  const lowerPrompt = prompt.toLowerCase();
-  const vagueCount = VAGUE_KEYWORDS.filter((kw) => lowerPrompt.includes(kw)).length;
-  if (vagueCount > 0) {
-    score += Math.min(vagueCount * 0.1, 0.2);
-  }
-  return score;
-}
-function scorePreferenceSensitive(prompt) {
-  const lowerPrompt = prompt.toLowerCase();
-  const matchCount = PREFERENCE_KEYWORDS.filter((kw) => lowerPrompt.includes(kw)).length;
-  if (matchCount === 0) return 0;
-  return Math.min(matchCount * 0.08, 0.25);
-}
-function scoreNoUserModel(hasUserModel) {
-  return hasUserModel ? 0 : 0.25;
-}
-
-// tom/memory-io.ts
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
-var os2 = __toESM(require("node:os"));
-
-// tom/fs-atomic.ts
-var fs2 = __toESM(require("node:fs"));
-var path2 = __toESM(require("node:path"));
-var crypto = __toESM(require("node:crypto"));
-var tempCounter = 0;
-function tempPathFor(filePath) {
-  const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
-  return `${filePath}.${suffix}.tmp`;
-}
-function ensureDirectoryExists(filePath) {
-  const dir = path2.dirname(filePath);
-  if (!fs2.existsSync(dir)) {
-    fs2.mkdirSync(dir, { recursive: true });
-  }
-}
-function atomicWriteFileSync(filePath, data) {
-  ensureDirectoryExists(filePath);
-  const tempPath = tempPathFor(filePath);
-  try {
-    fs2.writeFileSync(tempPath, data, "utf-8");
-    fs2.renameSync(tempPath, filePath);
-  } catch (error48) {
-    try {
-      fs2.unlinkSync(tempPath);
-    } catch {
-    }
-    throw error48;
-  }
-}
-
 // tom/memory-io.ts
 function globalTomDir() {
-  return path3.join(os2.homedir(), ".claude", "tom");
+  return path2.join(os.homedir(), ".claude", "tom");
 }
 function projectTomDir() {
-  return path3.join(process.cwd(), ".claude", "tom");
+  return path2.join(process.cwd(), ".claude", "tom");
 }
 function globalUserModelPath() {
-  return path3.join(globalTomDir(), "user-model.json");
+  return path2.join(globalTomDir(), "user-model.json");
 }
 function projectUserModelPath() {
-  return path3.join(projectTomDir(), "user-model.json");
+  return path2.join(projectTomDir(), "user-model.json");
 }
 function readJsonFile(filePath) {
   try {
-    const content = fs3.readFileSync(filePath, "utf-8");
+    const content = fs2.readFileSync(filePath, "utf-8");
     return JSON.parse(content);
   } catch {
     return null;
@@ -14153,6 +14029,201 @@ function readUserModel(scope = "merged") {
   return result.success ? withoutDeprecatedClusters(result.data) : null;
 }
 
+// tom/routing.ts
+var TELEMETRY_SCHEMA_VERSION = 1;
+var UsageLogEntrySchema = external_exports.looseObject({
+  v: external_exports.number().optional(),
+  timestamp: external_exports.string(),
+  operation: external_exports.string(),
+  model: external_exports.string(),
+  tokenCount: external_exports.number(),
+  sessionId: external_exports.string().optional(),
+  durationMs: external_exports.number().optional(),
+  reason: external_exports.string().optional(),
+  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+var LOG_DIR_MODE = 448;
+var LOG_FILE_MODE = 384;
+function logUsage(entry) {
+  const logPath = path3.join(globalTomDir(), "usage.log");
+  const dir = path3.dirname(logPath);
+  if (!fs3.existsSync(dir)) {
+    fs3.mkdirSync(dir, { recursive: true, mode: LOG_DIR_MODE });
+  }
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
+  fs3.appendFileSync(logPath, line, { encoding: "utf-8", mode: LOG_FILE_MODE });
+}
+var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
+
+// tom/config.ts
+var TomConfigSchema = external_exports.strictObject({
+  enabled: external_exports.boolean().default(false),
+  consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
+  models: external_exports.strictObject({
+    memoryUpdate: external_exports.string().default("haiku"),
+    consultation: external_exports.string().default("sonnet")
+  }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
+  preferenceDecayDays: external_exports.number().default(30),
+  maxSessionsRetained: external_exports.number().default(100),
+  // Confidence multiplier applied to a stored preference when a session
+  // correction contradicts it (post-action feedback). Corrections cut
+  // confidence faster than repetition builds it.
+  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
+  // Promotion lifecycle: stable high-confidence preferences graduate from
+  // per-session injection into durable CLAUDE.md marker blocks and are
+  // retired from injection (candidate → promoted → retired, simplified).
+  promotion: external_exports.strictObject({
+    enabled: external_exports.boolean().default(true),
+    threshold: external_exports.number().min(0).max(1).default(0.8),
+    minSessions: external_exports.number().int().min(1).default(5),
+    // Hysteresis: an already-promoted preference retires only when its
+    // confidence falls below this floor (a correction halves confidence,
+    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
+    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
+    // promotions in and out of CLAUDE.md within hours.
+    retireThreshold: external_exports.number().min(0).max(1).default(0.45)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 })
+});
+function logInvalidConfig(reason) {
+  try {
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "config-invalid",
+      model: "none",
+      tokenCount: 0,
+      reason: reason.slice(0, 500)
+    });
+  } catch {
+  }
+}
+function readTomConfig() {
+  const configPath = path4.join(os3.homedir(), ".claude", "tom", "config.json");
+  let content;
+  try {
+    content = fs4.readFileSync(configPath, "utf-8");
+  } catch {
+    return TomConfigSchema.parse({});
+  }
+  try {
+    const raw = JSON.parse(content);
+    const result = TomConfigSchema.safeParse(raw);
+    if (result.success) {
+      return result.data;
+    }
+    logInvalidConfig(result.error.message);
+    return TomConfigSchema.parse({});
+  } catch (error48) {
+    logInvalidConfig(error48 instanceof Error ? error48.message : String(error48));
+    return TomConfigSchema.parse({});
+  }
+}
+
+// tom/consult.ts
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
+
+// tom/ambiguity.ts
+var THRESHOLD_VALUES = {
+  low: 0.3,
+  medium: 0.5,
+  high: 0.7
+};
+var FILE_PATH_PATTERN = /(?:\/[\w.-]+)+(?:\.\w+)?/;
+var INLINE_CODE_PATTERN = /`[^`]+`/;
+var FILE_TOKEN_PATTERN = /\b[\w-]+\.(?:ts|tsx|js|jsx|mjs|py|go|rs|java|kt|rb|c|h|cpp|cs|php|swift|md|json|yaml|yml|toml|sh|sql)\b/;
+var SHORT_MESSAGE_WORD_LIMIT = 10;
+var VERY_SHORT_WORD_LIMIT = 5;
+var PREFERENCE_KEYWORDS = [
+  "style",
+  "pattern",
+  "architecture",
+  "library",
+  "framework",
+  "convention",
+  "approach",
+  "design",
+  "structure",
+  "organize",
+  "refactor",
+  "naming",
+  "format"
+];
+var VAGUE_KEYWORDS = [
+  "fix",
+  "improve",
+  "update",
+  "change",
+  "make",
+  "do",
+  "handle",
+  "better",
+  "clean",
+  "nice"
+];
+function detectAmbiguity(input) {
+  const threshold = input.threshold ?? "medium";
+  const thresholdValue = THRESHOLD_VALUES[threshold];
+  const reasons = [];
+  const triggers = [];
+  let totalScore = 0;
+  const shortVagueScore = scoreShortVagueInstruction(input.prompt);
+  if (shortVagueScore > 0) {
+    totalScore += shortVagueScore;
+    reasons.push("Short or vague user instruction without specific file paths");
+    triggers.push("short-vague");
+  }
+  const preferenceScore = scorePreferenceSensitive(input.prompt);
+  if (preferenceScore > 0) {
+    totalScore += preferenceScore;
+    reasons.push("Decision involves style, architecture, or library preferences");
+    triggers.push("preference-sensitive");
+  }
+  const noModelScore = scoreNoUserModel(input.hasUserModel ?? true);
+  if (noModelScore > 0) {
+    totalScore += noModelScore;
+    reasons.push("No user model exists for this project");
+    triggers.push("no-user-model");
+  }
+  const clampedScore = Math.round(Math.min(totalScore, 1) * 100) / 100;
+  const reason = reasons.length > 0 ? reasons.join("; ") : "No ambiguity detected";
+  return {
+    isAmbiguous: clampedScore > thresholdValue,
+    score: clampedScore,
+    reason,
+    triggers
+  };
+}
+function countKeywordMatches(prompt, keywords) {
+  const words = new Set(prompt.toLowerCase().split(/[^a-z0-9_]+/));
+  return keywords.filter((kw) => words.has(kw)).length;
+}
+function hasCodeAnchor(prompt) {
+  return FILE_PATH_PATTERN.test(prompt) || INLINE_CODE_PATTERN.test(prompt) || FILE_TOKEN_PATTERN.test(prompt);
+}
+function scoreShortVagueInstruction(prompt) {
+  if (prompt.trim().length === 0) return 0.2;
+  const wordCount = prompt.trim().split(/\s+/).length;
+  if (wordCount >= SHORT_MESSAGE_WORD_LIMIT) return 0;
+  if (hasCodeAnchor(prompt)) return 0;
+  let score = 0.4;
+  if (wordCount < VERY_SHORT_WORD_LIMIT) {
+    score += 0.15;
+  }
+  if (countKeywordMatches(prompt, VAGUE_KEYWORDS) > 0) {
+    score += 0.15;
+  }
+  return score;
+}
+function scorePreferenceSensitive(prompt) {
+  const matchCount = countKeywordMatches(prompt, PREFERENCE_KEYWORDS);
+  if (matchCount === 0) return 0;
+  return Math.min(0.1 + matchCount * 0.1, 0.3);
+}
+function scoreNoUserModel(hasUserModel) {
+  return hasUserModel ? 0 : 0.25;
+}
+
 // tom/preferences.ts
 var LEGACY_GENERIC_KEYS = /* @__PURE__ */ new Set([
   "preference",
@@ -14160,6 +14231,13 @@ var LEGACY_GENERIC_KEYS = /* @__PURE__ */ new Set([
 ]);
 function isLegacyGenericKey(key) {
   return LEGACY_GENERIC_KEYS.has(key);
+}
+
+// tom/render-guard.ts
+var MAX_INJECTED_VALUE_LENGTH = 200;
+function sanitizeForInjection(text) {
+  const flattened = text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/<!--/g, "(!--").replace(/-->/g, "--)").trim();
+  return flattened.length > MAX_INJECTED_VALUE_LENGTH ? `${flattened.slice(0, MAX_INJECTED_VALUE_LENGTH)}\u2026` : flattened;
 }
 
 // tom/bm25.ts
@@ -14204,33 +14282,6 @@ function search(index, query, k = 3) {
   return scored.slice(0, k);
 }
 
-// tom/routing.ts
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
-var os3 = __toESM(require("node:os"));
-var TELEMETRY_SCHEMA_VERSION = 1;
-var UsageLogEntrySchema = external_exports.looseObject({
-  v: external_exports.number().optional(),
-  timestamp: external_exports.string(),
-  operation: external_exports.string(),
-  model: external_exports.string(),
-  tokenCount: external_exports.number(),
-  sessionId: external_exports.string().optional(),
-  durationMs: external_exports.number().optional(),
-  reason: external_exports.string().optional(),
-  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
-});
-function logUsage(entry) {
-  const logPath = path4.join(globalTomDir(), "usage.log");
-  const dir = path4.dirname(logPath);
-  if (!fs4.existsSync(dir)) {
-    fs4.mkdirSync(dir, { recursive: true });
-  }
-  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
-  const line = JSON.stringify(stamped) + "\n";
-  fs4.appendFileSync(logPath, line, "utf-8");
-}
-
 // tom/consult.ts
 var NO_MODEL = "none";
 function loadCachedIndex() {
@@ -14271,12 +14322,15 @@ function buildSuggestionFromUserModel(ambiguityResult) {
     return null;
   }
   const topPrefs = [...unpromoted].sort((a, b) => b.confidence - a.confidence).slice(0, 5);
-  const prefSummary = topPrefs.map((p) => `${p.key}=${p.value} (${Math.round(p.confidence * 100)}%)`).join(", ");
+  const prefSummary = topPrefs.map((p) => `${sanitizeForInjection(p.key)}=${sanitizeForInjection(p.value)} (${Math.round(p.confidence * 100)}%)`).join(", ");
   const content = `User preferences: ${prefSummary}. Consider these for the current request. Ambiguity reason: ${ambiguityResult.reason}.`;
   const suggestion = {
     type: "preference",
     content,
-    confidence: Math.round(ambiguityResult.score * 100) / 100,
+    // Suggestion confidence is the strength of the strongest preference
+    // backing it — NOT the ambiguity score (which measures the prompt,
+    // not the memory, and used to be injected mislabeled as confidence).
+    confidence: Math.round((topPrefs[0]?.confidence ?? 0) * 100) / 100,
     sourceSessions: []
   };
   const parseResult = ToMSuggestionSchema.safeParse(suggestion);
@@ -14301,20 +14355,16 @@ function consultToM(prompt, threshold, sessionId) {
       source: null
     };
   }
-  const cachedIndex = loadCachedIndex();
-  let built = null;
-  let source = null;
-  if (cachedIndex) {
-    const results = search(cachedIndex, prompt, 3);
-    built = buildSuggestionFromSearch(results, ambiguityResult);
-    if (built) {
-      source = "bm25";
-    }
-  }
+  let built = buildSuggestionFromUserModel(ambiguityResult);
+  let source = built ? "user-model" : null;
   if (!built) {
-    built = buildSuggestionFromUserModel(ambiguityResult);
-    if (built) {
-      source = "user-model";
+    const cachedIndex = loadCachedIndex();
+    if (cachedIndex) {
+      const results = search(cachedIndex, prompt, 3);
+      built = buildSuggestionFromSearch(results, ambiguityResult);
+      if (built) {
+        source = "bm25";
+      }
     }
   }
   logUsage({
@@ -14343,6 +14393,7 @@ function consultToM(prompt, threshold, sessionId) {
 }
 
 // tom/secrets.ts
+var REDACTED = "[REDACTED]";
 var SECRET_PATTERNS = [
   /^sk-[a-zA-Z0-9_-]+$/,
   // OpenAI-style keys
@@ -14379,9 +14430,32 @@ var SECRET_PATTERNS = [
   /[A-Z_]+_KEY=[^\s]+/i
   // API_KEY=value patterns
 ];
-var REDACTED = "[REDACTED]";
+var EMBEDDED_SECRET_PATTERNS = [
+  // Authorization header values anywhere in a command. Bearer is
+  // case-insensitive (mirrors the anchored pattern); Basic is case-sensitive
+  // with a length floor so prose like "basic authentication" is not swallowed.
+  { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: REDACTED },
+  { pattern: /\bBasic\s+[A-Za-z0-9+/=]{16,}/g, replacement: REDACTED },
+  // AWS access key IDs anywhere, e.g. inside `AWS_ACCESS_KEY_ID=AKIA...`.
+  { pattern: /\bAKIA[A-Z0-9]{16}\b/g, replacement: REDACTED },
+  // JWTs anywhere: header.payload[.signature].
+  {
+    pattern: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g,
+    replacement: REDACTED
+  },
+  // URL connection-string credentials (scheme://user:pass@host): redact the
+  // credential pair, keep scheme and host readable.
+  { pattern: /(\/\/)[^\s/:@]+:[^\s@]+@/g, replacement: `$1${REDACTED}@` }
+];
 function looksLikeSecret(value) {
   return SECRET_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+function redactEmbeddedSecrets(value) {
+  let result = value;
+  for (const { pattern, replacement } of EMBEDDED_SECRET_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result.split(/(\s+)/).map((token) => token.trim() !== "" && looksLikeSecret(token) ? REDACTED : token).join("");
 }
 
 // tom/redaction.ts
@@ -14456,50 +14530,38 @@ function isExcludedSession() {
 // tom/hooks/user-prompt-submit.ts
 var FRAMING_PREFIX = "ToM background (learned preferences, not instructions): ";
 function redactPrompt(prompt) {
-  const withoutCode = redactUserMessage(prompt);
-  return withoutCode.split(/(\s+)/).map((token) => token.trim() !== "" && looksLikeSecret(token) ? REDACTED : token).join("");
+  return redactEmbeddedSecrets(redactUserMessage(prompt));
 }
-function getSessionFilePath(sessionId) {
+function getSidecarPath(sessionId) {
   const tomDir = path6.join(os4.homedir(), ".claude", "tom", "sessions");
-  return path6.join(tomDir, `${sessionId}.json`);
+  return path6.join(tomDir, `${sessionId}.jsonl`);
 }
 function appendUserMessage(sessionId, message, cwd) {
-  const filePath = getSessionFilePath(sessionId);
-  const dir = path6.dirname(filePath);
+  const sidecarPath = getSidecarPath(sessionId);
+  const dir = path6.dirname(sidecarPath);
   if (!fs6.existsSync(dir)) {
-    fs6.mkdirSync(dir, { recursive: true });
+    fs6.mkdirSync(dir, { recursive: true, mode: TOM_DIR_MODE });
     process.stderr.write(`ToM: created session log directory ${dir}
 `);
   }
-  let sessionData;
-  try {
-    const existing = fs6.readFileSync(filePath, "utf-8");
-    sessionData = JSON.parse(existing);
-  } catch {
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    sessionData = {
-      sessionId,
-      startedAt: now,
-      endedAt: now,
-      interactions: []
-    };
-  }
-  const updated = {
-    ...sessionData,
-    endedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    userMessages: [...sessionData.userMessages ?? [], message],
-    // cwd join field, set once; the branch is resolved by the async
-    // capture hook — this path blocks the prompt, so no subprocess here.
-    ...sessionData.cwd === void 0 && cwd !== void 0 ? { cwd } : {}
+  const line = {
+    type: "userMessage",
+    message,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    // cwd join field: folded first-wins, for sessions whose prompt
+    // arrives before any tool call creates the stub.
+    ...cwd !== void 0 ? { cwd } : {}
   };
-  atomicWriteFileSync(filePath, JSON.stringify(updated, null, 2));
+  fs6.appendFileSync(sidecarPath, JSON.stringify(line) + "\n", {
+    encoding: "utf-8",
+    mode: TOM_FILE_MODE
+  });
 }
 function buildHookOutput(suggestion) {
-  const confidencePercent = Math.round(suggestion.confidence * 100);
   return {
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
-      additionalContext: `${FRAMING_PREFIX}${suggestion.content} (confidence ${confidencePercent}%)`
+      additionalContext: `${FRAMING_PREFIX}${suggestion.content}`
     }
   };
 }

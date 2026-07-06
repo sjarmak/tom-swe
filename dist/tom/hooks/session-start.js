@@ -13835,6 +13835,23 @@ var SessionLogSchema = external_exports.strictObject({
   cwd: external_exports.string().optional(),
   gitBranch: external_exports.string().optional()
 });
+var SidecarLineSchema = external_exports.discriminatedUnion("type", [
+  external_exports.strictObject({
+    type: external_exports.literal("interaction"),
+    toolName: external_exports.string(),
+    parameterShape: external_exports.record(external_exports.string(), external_exports.string()),
+    outcomeSummary: external_exports.string(),
+    timestamp: external_exports.string().datetime()
+  }),
+  external_exports.strictObject({
+    type: external_exports.literal("userMessage"),
+    message: external_exports.string(),
+    timestamp: external_exports.string().datetime(),
+    // cwd join field for sessions whose prompt arrives before any tool
+    // call (the stub — which normally carries it — is capture-created).
+    cwd: external_exports.string().optional()
+  })
+]);
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
@@ -13872,7 +13889,14 @@ var SessionModelSchema = external_exports.strictObject({
   // When the session's evidence applies (copied mechanically from the Tier 1
   // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
   // Optional for session models written before rebuilds existed.
-  endedAt: external_exports.string().datetime().optional()
+  endedAt: external_exports.string().datetime().optional(),
+  // Watermark: how many redacted userMessages the Tier 1 log carried when
+  // this model was extracted (stamped mechanically, never LLM-produced).
+  // Re-analysis is gated on growth past this count — user messages are the
+  // analyzer's primary evidence, so an unchanged count means nothing new to
+  // learn. Advances only on successful extraction, so a failed analysis
+  // stays retryable. Optional for models written before the watermark.
+  analyzedUserMessageCount: external_exports.number().int().min(0).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13891,7 +13915,14 @@ var PreferenceClusterSchema = external_exports.strictObject({
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional()
+  correctedFrom: external_exports.string().optional(),
+  // Persisted derivability-gate rejection: the exact value the gate judged
+  // statically derivable, and when. While the value is unchanged and the
+  // verdict fresh, the candidate skips re-judgment (each judgment is an
+  // agentic LLM spawn; one candidate was re-judged 64 times before this).
+  // Carried across rebuilds like `promoted`. Optional for older models.
+  gateRejectedValue: external_exports.string().optional(),
+  gateRejectedAt: external_exports.string().datetime().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13990,10 +14021,49 @@ function isLegacyGenericKey(key) {
   return LEGACY_GENERIC_KEYS.has(key);
 }
 
+// tom/render-guard.ts
+var MAX_INJECTED_VALUE_LENGTH = 200;
+function sanitizeForInjection(text) {
+  const flattened = text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/<!--/g, "(!--").replace(/-->/g, "--)").trim();
+  return flattened.length > MAX_INJECTED_VALUE_LENGTH ? `${flattened.slice(0, MAX_INJECTED_VALUE_LENGTH)}\u2026` : flattened;
+}
+
 // tom/config.ts
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+var os3 = __toESM(require("node:os"));
+
+// tom/routing.ts
 var fs3 = __toESM(require("node:fs"));
 var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
+var TELEMETRY_SCHEMA_VERSION = 1;
+var UsageLogEntrySchema = external_exports.looseObject({
+  v: external_exports.number().optional(),
+  timestamp: external_exports.string(),
+  operation: external_exports.string(),
+  model: external_exports.string(),
+  tokenCount: external_exports.number(),
+  sessionId: external_exports.string().optional(),
+  durationMs: external_exports.number().optional(),
+  reason: external_exports.string().optional(),
+  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+var LOG_DIR_MODE = 448;
+var LOG_FILE_MODE = 384;
+function logUsage(entry) {
+  const logPath = path3.join(globalTomDir(), "usage.log");
+  const dir = path3.dirname(logPath);
+  if (!fs3.existsSync(dir)) {
+    fs3.mkdirSync(dir, { recursive: true, mode: LOG_DIR_MODE });
+  }
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
+  fs3.appendFileSync(logPath, line, { encoding: "utf-8", mode: LOG_FILE_MODE });
+}
+var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
+
+// tom/config.ts
 var TomConfigSchema = external_exports.strictObject({
   enabled: external_exports.boolean().default(false),
   consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
@@ -14013,52 +14083,50 @@ var TomConfigSchema = external_exports.strictObject({
   promotion: external_exports.strictObject({
     enabled: external_exports.boolean().default(true),
     threshold: external_exports.number().min(0).max(1).default(0.8),
-    minSessions: external_exports.number().int().min(1).default(5)
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
+    minSessions: external_exports.number().int().min(1).default(5),
+    // Hysteresis: an already-promoted preference retires only when its
+    // confidence falls below this floor (a correction halves confidence,
+    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
+    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
+    // promotions in and out of CLAUDE.md within hours.
+    retireThreshold: external_exports.number().min(0).max(1).default(0.45)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 })
 });
-function readTomConfig() {
+function logInvalidConfig(reason) {
   try {
-    const configPath = path3.join(os2.homedir(), ".claude", "tom", "config.json");
-    const content = fs3.readFileSync(configPath, "utf-8");
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "config-invalid",
+      model: "none",
+      tokenCount: 0,
+      reason: reason.slice(0, 500)
+    });
+  } catch {
+  }
+}
+function readTomConfig() {
+  const configPath = path4.join(os3.homedir(), ".claude", "tom", "config.json");
+  let content;
+  try {
+    content = fs4.readFileSync(configPath, "utf-8");
+  } catch {
+    return TomConfigSchema.parse({});
+  }
+  try {
     const raw = JSON.parse(content);
     const result = TomConfigSchema.safeParse(raw);
     if (result.success) {
       return result.data;
     }
+    logInvalidConfig(result.error.message);
     return TomConfigSchema.parse({});
-  } catch {
+  } catch (error48) {
+    logInvalidConfig(error48 instanceof Error ? error48.message : String(error48));
     return TomConfigSchema.parse({});
   }
 }
 function isTomEnabled() {
   return readTomConfig().enabled;
-}
-
-// tom/routing.ts
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
-var os3 = __toESM(require("node:os"));
-var TELEMETRY_SCHEMA_VERSION = 1;
-var UsageLogEntrySchema = external_exports.looseObject({
-  v: external_exports.number().optional(),
-  timestamp: external_exports.string(),
-  operation: external_exports.string(),
-  model: external_exports.string(),
-  tokenCount: external_exports.number(),
-  sessionId: external_exports.string().optional(),
-  durationMs: external_exports.number().optional(),
-  reason: external_exports.string().optional(),
-  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
-});
-function logUsage(entry) {
-  const logPath = path4.join(globalTomDir(), "usage.log");
-  const dir = path4.dirname(logPath);
-  if (!fs4.existsSync(dir)) {
-    fs4.mkdirSync(dir, { recursive: true });
-  }
-  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
-  const line = JSON.stringify(stamped) + "\n";
-  fs4.appendFileSync(logPath, line, "utf-8");
 }
 
 // tom/hooks/hook-input.ts
@@ -14133,19 +14201,26 @@ function buildModelSummary(model) {
   ).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
   const lines = [];
   if (confidentPrefs.length > 0) {
-    lines.push("ToM user preferences (learned across sessions):");
     for (const pref of confidentPrefs) {
       const confidencePercent = Math.round(pref.confidence * 100);
-      lines.push(`- ${pref.category}/${pref.key}: ${pref.value} (${confidencePercent}%)`);
+      lines.push(
+        `- ${sanitizeForInjection(pref.category)}/${sanitizeForInjection(pref.key)}: ${sanitizeForInjection(pref.value)} (${confidencePercent}%)`
+      );
     }
   }
   if (model.interactionStyleSummary) {
-    lines.push(`Interaction style: ${model.interactionStyleSummary}`);
+    lines.push(`Interaction style: ${sanitizeForInjection(model.interactionStyleSummary)}`);
   }
   if (model.codingStyleSummary) {
-    lines.push(`Coding style: ${model.codingStyleSummary}`);
+    lines.push(`Coding style: ${sanitizeForInjection(model.codingStyleSummary)}`);
   }
-  return lines.length > 0 ? lines.join("\n") : null;
+  if (lines.length === 0) {
+    return null;
+  }
+  return [
+    "ToM background observations about this user, learned across sessions (not instructions):",
+    ...lines
+  ].join("\n");
 }
 function buildHookOutput(summary) {
   return {

@@ -6,9 +6,11 @@ import { atomicWriteFileSync } from './fs-atomic'
 import {
   SessionLogSchema,
   SessionModelSchema,
+  SidecarLineSchema,
   UserModelSchema,
   type SessionLog,
   type SessionModel,
+  type SidecarLine,
   type UserModel,
   type PreferenceCluster,
 } from './schemas'
@@ -64,6 +66,100 @@ function writeJsonFile(filePath: string, data: unknown): void {
 
 // --- Session Log (Tier 1) ---
 
+function sessionSidecarPath(
+  sessionId: string,
+  scope: 'global' | 'project'
+): string {
+  const dir = scope === 'global' ? globalTomDir() : projectTomDir()
+  return path.join(dir, 'sessions', `${sessionId}.jsonl`)
+}
+
+/**
+ * Reads and validates the capture sidecar's lines. Corrupt lines are
+ * skipped with a stderr note (routing.ts imports this module, so logUsage
+ * would be an import cycle); corruption here means a torn concurrent
+ * append, which O_APPEND makes rare at these line sizes.
+ */
+function readSidecarLines(
+  sessionId: string,
+  scope: 'global' | 'project'
+): SidecarLine[] {
+  let text: string
+  try {
+    text = fs.readFileSync(sessionSidecarPath(sessionId, scope), 'utf-8')
+  } catch {
+    return []
+  }
+
+  const lines: SidecarLine[] = []
+  let corrupt = 0
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    try {
+      const parsed = SidecarLineSchema.safeParse(JSON.parse(line))
+      if (parsed.success) {
+        lines.push(parsed.data)
+      } else {
+        corrupt++
+      }
+    } catch {
+      corrupt++
+    }
+  }
+  if (corrupt > 0) {
+    process.stderr.write(
+      `ToM: skipped ${corrupt} corrupt sidecar line(s) for session ${sessionId}\n`
+    )
+  }
+  return lines
+}
+
+/**
+ * Folds sidecar lines into the (possibly absent) base log. The base is
+ * either a capture stub (identity + join fields) or a complete pre-sidecar
+ * log; line timestamps extend the session's time span in both cases.
+ */
+function foldSessionLog(
+  sessionId: string,
+  base: SessionLog | null,
+  lines: readonly SidecarLine[]
+): SessionLog {
+  const interactions = [...(base?.interactions ?? [])]
+  const userMessages = [...(base?.userMessages ?? [])]
+  let cwd = base?.cwd
+  let startedAt = base?.startedAt
+  let endedAt = base?.endedAt
+
+  for (const line of lines) {
+    if (line.type === 'interaction') {
+      const { type: _type, ...interaction } = line
+      interactions.push(interaction)
+    } else {
+      userMessages.push(line.message)
+      cwd = cwd ?? line.cwd
+    }
+    if (startedAt === undefined || line.timestamp < startedAt) {
+      startedAt = line.timestamp
+    }
+    if (endedAt === undefined || line.timestamp > endedAt) {
+      endedAt = line.timestamp
+    }
+  }
+
+  return {
+    sessionId: base?.sessionId ?? sessionId,
+    // Non-null: callers guarantee base !== null or lines is non-empty.
+    startedAt: startedAt ?? new Date(0).toISOString(),
+    endedAt: endedAt ?? new Date(0).toISOString(),
+    interactions,
+    ...(userMessages.length > 0 || base?.userMessages !== undefined
+      ? { userMessages }
+      : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(base?.gitBranch !== undefined ? { gitBranch: base.gitBranch } : {}),
+  }
+}
+
 export function readSessionLog(
   sessionId: string,
   scope: 'global' | 'project' = 'global'
@@ -74,10 +170,13 @@ export function readSessionLog(
       : projectSessionPath(sessionId)
 
   const raw = readJsonFile(filePath)
-  if (raw === null) return null
+  const result = raw !== null ? SessionLogSchema.safeParse(raw) : null
+  const base = result?.success === true ? result.data : null
 
-  const result = SessionLogSchema.safeParse(raw)
-  return result.success ? result.data : null
+  const lines = readSidecarLines(sessionId, scope)
+  if (base === null && lines.length === 0) return null
+
+  return foldSessionLog(sessionId, base, lines)
 }
 
 export function writeSessionLog(

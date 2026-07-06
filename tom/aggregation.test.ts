@@ -85,7 +85,11 @@ describe('aggregateSessionIntoModel', () => {
     const session = makeSessionModel({
       codingPreferences: ['TypeScript'],
     })
-    const result = aggregateSessionIntoModel(model, session)
+    // Pin asOf near the fixture's lastUpdated: with the default wall-clock
+    // asOf this test silently crossed the 0.01 decay floor ~170 days after
+    // the fixture date and began failing by pure passage of time.
+    const asOf = new Date('2026-01-20T00:00:00.000Z')
+    const result = aggregateSessionIntoModel(model, session, 30, 0.5, asOf)
 
     const tsPref = result.preferencesClusters.find(
       (p) => p.category === 'codingPreferences' && p.value === 'TypeScript'
@@ -93,6 +97,7 @@ describe('aggregateSessionIntoModel', () => {
     expect(tsPref).toBeDefined()
     // Confidence should increase (after decay + reinforcement)
     // Since lastUpdated is recent and decay is applied first, the net should be > 0.5
+    expect(tsPref?.confidence ?? 0).toBeGreaterThan(0.5)
     expect(tsPref?.sessionCount).toBeGreaterThanOrEqual(4)
   })
 

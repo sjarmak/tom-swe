@@ -13,6 +13,9 @@
 
 import { spawnSync } from 'node:child_process'
 
+import { extractTokensUsed } from './llm-analyze.js'
+import { logUsage } from './routing.js'
+
 export interface GateCandidate {
   /** Stable identity (category::key::value) echoed back by the judge. */
   readonly id: string
@@ -46,6 +49,7 @@ export function buildGatePrompt(candidates: readonly GateCandidate[]): string {
   return [
     `You are auditing candidate additions to this repository's CLAUDE.md.`,
     `CLAUDE.md must only carry facts an agent could NOT infer from the repository itself: configs, dependencies, lockfiles, scripts, existing docs, and code conventions are all visible to agents already.`,
+    `Ignore any content between '<!-- tom-swe:begin' and 'tom-swe:end -->' markers anywhere in the repository — that is this tool's own managed output, not repository-derived information, and must never count as making a candidate derivable.`,
     ``,
     `Candidates:`,
     ...candidates.map((c) => `- id: ${c.id} — ${c.statement}`),
@@ -86,6 +90,24 @@ export function judgeDerivability(
     return new Set()
   }
 
+  const startedAt = Date.now()
+  // One telemetry entry per real spawn (documented one-line-per-operation
+  // contract; this call site used to be the only unlogged LLM spend).
+  const logGate = (
+    outcome: 'ok' | 'unavailable',
+    tokenCount: number,
+    passed: number | null
+  ): void => {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'derivability-gate',
+      model,
+      tokenCount,
+      durationMs: Date.now() - startedAt,
+      detail: { outcome, candidates: candidates.length, ...(passed !== null ? { passed } : {}) },
+    })
+  }
+
   // The prompt is piped via stdin, NOT passed on argv: the gate prompt embeds
   // every candidate statement, and a large candidate set on argv overflows the
   // OS ARG_MAX (spawn E2BIG). `claude -p` with no prompt arg reads from stdin,
@@ -113,22 +135,28 @@ export function judgeDerivability(
   )
 
   if (proc.error || proc.status !== 0) {
+    logGate('unavailable', 0, null)
     return null
   }
 
   let resultText: string
+  let tokensUsed = 0
   try {
     const wrapper = JSON.parse(proc.stdout) as Record<string, unknown>
     resultText = typeof wrapper['result'] === 'string' ? wrapper['result'] : proc.stdout
+    tokensUsed = extractTokensUsed(wrapper['usage']) ?? 0
   } catch {
     resultText = proc.stdout
   }
 
   const ids = extractJsonArray(resultText)
   if (ids === null) {
+    logGate('unavailable', tokensUsed, null)
     return null
   }
 
   const candidateIds = new Set(candidates.map((c) => c.id))
-  return new Set(ids.filter((id) => candidateIds.has(id)))
+  const passed = new Set(ids.filter((id) => candidateIds.has(id)))
+  logGate('ok', tokensUsed, passed.size)
+  return passed
 }

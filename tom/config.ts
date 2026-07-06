@@ -11,6 +11,8 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { z } from 'zod'
 
+import { logUsage } from './routing.js'
+
 // --- Configuration Schema ---
 
 export const TomConfigSchema = z.strictObject({
@@ -33,7 +35,13 @@ export const TomConfigSchema = z.strictObject({
     enabled: z.boolean().default(true),
     threshold: z.number().min(0).max(1).default(0.8),
     minSessions: z.number().int().min(1).default(5),
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5 }),
+    // Hysteresis: an already-promoted preference retires only when its
+    // confidence falls below this floor (a correction halves confidence,
+    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
+    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
+    // promotions in and out of CLAUDE.md within hours.
+    retireThreshold: z.number().min(0).max(1).default(0.45),
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 }),
 })
 
 export type TomConfig = z.infer<typeof TomConfigSchema>
@@ -41,27 +49,55 @@ export type TomConfig = z.infer<typeof TomConfigSchema>
 // --- Reading Configuration ---
 
 /**
- * Reads the "tom" key from ~/.claude/settings.json,
- * validates it against the Zod schema, and returns
- * a fully-defaulted TomConfig.
+ * Logs an existing-but-invalid config file. Defaults have enabled=false,
+ * so an unnoticed typo silently turns the whole plugin off — this entry is
+ * the only signal. One entry per hook invocation while the file stays
+ * broken is deliberate volume: silence was the bug (fail-closed strictObject
+ * semantics themselves are documented intent and unchanged).
+ */
+function logInvalidConfig(reason: string): void {
+  try {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'config-invalid',
+      model: 'none',
+      tokenCount: 0,
+      reason: reason.slice(0, 500),
+    })
+  } catch {
+    // Telemetry must never break config reading.
+  }
+}
+
+/**
+ * Reads ~/.claude/tom/config.json, validates it against the Zod schema,
+ * and returns a fully-defaulted TomConfig.
  *
- * Returns all defaults if the file is missing, unreadable,
- * or the tom key is absent/invalid.
+ * Returns all defaults when the file is missing (normal before /tom-setup,
+ * silent) — and ALSO when it exists but is malformed or fails validation,
+ * which is logged as a typed 'config-invalid' entry because the default
+ * enabled=false disables the plugin.
  */
 export function readTomConfig(): TomConfig {
-  try {
-    const configPath = path.join(os.homedir(), '.claude', 'tom', 'config.json')
-    const content = fs.readFileSync(configPath, 'utf-8')
-    const raw = JSON.parse(content) as unknown
+  const configPath = path.join(os.homedir(), '.claude', 'tom', 'config.json')
 
+  let content: string
+  try {
+    content = fs.readFileSync(configPath, 'utf-8')
+  } catch {
+    return TomConfigSchema.parse({})
+  }
+
+  try {
+    const raw = JSON.parse(content) as unknown
     const result = TomConfigSchema.safeParse(raw)
     if (result.success) {
       return result.data
     }
-
-    // If validation fails, return defaults
+    logInvalidConfig(result.error.message)
     return TomConfigSchema.parse({})
-  } catch {
+  } catch (error) {
+    logInvalidConfig(error instanceof Error ? error.message : String(error))
     return TomConfigSchema.parse({})
   }
 }

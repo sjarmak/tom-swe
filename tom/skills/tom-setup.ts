@@ -10,7 +10,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
-import { atomicWriteFileSync } from '../fs-atomic.js'
+import { atomicWriteFileSync, TOM_DIR_MODE, TOM_FILE_MODE } from '../fs-atomic.js'
 
 // --- Types ---
 
@@ -34,6 +34,38 @@ const DEFAULT_CONFIG = {
   maxSessionsRetained: 100,
 }
 
+// --- Permission Hardening ---
+
+/**
+ * Recursively chmods an existing ~/.claude/tom tree to owner-only modes
+ * (dirs 0o700, files 0o600). Releases before v0.5.4 created the tree with
+ * the default umask (world-readable); setup repairs that once. Symlinks are
+ * skipped so the pass cannot chmod targets outside the tree. A missing path
+ * is a no-op; any other failure propagates to the caller.
+ */
+export function hardenTreePermissions(rootPath: string): void {
+  let stats: fs.Stats
+  try {
+    stats = fs.lstatSync(rootPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return
+    }
+    throw error
+  }
+  if (stats.isSymbolicLink()) {
+    return
+  }
+  if (stats.isDirectory()) {
+    fs.chmodSync(rootPath, TOM_DIR_MODE)
+    for (const entry of fs.readdirSync(rootPath)) {
+      hardenTreePermissions(path.join(rootPath, entry))
+    }
+    return
+  }
+  fs.chmodSync(rootPath, TOM_FILE_MODE)
+}
+
 // --- Setup ---
 
 function getConfigPath(): string {
@@ -42,6 +74,18 @@ function getConfigPath(): string {
 
 export function setup(): SetupResult {
   const configPath = getConfigPath()
+
+  try {
+    hardenTreePermissions(path.dirname(configPath))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      created: false,
+      alreadyExists: fs.existsSync(configPath),
+      configPath,
+      error: `permission hardening failed: ${message}`,
+    }
+  }
 
   if (fs.existsSync(configPath)) {
     return {
@@ -78,15 +122,15 @@ export function formatSetupResult(result: SetupResult): string {
   lines.push('# ToM Setup')
   lines.push('')
 
+  if (result.error) {
+    lines.push(`Failed to create config: ${result.error}`)
+    return lines.join('\n')
+  }
+
   if (result.alreadyExists) {
     lines.push(`Config already exists at \`${result.configPath}\`.`)
     lines.push('')
     lines.push('ToM is already configured. Use `/tom-status` to see current state.')
-    return lines.join('\n')
-  }
-
-  if (result.error) {
-    lines.push(`Failed to create config: ${result.error}`)
     return lines.join('\n')
   }
 

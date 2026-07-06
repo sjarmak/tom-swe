@@ -31,6 +31,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var tom_setup_exports = {};
 __export(tom_setup_exports, {
   formatSetupResult: () => formatSetupResult,
+  hardenTreePermissions: () => hardenTreePermissions,
   main: () => main,
   setup: () => setup
 });
@@ -43,6 +44,8 @@ var os = __toESM(require("node:os"));
 var fs = __toESM(require("node:fs"));
 var path = __toESM(require("node:path"));
 var crypto = __toESM(require("node:crypto"));
+var TOM_DIR_MODE = 448;
+var TOM_FILE_MODE = 384;
 var tempCounter = 0;
 function tempPathFor(filePath) {
   const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
@@ -51,14 +54,14 @@ function tempPathFor(filePath) {
 function ensureDirectoryExists(filePath) {
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: TOM_DIR_MODE });
   }
 }
 function atomicWriteFileSync(filePath, data) {
   ensureDirectoryExists(filePath);
   const tempPath = tempPathFor(filePath);
   try {
-    fs.writeFileSync(tempPath, data, "utf-8");
+    fs.writeFileSync(tempPath, data, { encoding: "utf-8", mode: TOM_FILE_MODE });
     fs.renameSync(tempPath, filePath);
   } catch (error) {
     try {
@@ -80,11 +83,44 @@ var DEFAULT_CONFIG = {
   preferenceDecayDays: 30,
   maxSessionsRetained: 100
 };
+function hardenTreePermissions(rootPath) {
+  let stats;
+  try {
+    stats = fs2.lstatSync(rootPath);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  if (stats.isSymbolicLink()) {
+    return;
+  }
+  if (stats.isDirectory()) {
+    fs2.chmodSync(rootPath, TOM_DIR_MODE);
+    for (const entry of fs2.readdirSync(rootPath)) {
+      hardenTreePermissions(path2.join(rootPath, entry));
+    }
+    return;
+  }
+  fs2.chmodSync(rootPath, TOM_FILE_MODE);
+}
 function getConfigPath() {
   return path2.join(os.homedir(), ".claude", "tom", "config.json");
 }
 function setup() {
   const configPath = getConfigPath();
+  try {
+    hardenTreePermissions(path2.dirname(configPath));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      created: false,
+      alreadyExists: fs2.existsSync(configPath),
+      configPath,
+      error: `permission hardening failed: ${message}`
+    };
+  }
   if (fs2.existsSync(configPath)) {
     return {
       created: false,
@@ -113,14 +149,14 @@ function formatSetupResult(result) {
   const lines = [];
   lines.push("# ToM Setup");
   lines.push("");
+  if (result.error) {
+    lines.push(`Failed to create config: ${result.error}`);
+    return lines.join("\n");
+  }
   if (result.alreadyExists) {
     lines.push(`Config already exists at \`${result.configPath}\`.`);
     lines.push("");
     lines.push("ToM is already configured. Use `/tom-status` to see current state.");
-    return lines.join("\n");
-  }
-  if (result.error) {
-    lines.push(`Failed to create config: ${result.error}`);
     return lines.join("\n");
   }
   if (result.created) {
@@ -149,6 +185,7 @@ if (require.main === module) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   formatSetupResult,
+  hardenTreePermissions,
   main,
   setup
 });

@@ -49,8 +49,74 @@ describe('computeTelemetrySummary', () => {
     expect(summary.analysis.fallbackRuns).toBe(1)
     expect(summary.analysis.fallbackReasons).toEqual({ timeout: 1 })
     expect(summary.analysis.totalTokens).toBe(2000)
-    expect(summary.analysis.avgDurationMs).toBe(Math.round((8000 + 6000 + 45000) / 3))
-    expect(summary.analysis.maxDurationMs).toBe(45000)
+    // Durations split by outcome: pooling ~90s timeout fallbacks with
+    // successful runs described neither population.
+    expect(summary.analysis.avgDurationMs).toBe(7000)
+    expect(summary.analysis.maxDurationMs).toBe(8000)
+    expect(summary.analysis.fallbackAvgDurationMs).toBe(45000)
+  })
+
+  it('windows analysis counts so historical clusters cannot mask live rates', () => {
+    const now = new Date('2026-06-20T12:00:00.000Z')
+    const summary = computeTelemetrySummary(
+      [
+        // Historical fallback cluster, 9 days old: lifetime-only.
+        entry({
+          operation: 'session-analysis-fallback',
+          timestamp: '2026-06-11T12:00:00.000Z',
+          detail: { path: 'heuristic', failure: 'timeout' },
+        }),
+        // Recent success within 24h.
+        entry({
+          operation: 'session-analysis',
+          timestamp: '2026-06-20T08:00:00.000Z',
+          model: 'haiku',
+          detail: { path: 'llm' },
+        }),
+        // Success 3 days old: 7d window only.
+        entry({
+          operation: 'session-analysis',
+          timestamp: '2026-06-17T12:00:00.000Z',
+          model: 'haiku',
+          detail: { path: 'llm' },
+        }),
+      ],
+      0,
+      now
+    )
+
+    expect(summary.analysis.last24h).toEqual({ llmRuns: 1, fallbackRuns: 0 })
+    expect(summary.analysis.last7d).toEqual({ llmRuns: 2, fallbackRuns: 0 })
+    expect(summary.analysis.fallbackRuns).toBe(1)
+  })
+
+  it('counts derivability-gate spawns and includes their tokens in the ToM share', () => {
+    const summary = computeTelemetrySummary([
+      entry({
+        operation: 'derivability-gate',
+        model: 'haiku',
+        tokenCount: 700,
+        detail: { outcome: 'ok', candidates: 2, passed: 1 },
+      }),
+      entry({
+        operation: 'derivability-gate',
+        model: 'haiku',
+        tokenCount: 0,
+        detail: { outcome: 'unavailable', candidates: 1 },
+      }),
+      entry({
+        operation: 'session-usage',
+        sessionId: 's1',
+        detail: { inputTokens: 6000, outputTokens: 1000 },
+      }),
+    ])
+
+    expect(summary.gate.count).toBe(2)
+    expect(summary.gate.okCount).toBe(1)
+    expect(summary.gate.unavailableCount).toBe(1)
+    expect(summary.gate.totalTokens).toBe(700)
+    // 700 gate tokens / 7000 host in+out = 10%
+    expect(summary.sessionUsage.tomShareOfInOutPercent).toBe(10)
   })
 
   it('computes prompt-hook latency percentiles', () => {
@@ -104,6 +170,7 @@ describe('computeTelemetrySummary', () => {
     const summary = computeTelemetrySummary([
       entry({
         operation: 'session-usage',
+        sessionId: 'session-a',
         detail: {
           inputTokens: 8000,
           outputTokens: 2000,
@@ -114,6 +181,7 @@ describe('computeTelemetrySummary', () => {
       }),
       entry({
         operation: 'session-usage',
+        sessionId: 'session-b',
         detail: {
           inputTokens: 4000,
           outputTokens: 1000,
@@ -136,6 +204,29 @@ describe('computeTelemetrySummary', () => {
     expect(summary.sessionUsage.cacheReadTokens).toBe(90000)
     // 1500 ToM tokens / 15000 host in+out = 10%
     expect(summary.sessionUsage.tomShareOfInOutPercent).toBe(10)
+  })
+
+  it('dedupes per-fire session-usage entries by session, last entry wins', () => {
+    // Entries are logged once per Stop FIRE with cumulative totals (one
+    // session logged 99 of them); summing inflated the denominator ~5x.
+    const summary = computeTelemetrySummary([
+      entry({
+        operation: 'session-usage',
+        sessionId: 'session-a',
+        timestamp: '2026-06-10T10:00:00.000Z',
+        detail: { inputTokens: 1000, outputTokens: 200 },
+      }),
+      entry({
+        operation: 'session-usage',
+        sessionId: 'session-a',
+        timestamp: '2026-06-10T11:00:00.000Z',
+        detail: { inputTokens: 5000, outputTokens: 900 },
+      }),
+    ])
+
+    expect(summary.sessionUsage.sessions).toBe(1)
+    expect(summary.sessionUsage.inputTokens).toBe(5000)
+    expect(summary.sessionUsage.outputTokens).toBe(900)
   })
 
   it('leaves the ToM share null when no host usage is recorded', () => {

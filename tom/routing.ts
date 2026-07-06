@@ -106,6 +106,10 @@ export function getModelForOperation(operation: OperationType): string {
 
 // --- Usage Logging ---
 
+/** Store permissions: match fs-atomic's 0700 dirs / 0600 files. */
+const LOG_DIR_MODE = 0o700
+const LOG_FILE_MODE = 0o600
+
 /**
  * Appends a usage log entry as a JSON line to tom/usage.log, stamping the
  * telemetry schema version. Creates directories if they do not exist.
@@ -115,12 +119,60 @@ export function logUsage(entry: UsageLogEntry): void {
   const dir = path.dirname(logPath)
 
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
+    fs.mkdirSync(dir, { recursive: true, mode: LOG_DIR_MODE })
   }
 
   const stamped: UsageLogEntry = { v: TELEMETRY_SCHEMA_VERSION, ...entry }
   const line = JSON.stringify(stamped) + '\n'
-  fs.appendFileSync(logPath, line, 'utf-8')
+  fs.appendFileSync(logPath, line, { encoding: 'utf-8', mode: LOG_FILE_MODE })
+}
+
+// --- Rotation ---
+
+/**
+ * Rotation threshold. The log grew ~3.7MB in 24 days on the dogfooding rig
+ * (~250MB/yr unrotated); pruning.ts prevents unbounded growth for every
+ * other store file, and this closes the usage.log gap.
+ */
+export const USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024
+
+/**
+ * Archives usage.log to usage-YYYY-MM-DD[-n].log once it exceeds the size
+ * threshold. Archives are preserved, never deleted — external eval
+ * consumers read the raw log history. Called from the Stop hook's prune
+ * step; concurrent callers race benignly (rename is atomic, the loser's
+ * rename fails and is swallowed as already-rotated).
+ */
+export function rotateUsageLogIfNeeded(
+  maxBytes: number = USAGE_LOG_ROTATE_BYTES
+): boolean {
+  const logPath = path.join(globalTomDir(), 'usage.log')
+  try {
+    if (fs.statSync(logPath).size <= maxBytes) {
+      return false
+    }
+  } catch {
+    return false // No log yet.
+  }
+
+  const day = new Date().toISOString().slice(0, 10)
+  let archivePath = path.join(globalTomDir(), `usage-${day}.log`)
+  for (let n = 1; fs.existsSync(archivePath); n++) {
+    archivePath = path.join(globalTomDir(), `usage-${day}-${n}.log`)
+  }
+  try {
+    fs.renameSync(logPath, archivePath)
+  } catch {
+    return false // A concurrent rotation won — the log is already fresh.
+  }
+  logUsage({
+    timestamp: new Date().toISOString(),
+    operation: 'usage-log-rotated',
+    model: 'none',
+    tokenCount: 0,
+    detail: { archive: path.basename(archivePath) },
+  })
+  return true
 }
 
 /**

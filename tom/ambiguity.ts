@@ -33,7 +33,11 @@ const THRESHOLD_VALUES: Readonly<Record<AmbiguityThreshold, number>> = {
 }
 
 const FILE_PATH_PATTERN = /(?:\/[\w.-]+)+(?:\.\w+)?/
+/** Inline code or an extension-suffixed token anchors a prompt as much as a path. */
+const INLINE_CODE_PATTERN = /`[^`]+`/
+const FILE_TOKEN_PATTERN = /\b[\w-]+\.(?:ts|tsx|js|jsx|mjs|py|go|rs|java|kt|rb|c|h|cpp|cs|php|swift|md|json|yaml|yml|toml|sh|sql)\b/
 const SHORT_MESSAGE_WORD_LIMIT = 10
+const VERY_SHORT_WORD_LIMIT = 5
 
 /** Keywords that indicate preference-sensitive decisions */
 const PREFERENCE_KEYWORDS = [
@@ -108,62 +112,78 @@ export function detectAmbiguity(input: DetectAmbiguityInput): AmbiguityResult {
     triggers.push('no-user-model')
   }
 
-  const clampedScore = Math.min(totalScore, 1.0)
+  // Round BEFORE comparing: weight sums accumulate float error
+  // (0.4 + 0.15 + 0.15 = 0.7000000000000001), and the threshold decision
+  // must agree with the score the telemetry reports.
+  const clampedScore = Math.round(Math.min(totalScore, 1.0) * 100) / 100
   const reason = reasons.length > 0
     ? reasons.join('; ')
     : 'No ambiguity detected'
 
   return {
     isAmbiguous: clampedScore > thresholdValue,
-    score: Math.round(clampedScore * 100) / 100,
+    score: clampedScore,
     reason,
     triggers,
   }
 }
 
 /**
- * Scores short/vague prompts: <10 words without explicit file paths,
- * plus vague keywords ("fix", "improve", ...).
- * Returns 0-0.35 contribution to ambiguity score.
+ * Whole-word keyword matching. The previous substring form matched 'do'
+ * inside 'download' and 'style' inside 'stylesheet', inflating noise while
+ * the score weights were too small to ever cross a threshold anyway.
+ */
+function countKeywordMatches(prompt: string, keywords: readonly string[]): number {
+  const words = new Set(prompt.toLowerCase().split(/[^a-z0-9_]+/))
+  return keywords.filter((kw) => words.has(kw)).length
+}
+
+function hasCodeAnchor(prompt: string): boolean {
+  return (
+    FILE_PATH_PATTERN.test(prompt) ||
+    INLINE_CODE_PATTERN.test(prompt) ||
+    FILE_TOKEN_PATTERN.test(prompt)
+  )
+}
+
+/**
+ * Scores short prompts without a concrete anchor (file path, inline code,
+ * or a file-looking token).
+ *
+ * Calibration: the previous weights (0.15 pathless + 0.1/vague keyword,
+ * capped 0.35) summed with every other signal to at most 0.6 with a user
+ * model present, and required a prompt shape that never occurred — 5,128
+ * logged prompts produced zero consultations at the 0.5 medium threshold.
+ * These weights make a genuinely short, unanchored prompt (base 0.4, +0.15
+ * when under 5 words, +0.15 with a vague verb) cross medium on its own.
+ * Returns 0-0.7.
  */
 function scoreShortVagueInstruction(prompt: string): number {
-  if (prompt.length === 0) return 0.2
+  if (prompt.trim().length === 0) return 0.2
 
-  const words = prompt.trim().split(/\s+/)
-  const wordCount = words.length
-  const hasFilePath = FILE_PATH_PATTERN.test(prompt)
-
+  const wordCount = prompt.trim().split(/\s+/).length
   if (wordCount >= SHORT_MESSAGE_WORD_LIMIT) return 0
+  if (hasCodeAnchor(prompt)) return 0
 
-  let score = 0
-
-  // Short prompt without an explicit file path
-  if (!hasFilePath) {
+  let score = 0.4
+  if (wordCount < VERY_SHORT_WORD_LIMIT) {
     score += 0.15
   }
-
-  // Check for vague keywords
-  const lowerPrompt = prompt.toLowerCase()
-  const vagueCount = VAGUE_KEYWORDS.filter((kw) => lowerPrompt.includes(kw)).length
-  if (vagueCount > 0) {
-    score += Math.min(vagueCount * 0.1, 0.2)
+  if (countKeywordMatches(prompt, VAGUE_KEYWORDS) > 0) {
+    score += 0.15
   }
-
   return score
 }
 
 /**
  * Scores preference-sensitive vocabulary in the prompt
- * (style, architecture, library, framework, ...).
- * Returns 0-0.25 contribution to ambiguity score.
+ * (style, architecture, library, framework, ...), whole-word matched.
+ * Returns 0 or 0.2-0.3.
  */
 function scorePreferenceSensitive(prompt: string): number {
-  const lowerPrompt = prompt.toLowerCase()
-  const matchCount = PREFERENCE_KEYWORDS.filter((kw) => lowerPrompt.includes(kw)).length
-
+  const matchCount = countKeywordMatches(prompt, PREFERENCE_KEYWORDS)
   if (matchCount === 0) return 0
-
-  return Math.min(matchCount * 0.08, 0.25)
+  return Math.min(0.1 + matchCount * 0.1, 0.3)
 }
 
 /**

@@ -26,6 +26,7 @@ import * as os from 'node:os'
 import type { PreferenceCluster, UserModel } from './schemas.js'
 import type { DerivabilityGate } from './promotion-gate.js'
 import { isLegacyGenericKey } from './preferences.js'
+import { sanitizeForInjection } from './render-guard.js'
 import { logUsage } from './routing.js'
 
 // --- Markers ---
@@ -57,6 +58,28 @@ export interface PromotionConfig {
   readonly enabled: boolean
   readonly threshold: number
   readonly minSessions: number
+  /**
+   * Hysteresis floor: an already-promoted preference stays promoted until
+   * its confidence falls below this (not the entry threshold). Promotion
+   * is documented as durable; without the gap, boundary churn at the
+   * entry threshold flapped blocks in and out of CLAUDE.md within hours.
+   */
+  readonly retireThreshold: number
+}
+
+/**
+ * How long a derivability-gate rejection stays authoritative for an
+ * unchanged value before the candidate may be re-judged.
+ */
+const GATE_REJECTION_TTL_DAYS = 30
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+function hasFreshGateRejection(pref: PreferenceCluster): boolean {
+  if (pref.gateRejectedValue !== pref.value || pref.gateRejectedAt === undefined) {
+    return false
+  }
+  const ageMs = Date.now() - Date.parse(pref.gateRejectedAt)
+  return Number.isFinite(ageMs) && ageMs < GATE_REJECTION_TTL_DAYS * MS_PER_DAY
 }
 
 // --- Selection ---
@@ -74,9 +97,12 @@ const PROMOTABLE_CATEGORIES: ReadonlySet<string> = new Set([
 /**
  * Selects preferences stable enough to promote: an eligible category,
  * confidence >= threshold, AND sessionCount >= minSessions.
- * Already-promoted preferences remain selected so the regenerated block
- * keeps carrying them. The result is priority-ordered: correction-derived
- * first (non-obvious by construction), then confidence × sessions.
+ * Already-promoted preferences get hysteresis instead of the entry gate:
+ * they remain selected until confidence falls below retireThreshold, so
+ * the "durable memory" contract survives boundary churn while explicit
+ * corrections (which halve confidence) still retire them promptly.
+ * The result is priority-ordered: correction-derived first (non-obvious
+ * by construction), then confidence × sessions.
  */
 export function selectPromotable(
   userModel: UserModel,
@@ -89,8 +115,10 @@ export function selectPromotable(
         // Legacy generic keys ('preference'/'pattern') are collapsed noise —
         // never promote them into a CLAUDE.md marker block.
         !isLegacyGenericKey(p.key) &&
-        p.confidence >= config.threshold &&
-        p.sessionCount >= config.minSessions
+        (p.promoted === true
+          ? p.confidence >= config.retireThreshold
+          : p.confidence >= config.threshold &&
+            p.sessionCount >= config.minSessions)
     )
     .sort((a, b) => {
       const aCorrection = a.learnedVia === 'correction' ? 1 : 0
@@ -109,14 +137,21 @@ export function selectPromotable(
 // --- Rendering ---
 
 function renderPreferenceLine(pref: PreferenceCluster): string {
+  // Render-boundary sanitization: these strings are LLM-extracted from
+  // attacker-influenceable session content and land in persistent
+  // instruction space — flatten newlines, neutralize marker sequences,
+  // cap length (see render-guard.ts).
+  const key = sanitizeForInjection(pref.key)
+  const value = sanitizeForInjection(pref.value)
+  const category = sanitizeForInjection(pref.category)
   const sessions = pref.sessionCount === 1 ? '1 session' : `${pref.sessionCount} sessions`
   if (pref.learnedVia === 'correction') {
     // The negative surface is the valuable half: what the agent got wrong.
     return pref.correctedFrom !== undefined
-      ? `- Avoid ${pref.correctedFrom} for ${pref.key}; use ${pref.value} instead (user corrected this; ${sessions})`
-      : `- ${pref.key}: ${pref.value} (learned via user correction; ${sessions})`
+      ? `- Avoid ${sanitizeForInjection(pref.correctedFrom)} for ${key}; use ${value} instead (user corrected this; ${sessions})`
+      : `- ${key}: ${value} (learned via user correction; ${sessions})`
   }
-  return `- Prefers ${pref.value} (${pref.category}/${pref.key}; observed across ${sessions})`
+  return `- Prefers ${value} (${category}/${key}; observed across ${sessions})`
 }
 
 /**
@@ -145,14 +180,40 @@ export function renderPromotionBlock(prefs: readonly PreferenceCluster[]): strin
 // --- Marker-Bounded Writing ---
 
 /**
+ * Atomically replaces a memory file's content, preserving its existing
+ * mode (CLAUDE.md is a user-facing file — never chmod it to the tom
+ * store's 0600). The temp name is stable and hidden, so a crashed write
+ * leaves at most one dotfile that the next successful write reclaims.
+ */
+function atomicWriteMemoryFile(filePath: string, data: string): void {
+  let mode = 0o644
+  try {
+    mode = fs.statSync(filePath).mode & 0o777
+  } catch {
+    // New file: default user-facing mode.
+  }
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.tom-swe.${path.basename(filePath)}.tmp`
+  )
+  fs.writeFileSync(tempPath, data, { encoding: 'utf-8', mode })
+  fs.renameSync(tempPath, filePath)
+}
+
+/**
  * Regenerates the marker-bounded section of an EXISTING file wholesale:
  * replaces the block when markers are present, appends (with a separating
  * newline) when absent. All other file content is left untouched.
  *
+ * Idempotent: returns false without writing when the regenerated content
+ * is byte-identical (the common case — the block was rewritten 452 times
+ * in 24 days with no change, each a truncate-then-stream on a file every
+ * session start reads).
+ *
  * Throws when the file does not exist — creation policy (and its logging)
  * belongs to the caller, never to this projection step.
  */
-export function writePromotionBlock(filePath: string, block: string): void {
+export function writePromotionBlock(filePath: string, block: string): boolean {
   const content = fs.readFileSync(filePath, 'utf-8')
 
   const beginIdx = content.indexOf(PROMOTION_BEGIN_MARKER)
@@ -171,7 +232,11 @@ export function writePromotionBlock(filePath: string, block: string): void {
     updated = content + separator + block + '\n'
   }
 
-  fs.writeFileSync(filePath, updated, 'utf-8')
+  if (updated === content) {
+    return false
+  }
+  atomicWriteMemoryFile(filePath, updated)
+  return true
 }
 
 /**
@@ -208,7 +273,7 @@ export function removePromotionBlock(filePath: string): boolean {
     beforeBegin -= 1
   }
 
-  fs.writeFileSync(filePath, content.slice(0, beforeBegin) + content.slice(afterEnd), 'utf-8')
+  atomicWriteMemoryFile(filePath, content.slice(0, beforeBegin) + content.slice(afterEnd))
   return true
 }
 
@@ -247,9 +312,13 @@ function isProjectScoped(pref: PreferenceCluster): boolean {
 export interface PromotionResult {
   /** User model with promoted flags set/cleared (the store stays canonical). */
   readonly model: UserModel
-  /** Preferences actually written to a memory file in this run. */
+  /** Preferences projected into a memory file's block in this run. */
   readonly promoted: readonly PreferenceCluster[]
-  /** Memory files whose marker blocks were regenerated or removed. */
+  /**
+   * Memory files whose content actually CHANGED this run (block written or
+   * removed). Idempotent regenerations don't appear — telemetry keys on
+   * this, so a stable block no longer logs a promotion event per Stop.
+   */
   readonly targets: readonly string[]
   /** Files created as a side effect (already logged, never silent). */
   readonly createdFiles: readonly string[]
@@ -262,7 +331,8 @@ function prefIdentity(pref: PreferenceCluster): string {
 /**
  * Regenerates one target's marker block from the promotable set.
  * An empty set removes the block (retirement to zero); the block is always
- * a wholesale projection of the current store, never an edit.
+ * a wholesale projection of the current store, never an edit. Returns
+ * whether the file's content actually changed.
  */
 function projectBlockOntoFile(
   filePath: string,
@@ -271,8 +341,7 @@ function projectBlockOntoFile(
   if (prefs.length === 0) {
     return removePromotionBlock(filePath)
   }
-  writePromotionBlock(filePath, renderPromotionBlock(prefs))
-  return true
+  return writePromotionBlock(filePath, renderPromotionBlock(prefs))
 }
 
 /**
@@ -310,26 +379,44 @@ function logSkipped(
   })
 }
 
+interface GatedCandidates {
+  readonly eligible: PreferenceCluster[]
+  /**
+   * Candidates the gate actively judged derivable THIS run. Rejections
+   * from an unavailable gate are excluded — unavailability is not a
+   * verdict, and persisting it would wrongly cache a non-judgment.
+   */
+  readonly newlyRejected: readonly PreferenceCluster[]
+}
+
 /**
  * Applies the per-target gates to a priority-ordered candidate list:
  * 1. Derivability (project targets only, via the model gate): new
  *    observation-derived candidates must state something the repo doesn't;
- *    correction-derived and already-promoted entries bypass.
+ *    correction-derived and already-promoted entries bypass, as do
+ *    candidates whose unchanged value carries a fresh persisted rejection
+ *    (one candidate used to be re-judged 64 times — each an LLM spawn).
  *    Gate unavailable (null) → conservative: only corrections pass.
  * 2. Host-file line budget: a file already over ~200 lines accepts no NEW
  *    entries (existing ones keep regenerating so retirement still works).
  * 3. Block cap: at most MAX_BLOCK_PREFERENCES lines, priority-ordered.
- * Every drop is logged — silent truncation reads as coverage.
+ * Every drop is logged — silent truncation reads as coverage. (A fresh
+ * persisted rejection was logged when it happened; re-logging it every
+ * Stop is the noise this cache removes.)
  */
 function applyTargetGates(
   prefs: readonly PreferenceCluster[],
   target: string,
   gate: DerivabilityGate | null,
   applyDerivability: boolean
-): PreferenceCluster[] {
+): GatedCandidates {
   let eligible = [...prefs]
+  let newlyRejected: readonly PreferenceCluster[] = []
 
   if (applyDerivability) {
+    eligible = eligible.filter(
+      (p) => p.promoted === true || p.learnedVia === 'correction' || !hasFreshGateRejection(p)
+    )
     const needsJudgment = eligible.filter(
       (p) => p.promoted !== true && p.learnedVia !== 'correction'
     )
@@ -353,6 +440,7 @@ function applyTargetGates(
           rejected
         )
       }
+      newlyRejected = verdict !== null ? rejected : []
       const rejectedIds = new Set(rejected.map(prefIdentity))
       eligible = eligible.filter((p) => !rejectedIds.has(prefIdentity(p)))
     }
@@ -371,7 +459,7 @@ function applyTargetGates(
     eligible = eligible.slice(0, MAX_BLOCK_PREFERENCES)
   }
 
-  return eligible
+  return { eligible, newlyRejected }
 }
 
 /**
@@ -400,22 +488,24 @@ export function runPromotion(
   const targets: string[] = []
   const createdFiles: string[] = []
   const written: PreferenceCluster[] = []
+  const newlyRejected: PreferenceCluster[] = []
 
   // Project scope: only project onto a CLAUDE.md that already exists.
   const projectFile = findProjectMemoryFile(cwd)
   if (projectFile !== null) {
-    const projectPrefs = applyTargetGates(projectCandidates, projectFile, gate, true)
-    if (projectBlockOntoFile(projectFile, projectPrefs)) {
+    const gated = applyTargetGates(projectCandidates, projectFile, gate, true)
+    if (projectBlockOntoFile(projectFile, gated.eligible)) {
       targets.push(projectFile)
     }
-    written.push(...projectPrefs)
+    written.push(...gated.eligible)
+    newlyRejected.push(...gated.newlyRejected)
   }
 
   // Global scope: create ~/.claude/CLAUDE.md only when ~/.claude exists,
   // and log the creation. No derivability gate here — interaction style is
   // never written down in a repository.
   const globalFile = globalMemoryFilePath()
-  const globalPrefs = applyTargetGates(globalCandidates, globalFile, gate, false)
+  const globalPrefs = applyTargetGates(globalCandidates, globalFile, gate, false).eligible
   let globalFileAvailable = fs.existsSync(globalFile)
   if (!globalFileAvailable && globalPrefs.length > 0 && fs.existsSync(path.dirname(globalFile))) {
     fs.writeFileSync(globalFile, '', 'utf-8')
@@ -437,16 +527,30 @@ export function runPromotion(
     written.push(...globalPrefs)
   }
 
+  // Flag lifecycle is scope-local: a Stop from a cwd WITHOUT a CLAUDE.md
+  // never projected the project scope, so project-scoped promoted flags
+  // must survive — their lines still live in the owning repo's file.
+  // Clearing them from here caused double injection and re-gating (and an
+  // extra LLM spawn) back in the owning repo.
+  const projectProjected = projectFile !== null
+  const globalProjected = globalFileAvailable
+  const nowIso = new Date().toISOString()
   const writtenIds = new Set(written.map(prefIdentity))
+  const rejectedIds = new Set(newlyRejected.map(prefIdentity))
   const updatedClusters = userModel.preferencesClusters.map((p) => {
-    if (writtenIds.has(prefIdentity(p))) {
-      return { ...p, promoted: true }
+    // Persist active gate verdicts so unchanged values skip re-judgment.
+    const cluster = rejectedIds.has(prefIdentity(p))
+      ? { ...p, gateRejectedValue: p.value, gateRejectedAt: nowIso }
+      : p
+    if (writtenIds.has(prefIdentity(cluster))) {
+      return { ...cluster, promoted: true }
     }
-    if (p.promoted === true) {
-      const { promoted: _retired, ...rest } = p
+    const scopeProjected = isProjectScoped(cluster) ? projectProjected : globalProjected
+    if (cluster.promoted === true && scopeProjected) {
+      const { promoted: _retired, ...rest } = cluster
       return rest
     }
-    return p
+    return cluster
   })
 
   return {

@@ -15,6 +15,58 @@ function makeInput(overrides: Partial<DetectAmbiguityInput> = {}): DetectAmbigui
 }
 
 describe('detectAmbiguity', () => {
+  describe('gate reachability (recalibration regression)', () => {
+    // The original weights never crossed the medium threshold in 5,128
+    // logged prompts — the subsystem was silently dead. These pin the
+    // shapes that MUST fire (and the ones that must not).
+    it('fires at medium for a short vague prompt with a user model', () => {
+      const result = detectAmbiguity(makeInput({
+        prompt: 'fix the tests',
+        threshold: 'medium',
+        hasUserModel: true,
+      }))
+      expect(result.isAmbiguous).toBe(true)
+    })
+
+    it('fires at medium for a short preference-flavored prompt', () => {
+      const result = detectAmbiguity(makeInput({
+        prompt: 'improve error handling here',
+        threshold: 'medium',
+        hasUserModel: true,
+      }))
+      expect(result.isAmbiguous).toBe(true)
+    })
+
+    it('does not fire for a short prompt anchored by a file token', () => {
+      const result = detectAmbiguity(makeInput({
+        prompt: 'fix the tests in pruning.test.ts',
+        threshold: 'medium',
+        hasUserModel: true,
+      }))
+      expect(result.isAmbiguous).toBe(false)
+    })
+
+    it('does not fire for a long specific prompt', () => {
+      const result = detectAmbiguity(makeInput({
+        prompt:
+          'read the retention logic and explain how the session models are expired relative to the decay window',
+        threshold: 'medium',
+        hasUserModel: true,
+      }))
+      expect(result.isAmbiguous).toBe(false)
+    })
+
+    it('matches keywords on word boundaries, not substrings', () => {
+      // 'do' must not match inside 'download', 'style' not in 'stylesheets'.
+      const result = detectAmbiguity(makeInput({
+        prompt: 'download all stylesheets from the marketing site homepage today please thanks',
+        threshold: 'medium',
+        hasUserModel: true,
+      }))
+      expect(result.score).toBe(0)
+    })
+  })
+
   describe('return shape', () => {
     it('returns isAmbiguous boolean, score number, and reason string', () => {
       const result = detectAmbiguity(makeInput())

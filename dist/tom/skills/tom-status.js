@@ -13837,6 +13837,23 @@ var SessionLogSchema = external_exports.strictObject({
   cwd: external_exports.string().optional(),
   gitBranch: external_exports.string().optional()
 });
+var SidecarLineSchema = external_exports.discriminatedUnion("type", [
+  external_exports.strictObject({
+    type: external_exports.literal("interaction"),
+    toolName: external_exports.string(),
+    parameterShape: external_exports.record(external_exports.string(), external_exports.string()),
+    outcomeSummary: external_exports.string(),
+    timestamp: external_exports.string().datetime()
+  }),
+  external_exports.strictObject({
+    type: external_exports.literal("userMessage"),
+    message: external_exports.string(),
+    timestamp: external_exports.string().datetime(),
+    // cwd join field for sessions whose prompt arrives before any tool
+    // call (the stub — which normally carries it — is capture-created).
+    cwd: external_exports.string().optional()
+  })
+]);
 var SatisfactionSignalsSchema = external_exports.strictObject({
   frustration: external_exports.boolean(),
   satisfaction: external_exports.boolean(),
@@ -13874,7 +13891,14 @@ var SessionModelSchema = external_exports.strictObject({
   // When the session's evidence applies (copied mechanically from the Tier 1
   // log; never produced by the LLM). Grounds decay during Tier 3 rebuilds.
   // Optional for session models written before rebuilds existed.
-  endedAt: external_exports.string().datetime().optional()
+  endedAt: external_exports.string().datetime().optional(),
+  // Watermark: how many redacted userMessages the Tier 1 log carried when
+  // this model was extracted (stamped mechanically, never LLM-produced).
+  // Re-analysis is gated on growth past this count — user messages are the
+  // analyzer's primary evidence, so an unchanged count means nothing new to
+  // learn. Advances only on successful extraction, so a failed analysis
+  // stays retryable. Optional for models written before the watermark.
+  analyzedUserMessageCount: external_exports.number().int().min(0).optional()
 });
 var PreferenceClusterSchema = external_exports.strictObject({
   category: external_exports.string(),
@@ -13893,7 +13917,14 @@ var PreferenceClusterSchema = external_exports.strictObject({
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional()
+  correctedFrom: external_exports.string().optional(),
+  // Persisted derivability-gate rejection: the exact value the gate judged
+  // statically derivable, and when. While the value is unchanged and the
+  // verdict fresh, the candidate skips re-judgment (each judgment is an
+  // agentic LLM spawn; one candidate was re-judged 64 times before this).
+  // Carried across rebuilds like `promoted`. Optional for older models.
+  gateRejectedValue: external_exports.string().optional(),
+  gateRejectedAt: external_exports.string().datetime().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13984,50 +14015,15 @@ function readUserModel(scope = "merged") {
 }
 
 // tom/config.ts
-var fs3 = __toESM(require("node:fs"));
-var path3 = __toESM(require("node:path"));
-var os2 = __toESM(require("node:os"));
-var TomConfigSchema = external_exports.strictObject({
-  enabled: external_exports.boolean().default(false),
-  consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
-  models: external_exports.strictObject({
-    memoryUpdate: external_exports.string().default("haiku"),
-    consultation: external_exports.string().default("sonnet")
-  }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
-  preferenceDecayDays: external_exports.number().default(30),
-  maxSessionsRetained: external_exports.number().default(100),
-  // Confidence multiplier applied to a stored preference when a session
-  // correction contradicts it (post-action feedback). Corrections cut
-  // confidence faster than repetition builds it.
-  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
-  // Promotion lifecycle: stable high-confidence preferences graduate from
-  // per-session injection into durable CLAUDE.md marker blocks and are
-  // retired from injection (candidate → promoted → retired, simplified).
-  promotion: external_exports.strictObject({
-    enabled: external_exports.boolean().default(true),
-    threshold: external_exports.number().min(0).max(1).default(0.8),
-    minSessions: external_exports.number().int().min(1).default(5)
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5 })
-});
-function readTomConfig() {
-  try {
-    const configPath = path3.join(os2.homedir(), ".claude", "tom", "config.json");
-    const content = fs3.readFileSync(configPath, "utf-8");
-    const raw = JSON.parse(content);
-    const result = TomConfigSchema.safeParse(raw);
-    if (result.success) {
-      return result.data;
-    }
-    return TomConfigSchema.parse({});
-  } catch {
-    return TomConfigSchema.parse({});
-  }
-}
-
-// tom/routing.ts
 var fs4 = __toESM(require("node:fs"));
 var path4 = __toESM(require("node:path"));
 var os3 = __toESM(require("node:os"));
+
+// tom/routing.ts
+var fs3 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os2 = __toESM(require("node:os"));
+var TELEMETRY_SCHEMA_VERSION = 1;
 var UsageLogEntrySchema = external_exports.looseObject({
   v: external_exports.number().optional(),
   timestamp: external_exports.string(),
@@ -14039,11 +14035,24 @@ var UsageLogEntrySchema = external_exports.looseObject({
   reason: external_exports.string().optional(),
   detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
 });
+var LOG_DIR_MODE = 448;
+var LOG_FILE_MODE = 384;
+function logUsage(entry) {
+  const logPath = path3.join(globalTomDir(), "usage.log");
+  const dir = path3.dirname(logPath);
+  if (!fs3.existsSync(dir)) {
+    fs3.mkdirSync(dir, { recursive: true, mode: LOG_DIR_MODE });
+  }
+  const stamped = { v: TELEMETRY_SCHEMA_VERSION, ...entry };
+  const line = JSON.stringify(stamped) + "\n";
+  fs3.appendFileSync(logPath, line, { encoding: "utf-8", mode: LOG_FILE_MODE });
+}
+var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
 function readUsageLog() {
-  const logPath = path4.join(globalTomDir(), "usage.log");
+  const logPath = path3.join(globalTomDir(), "usage.log");
   let content;
   try {
-    content = fs4.readFileSync(logPath, "utf-8");
+    content = fs3.readFileSync(logPath, "utf-8");
   } catch {
     return { entries: [], invalidLines: 0 };
   }
@@ -14065,6 +14074,69 @@ function readUsageLog() {
     }
   }
   return { entries, invalidLines };
+}
+
+// tom/config.ts
+var TomConfigSchema = external_exports.strictObject({
+  enabled: external_exports.boolean().default(false),
+  consultThreshold: external_exports.enum(["low", "medium", "high"]).default("medium"),
+  models: external_exports.strictObject({
+    memoryUpdate: external_exports.string().default("haiku"),
+    consultation: external_exports.string().default("sonnet")
+  }).default({ memoryUpdate: "haiku", consultation: "sonnet" }),
+  preferenceDecayDays: external_exports.number().default(30),
+  maxSessionsRetained: external_exports.number().default(100),
+  // Confidence multiplier applied to a stored preference when a session
+  // correction contradicts it (post-action feedback). Corrections cut
+  // confidence faster than repetition builds it.
+  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
+  // Promotion lifecycle: stable high-confidence preferences graduate from
+  // per-session injection into durable CLAUDE.md marker blocks and are
+  // retired from injection (candidate → promoted → retired, simplified).
+  promotion: external_exports.strictObject({
+    enabled: external_exports.boolean().default(true),
+    threshold: external_exports.number().min(0).max(1).default(0.8),
+    minSessions: external_exports.number().int().min(1).default(5),
+    // Hysteresis: an already-promoted preference retires only when its
+    // confidence falls below this floor (a correction halves confidence,
+    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
+    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
+    // promotions in and out of CLAUDE.md within hours.
+    retireThreshold: external_exports.number().min(0).max(1).default(0.45)
+  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 })
+});
+function logInvalidConfig(reason) {
+  try {
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "config-invalid",
+      model: "none",
+      tokenCount: 0,
+      reason: reason.slice(0, 500)
+    });
+  } catch {
+  }
+}
+function readTomConfig() {
+  const configPath = path4.join(os3.homedir(), ".claude", "tom", "config.json");
+  let content;
+  try {
+    content = fs4.readFileSync(configPath, "utf-8");
+  } catch {
+    return TomConfigSchema.parse({});
+  }
+  try {
+    const raw = JSON.parse(content);
+    const result = TomConfigSchema.safeParse(raw);
+    if (result.success) {
+      return result.data;
+    }
+    logInvalidConfig(result.error.message);
+    return TomConfigSchema.parse({});
+  } catch (error48) {
+    logInvalidConfig(error48 instanceof Error ? error48.message : String(error48));
+    return TomConfigSchema.parse({});
+  }
 }
 
 // tom/telemetry.ts
@@ -14101,11 +14173,22 @@ function countByDetailString(entries, key) {
   }
   return counts;
 }
-function computeTelemetrySummary(entries, invalidLines = 0) {
+function computeTelemetrySummary(entries, invalidLines = 0, now = /* @__PURE__ */ new Date()) {
   const byOp = (op) => entries.filter((e) => e.operation === op);
   const llm = byOp("session-analysis");
   const fallback = byOp("session-analysis-fallback");
-  const analysisDurations = durations([...llm, ...fallback]);
+  const llmDurations = durations(llm);
+  const fallbackDurations = durations(fallback);
+  const windowCounts = (windowMs) => {
+    const cutoff = new Date(now.getTime() - windowMs).toISOString();
+    return {
+      llmRuns: llm.filter((e) => e.timestamp >= cutoff).length,
+      fallbackRuns: fallback.filter((e) => e.timestamp >= cutoff).length
+    };
+  };
+  const gates = byOp("derivability-gate");
+  const gateOutcome = countByDetailString(gates, "outcome");
+  const gateTokens = gates.reduce((sum, e) => sum + e.tokenCount, 0);
   const promptHook = byOp("prompt-hook");
   const promptDurations = durations(promptHook);
   const consultations = byOp("ambiguity-consultation");
@@ -14114,10 +14197,14 @@ function computeTelemetrySummary(entries, invalidLines = 0) {
   const injectionChars = injections.map((e) => detailNumber(e, "chars")).filter((c) => c !== null);
   const corrections = byOp("preference-correction");
   const promotions = byOp("preference-promotion");
-  const usageEntries = byOp("session-usage");
+  const usageBySession = /* @__PURE__ */ new Map();
+  for (const e of byOp("session-usage")) {
+    usageBySession.set(e.sessionId ?? "", e);
+  }
+  const usageEntries = [...usageBySession.values()];
   const sumDetail = (key) => usageEntries.reduce((sum, e) => sum + (detailNumber(e, key) ?? 0), 0);
   const hostInOut = sumDetail("inputTokens") + sumDetail("outputTokens");
-  const tomTokens = llm.reduce((sum, e) => sum + e.tokenCount, 0);
+  const tomTokens = llm.reduce((sum, e) => sum + e.tokenCount, 0) + gateTokens;
   return {
     totalEntries: entries.length,
     invalidLines,
@@ -14125,9 +14212,18 @@ function computeTelemetrySummary(entries, invalidLines = 0) {
       llmRuns: llm.length,
       fallbackRuns: fallback.length,
       fallbackReasons: countByDetailString(fallback, "failure"),
-      avgDurationMs: average(analysisDurations),
-      maxDurationMs: analysisDurations.length > 0 ? Math.max(...analysisDurations) : null,
-      totalTokens: llm.reduce((sum, e) => sum + e.tokenCount, 0)
+      avgDurationMs: average(llmDurations),
+      maxDurationMs: llmDurations.length > 0 ? Math.max(...llmDurations) : null,
+      fallbackAvgDurationMs: average(fallbackDurations),
+      totalTokens: llm.reduce((sum, e) => sum + e.tokenCount, 0),
+      last24h: windowCounts(24 * 60 * 60 * 1e3),
+      last7d: windowCounts(7 * 24 * 60 * 60 * 1e3)
+    },
+    gate: {
+      count: gates.length,
+      okCount: gateOutcome["ok"] ?? 0,
+      unavailableCount: gateOutcome["unavailable"] ?? 0,
+      totalTokens: gateTokens
     },
     promptHook: {
       count: promptHook.length,
@@ -14178,16 +14274,30 @@ function formatTelemetry(summary) {
   const a = summary.analysis;
   const analysisRuns = a.llmRuns + a.fallbackRuns;
   if (analysisRuns > 0) {
+    const rate = (w) => {
+      const total = w.llmRuns + w.fallbackRuns;
+      if (total === 0) return "no runs";
+      return `${w.llmRuns} LLM / ${w.fallbackRuns} fallback (${Math.round(w.fallbackRuns / total * 100)}%)`;
+    };
     const fallbackPercent = Math.round(a.fallbackRuns / analysisRuns * 100);
     const reasonList = Object.entries(a.fallbackReasons).map(([reason, count]) => `${reason}\xD7${count}`).join(", ");
     lines.push(
-      `- Session analysis: ${a.llmRuns} LLM / ${a.fallbackRuns} fallback (${fallbackPercent}%)` + (reasonList ? ` [${reasonList}]` : "")
+      `- Session analysis (lifetime): ${a.llmRuns} LLM / ${a.fallbackRuns} fallback (${fallbackPercent}%)` + (reasonList ? ` [${reasonList}]` : "")
     );
-    if (a.avgDurationMs !== null) {
+    lines.push(`- Session analysis (24h): ${rate(a.last24h)}; (7d): ${rate(a.last7d)}`);
+    if (a.avgDurationMs !== null || a.fallbackAvgDurationMs !== null) {
+      const llmPart = a.avgDurationMs !== null ? `LLM avg ${a.avgDurationMs}ms, max ${a.maxDurationMs}ms` : "no successful LLM runs";
+      const fallbackPart = a.fallbackAvgDurationMs !== null ? `; fallback avg ${a.fallbackAvgDurationMs}ms` : "";
       lines.push(
-        `- Analysis duration: avg ${a.avgDurationMs}ms, max ${a.maxDurationMs}ms; total tokens: ${a.totalTokens}`
+        `- Analysis duration: ${llmPart}${fallbackPart}; total tokens: ${a.totalTokens}`
       );
     }
+  }
+  const g = summary.gate;
+  if (g.count > 0) {
+    lines.push(
+      `- Derivability gate: ${g.count} spawns (ok\xD7${g.okCount}, unavailable\xD7${g.unavailableCount}); tokens: ${g.totalTokens}`
+    );
   }
   if (summary.promptHook.count > 0) {
     lines.push(
@@ -14209,7 +14319,7 @@ function formatTelemetry(summary) {
   const u = summary.sessionUsage;
   if (u.sessions > 0) {
     lines.push(
-      `- Host sessions: ${u.sessions} measured; in ${u.inputTokens} / out ${u.outputTokens} (cache: +${u.cacheCreationTokens} created, ${u.cacheReadTokens} read)`
+      `- Host sessions: ${u.sessions} distinct measured; in ${u.inputTokens} / out ${u.outputTokens} (cache: +${u.cacheCreationTokens} created, ${u.cacheReadTokens} read)`
     );
     if (u.tomShareOfInOutPercent !== null) {
       lines.push(
@@ -14240,6 +14350,7 @@ function formatTelemetry(summary) {
 var fs5 = __toESM(require("node:fs"));
 var path5 = __toESM(require("node:path"));
 var os4 = __toESM(require("node:os"));
+var MS_PER_DAY = 24 * 60 * 60 * 1e3;
 function globalMemoryFilePath() {
   return path5.join(os4.homedir(), ".claude", "CLAUDE.md");
 }
@@ -14264,6 +14375,16 @@ function countJsonFiles(dirPath) {
     return 0;
   }
 }
+function countSessions(dirPath) {
+  try {
+    const ids = new Set(
+      fs6.readdirSync(dirPath).filter((e) => e.endsWith(".json") || e.endsWith(".jsonl")).map((e) => e.replace(/\.jsonl?$/, ""))
+    );
+    return ids.size;
+  } catch {
+    return 0;
+  }
+}
 function getFileSize(filePath) {
   try {
     const stat = fs6.statSync(filePath);
@@ -14280,7 +14401,7 @@ function getStorageStats() {
   const globalUserModelFile = path6.join(globalTomDir(), "user-model.json");
   const projectUserModelFile = path6.join(projectTomDir(), "user-model.json");
   return {
-    tier1SessionCount: countJsonFiles(globalSessions) + countJsonFiles(projectSessions),
+    tier1SessionCount: countSessions(globalSessions) + countSessions(projectSessions),
     tier2ModelCount: countJsonFiles(globalModels) + countJsonFiles(projectModels),
     tier3SizeBytes: getFileSize(globalUserModelFile) + getFileSize(projectUserModelFile)
   };
@@ -14373,8 +14494,11 @@ function formatStatus(status) {
     }
     return lines.join("\n");
   }
-  lines.push("## Sessions Analyzed");
-  lines.push(`- Total: ${status.storage.tier1SessionCount}`);
+  lines.push("## Sessions");
+  lines.push(
+    `- Informing the user model (Tier 2 models): ${status.storage.tier2ModelCount}`
+  );
+  lines.push(`- Raw logs retained (Tier 1): ${status.storage.tier1SessionCount}`);
   lines.push("");
   if (status.topPreferences.length > 0) {
     lines.push("## Top Preferences (by confidence)");

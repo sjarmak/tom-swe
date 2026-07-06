@@ -60,6 +60,52 @@ describe('setup', () => {
     expect(fs.existsSync(settingsPath)).toBe(false)
   })
 
+  it('creates a fresh config with owner-only modes (700 dir / 600 file)', () => {
+    const result = setup()
+
+    expect(result.created).toBe(true)
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    expect(fs.statSync(tomDir).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(result.configPath).mode & 0o777).toBe(0o600)
+  })
+
+  it('hardens a pre-existing world-readable tom tree to 700/600', () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    const sessionsDir = path.join(tomDir, 'sessions')
+    fs.mkdirSync(sessionsDir, { recursive: true })
+    const configPath = path.join(tomDir, 'config.json')
+    const sessionFile = path.join(sessionsDir, 'session-1.json')
+    fs.writeFileSync(configPath, JSON.stringify({ enabled: true }), 'utf-8')
+    fs.writeFileSync(sessionFile, '{}', 'utf-8')
+    // Reproduce the live-bug modes explicitly (chmod is not umask-masked).
+    fs.chmodSync(tomDir, 0o775)
+    fs.chmodSync(sessionsDir, 0o775)
+    fs.chmodSync(configPath, 0o664)
+    fs.chmodSync(sessionFile, 0o664)
+
+    const result = setup()
+
+    expect(result.alreadyExists).toBe(true)
+    expect(fs.statSync(tomDir).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(sessionsDir).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(configPath).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(sessionFile).mode & 0o777).toBe(0o600)
+  })
+
+  it('does not follow symlinks while hardening', () => {
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.writeFileSync(path.join(tomDir, 'config.json'), '{}', 'utf-8')
+    const outside = path.join(tempDir, 'outside.txt')
+    fs.writeFileSync(outside, 'x', 'utf-8')
+    fs.chmodSync(outside, 0o644)
+    fs.symlinkSync(outside, path.join(tomDir, 'link'))
+
+    setup()
+
+    expect(fs.statSync(outside).mode & 0o777).toBe(0o644)
+  })
+
   it('returns an error result when the config cannot be written', () => {
     // Make ~/.claude/tom an unwritable *file* so mkdir/write fails
     const claudeDir = path.join(tempDir, '.claude')

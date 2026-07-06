@@ -111,8 +111,10 @@ describe('consultToM', () => {
     expect(result.ambiguityResult.isAmbiguous).toBe(true)
   })
 
-  it('generates suggestion from BM25 search when index matches the prompt', () => {
+  it('generates suggestion from BM25 search when the user model has nothing to say', () => {
     writeBm25Index(tempDir)
+    // All prefs promoted: the (primary) user-model builder skips them to
+    // avoid double-injection, so consultation falls back to BM25 provenance.
     writeUserModel(tempDir, [{
       category: 'codingPreferences',
       key: 'language',
@@ -120,6 +122,7 @@ describe('consultToM', () => {
       confidence: 0.8,
       lastUpdated: '2026-02-02T10:00:00.000Z',
       sessionCount: 5,
+      promoted: true,
     }])
 
     const result = consultToM('fix the typescript style', 'low', 's1')
@@ -317,7 +320,16 @@ describe('consultToM', () => {
   })
 
   it('uses the provided threshold', () => {
-    // With high threshold, a vague prompt alone should not trigger
+    // A user model exists, so the no-model bonus doesn't apply: a short
+    // vague prompt alone (0.55) must not cross the high (0.7) threshold.
+    writeUserModel(tempDir, [{
+      category: 'codingPreferences',
+      key: 'language',
+      value: 'typescript',
+      confidence: 0.8,
+      lastUpdated: '2026-02-02T10:00:00.000Z',
+      sessionCount: 5,
+    }])
     const result = consultToM('check it', 'high', 's1')
     expect(result.consulted).toBe(false)
   })

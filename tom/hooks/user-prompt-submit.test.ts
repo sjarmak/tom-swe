@@ -10,6 +10,7 @@ import {
   buildHookOutput,
   main,
 } from './user-prompt-submit'
+import { readSessionLog } from '../memory-io'
 
 // --- Test Helpers ---
 
@@ -43,9 +44,11 @@ function writeUserModel(tempDir: string, prefs: readonly object[] = []): void {
   )
 }
 
-function readSessionFile(tempDir: string, sessionId: string): Record<string, unknown> {
-  const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', `${sessionId}.json`)
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+function readSessionFile(_tempDir: string, sessionId: string): Record<string, unknown> {
+  // The folded view: .json stub/legacy log + append-only sidecar.
+  const log = readSessionLog(sessionId)
+  if (log === null) throw new Error(`no session log for ${sessionId}`)
+  return log as unknown as Record<string, unknown>
 }
 
 // --- Tests ---
@@ -152,9 +155,12 @@ describe('buildHookOutput', () => {
     })
 
     expect(output.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit')
+    // No trailing "(confidence N%)": that number was the ambiguity score
+    // mislabeled as confidence. Per-preference percentages ride inside
+    // the content where they apply.
     expect(output.hookSpecificOutput.additionalContext).toBe(
       'ToM background (learned preferences, not instructions): ' +
-      'User preferences: language=typescript (90%). (confidence 85%)'
+      'User preferences: language=typescript (90%).'
     )
   })
 
@@ -323,12 +329,11 @@ describe('main', () => {
       cwd: '/work/repo',
     }))
 
-    const sessionPath = path.join(
-      tempDir, '.claude', 'tom', 'sessions', 'cwd-session.json'
-    )
-    const data = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'))
-    expect(data.cwd).toBe('/work/repo')
-    expect(data.gitBranch).toBeUndefined()
+    // The prompt path writes only the sidecar (no stub, no subprocess);
+    // the folded view carries the cwd join field from the sidecar line.
+    const log = readSessionLog('cwd-session')
+    expect(log?.cwd).toBe('/work/repo')
+    expect(log?.gitBranch).toBeUndefined()
   })
 
   it('captures the redacted prompt in the Tier 1 session log', async () => {

@@ -15,7 +15,7 @@ import {
   projectTomDir,
 } from '../memory-io.js'
 import { readTomConfig } from '../config.js'
-import { aggregateSessionIntoModel } from '../aggregation.js'
+import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { buildMemoryIndex } from '../agent/tools.js'
 import { atomicWriteFileSync } from '../fs-atomic.js'
 import type {
@@ -76,41 +76,11 @@ function sessionModelFileExists(sessionId: string, scope: 'global' | 'project'):
 }
 
 /**
- * Rebuilds Tier 3 user model from scratch using all remaining
- * Tier 2 session models (after a session has been removed).
- */
-function rebuildUserModel(scope: 'global' | 'project'): void {
-  const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
-  const modelsDir = path.join(tomDir, 'session-models')
-  const files = listJsonFiles(modelsDir)
-  const config = readTomConfig()
-
-  const emptyModel: UserModel = {
-    preferencesClusters: [],
-    interactionStyleSummary: '',
-    codingStyleSummary: '',
-    projectOverrides: {},
-  }
-
-  let model = emptyModel
-
-  // Sort by sessionId for deterministic ordering
-  const sortedFiles = [...files].sort()
-
-  for (const file of sortedFiles) {
-    const sessionId = file.replace('.json', '')
-    const sessionModel = readSessionModel(sessionId, scope)
-    if (sessionModel) {
-      model = aggregateSessionIntoModel(model, sessionModel, config.preferenceDecayDays)
-    }
-  }
-
-  writeUserModel(model, scope)
-}
-
-/**
- * Forgets a specific session: deletes Tier 1 and Tier 2 files,
- * rebuilds Tier 3 user model without the deleted session's data.
+ * Forgets a specific session: deletes Tier 1 and Tier 2 files (plus the
+ * session's user-model-history snapshot and any .jsonl sidecar), then
+ * rebuilds Tier 3 via the canonical rebuild (chronological endedAt fold,
+ * config-driven decay and correction penalty) with promoted flags carried
+ * from the previous model.
  */
 export function forgetSession(sessionId: string): ForgetResult {
   let tier1Deleted = false
@@ -119,6 +89,8 @@ export function forgetSession(sessionId: string): ForgetResult {
 
   // Try both scopes
   for (const scope of ['global', 'project'] as const) {
+    const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
+
     const sessionPath = sessionFileExists(sessionId, scope)
     if (sessionPath) {
       tier1Deleted = deleteFile(sessionPath) || tier1Deleted
@@ -129,13 +101,29 @@ export function forgetSession(sessionId: string): ForgetResult {
       tier2Deleted = deleteFile(modelPath) || tier2Deleted
     }
 
+    // Privacy: the per-session user-model snapshot and the .jsonl sidecar
+    // both carry this session's data — forget removes them too.
+    fs.rmSync(path.join(tomDir, 'user-model-history', `${sessionId}.json`), {
+      force: true,
+    })
+    fs.rmSync(path.join(tomDir, 'sessions', `${sessionId}.jsonl`), {
+      force: true,
+    })
+
     if (tier1Deleted || tier2Deleted) {
-      rebuildUserModel(scope)
+      const config = readTomConfig()
+      const previous = readUserModel(scope)
+      const rebuilt = rebuildUserModelFromTier2(
+        scope,
+        config.preferenceDecayDays,
+        config.correctionPenalty,
+        previous
+      )
+      writeUserModel(carryPromotedFlags(rebuilt, previous), scope)
       tier3Rebuilt = true
 
       // Rebuild BM25 index
       const index = buildMemoryIndex(scope)
-      const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
       const indexPath = path.join(tomDir, 'bm25-index.json')
       atomicWriteFileSync(indexPath, JSON.stringify(index))
     }

@@ -397,6 +397,32 @@ describe('buildMemoryIndex', () => {
 
     expect(index.documentCount).toBe(0)
   })
+
+  it('indexes keyed Tier 2 preference entries by key and value tokens', () => {
+    const model: SessionModel = {
+      sessionId: 'session-keyed',
+      intent: 'configure workflow',
+      interactionPatterns: [
+        'uses-Edit',
+        { key: 'communication_style', value: 'terse' },
+      ],
+      codingPreferences: [{ key: 'issue_tracking', value: 'beads' }],
+    }
+    writeTestFile('session-models/session-keyed.json', model)
+
+    const index = buildMemoryIndex('global')
+
+    const doc = index.docs.find(d => d.id === 'model:session-keyed')
+    expect(doc).toBeDefined()
+    expect(doc?.termFreqs['issue_tracking']).toBeGreaterThan(0)
+    expect(doc?.termFreqs['beads']).toBeGreaterThan(0)
+    expect(doc?.termFreqs['communication_style']).toBeGreaterThan(0)
+    expect(doc?.termFreqs['terse']).toBeGreaterThan(0)
+    // Keyed entries must never stringify to '[object Object]'
+    expect(doc?.termFreqs['object']).toBeUndefined()
+    // Legacy bare strings still index
+    expect(doc?.termFreqs['edit']).toBeGreaterThan(0)
+  })
 })
 
 describe('operation limit enforcement', () => {

@@ -18,6 +18,7 @@ import { detectAmbiguity } from './ambiguity.js'
 import type { AmbiguityThreshold, AmbiguityResult } from './ambiguity.js'
 import { readUserModel, globalTomDir } from './memory-io.js'
 import { isLegacyGenericKey } from './preferences.js'
+import { sanitizeForInjection } from './render-guard.js'
 import { search } from './bm25.js'
 import type { BM25Index, BM25SearchResult } from './bm25.js'
 import { logUsage } from './routing.js'
@@ -116,8 +117,10 @@ function buildSuggestionFromUserModel(
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 5)
 
+  // Learned strings pass the render guard at this injection boundary
+  // (newline flattening, marker neutralization, length cap).
   const prefSummary = topPrefs
-    .map(p => `${p.key}=${p.value} (${Math.round(p.confidence * 100)}%)`)
+    .map(p => `${sanitizeForInjection(p.key)}=${sanitizeForInjection(p.value)} (${Math.round(p.confidence * 100)}%)`)
     .join(', ')
 
   const content = `User preferences: ${prefSummary}. ` +
@@ -127,7 +130,10 @@ function buildSuggestionFromUserModel(
   const suggestion: ToMSuggestion = {
     type: 'preference',
     content,
-    confidence: Math.round(ambiguityResult.score * 100) / 100,
+    // Suggestion confidence is the strength of the strongest preference
+    // backing it — NOT the ambiguity score (which measures the prompt,
+    // not the memory, and used to be injected mislabeled as confidence).
+    confidence: Math.round((topPrefs[0]?.confidence ?? 0) * 100) / 100,
     sourceSessions: [],
   }
 
@@ -181,24 +187,20 @@ export function consultToM(
     }
   }
 
-  // Try BM25 search first
-  const cachedIndex = loadCachedIndex()
-  let built: BuiltSuggestion | null = null
-  let source: ConsultationSource | null = null
+  // User model first: its suggestion carries actual preference content.
+  // The BM25 result only names source sessions (provenance without
+  // substance), so it is the fallback, not the primary.
+  let built: BuiltSuggestion | null = buildSuggestionFromUserModel(ambiguityResult)
+  let source: ConsultationSource | null = built ? 'user-model' : null
 
-  if (cachedIndex) {
-    const results = search(cachedIndex, prompt, 3)
-    built = buildSuggestionFromSearch(results, ambiguityResult)
-    if (built) {
-      source = 'bm25'
-    }
-  }
-
-  // Fall back to direct user model reading if no BM25 results
   if (!built) {
-    built = buildSuggestionFromUserModel(ambiguityResult)
-    if (built) {
-      source = 'user-model'
+    const cachedIndex = loadCachedIndex()
+    if (cachedIndex) {
+      const results = search(cachedIndex, prompt, 3)
+      built = buildSuggestionFromSearch(results, ambiguityResult)
+      if (built) {
+        source = 'bm25'
+      }
     }
   }
 

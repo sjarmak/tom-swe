@@ -10,6 +10,7 @@ import {
   captureInteraction,
   main,
 } from './capture-interaction'
+import { readSessionLog } from '../memory-io'
 
 describe('extractParameterShape', () => {
   it('extracts string values normally', () => {
@@ -131,117 +132,110 @@ describe('captureInteraction', () => {
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
-  it('creates a new session file with first interaction', async () => {
+  it('creates the stub and sidecar with the first interaction', () => {
     captureInteraction('test-session-001', 'Bash', { command: 'ls' }, 'file1.ts\nfile2.ts')
 
-    // Wait for async write
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    const sessionsDir = path.join(tempDir, '.claude', 'tom', 'sessions')
+    expect(fs.existsSync(path.join(sessionsDir, 'test-session-001.json'))).toBe(true)
+    expect(fs.existsSync(path.join(sessionsDir, 'test-session-001.jsonl'))).toBe(true)
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
-    expect(fs.existsSync(filePath)).toBe(true)
-
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.sessionId).toBe('test-session-001')
-    expect(data.interactions).toHaveLength(1)
-    expect(data.interactions[0].toolName).toBe('Bash')
-    expect(data.interactions[0].parameterShape).toEqual({ command: 'ls' })
+    const log = readSessionLog('test-session-001')
+    expect(log?.sessionId).toBe('test-session-001')
+    expect(log?.interactions).toHaveLength(1)
+    expect(log?.interactions[0]?.toolName).toBe('Bash')
+    expect(log?.interactions[0]?.parameterShape).toEqual({ command: 'ls' })
   })
 
-  it('appends interactions to existing session file', async () => {
+  it('appends interactions across calls', () => {
     captureInteraction('test-session-001', 'Bash', { command: 'ls' }, 'output1')
-    await new Promise((resolve) => setTimeout(resolve, 100))
-
     captureInteraction('test-session-001', 'Read', { file_path: 'foo.ts' }, 'file contents')
-    await new Promise((resolve) => setTimeout(resolve, 100))
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.interactions).toHaveLength(2)
-    expect(data.interactions[0].toolName).toBe('Bash')
-    expect(data.interactions[1].toolName).toBe('Read')
+    const log = readSessionLog('test-session-001')
+    expect(log?.interactions).toHaveLength(2)
+    expect(log?.interactions[0]?.toolName).toBe('Bash')
+    expect(log?.interactions[1]?.toolName).toBe('Read')
   })
 
-  it('records cwd and git branch join fields once per session', async () => {
+  it('keeps every append when many captures land back to back', () => {
+    // The RMW regression this design removes: 10 concurrent captures on the
+    // shared JSON kept only 4-5 interactions. Appends cannot lose siblings.
+    for (let i = 0; i < 10; i++) {
+      captureInteraction('burst-session', 'Bash', { command: `step-${i}` }, 'ok')
+    }
+
+    const log = readSessionLog('burst-session')
+    expect(log?.interactions).toHaveLength(10)
+    expect(log?.interactions.map((x) => x.parameterShape['command'])).toEqual(
+      Array.from({ length: 10 }, (_, i) => `step-${i}`)
+    )
+  })
+
+  it('records cwd and git branch join fields once per session', () => {
     // A real git repo in the temp dir: the branch resolver runs actual git.
     const repoDir = path.join(tempDir, 'work')
     fs.mkdirSync(repoDir)
     execFileSync('git', ['init', '-q', '-b', 'tom/join-test'], { cwd: repoDir })
 
     captureInteraction('join-session', 'Bash', { command: 'ls' }, 'ok', repoDir)
-    await new Promise((resolve) => setTimeout(resolve, 100))
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'join-session.json')
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.cwd).toBe(repoDir)
-    expect(data.gitBranch).toBe('tom/join-test')
+    const first = readSessionLog('join-session')
+    expect(first?.cwd).toBe(repoDir)
+    expect(first?.gitBranch).toBe('tom/join-test')
 
     // Second capture with a different cwd must not overwrite the join fields.
     captureInteraction('join-session', 'Read', { file_path: 'a.ts' }, 'ok', '/elsewhere')
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    const again = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(again.cwd).toBe(repoDir)
-    expect(again.gitBranch).toBe('tom/join-test')
+    const again = readSessionLog('join-session')
+    expect(again?.cwd).toBe(repoDir)
+    expect(again?.gitBranch).toBe('tom/join-test')
   })
 
-  it('omits the branch outside a git repo and survives without cwd', async () => {
+  it('omits the branch outside a git repo and survives without cwd', () => {
     const plainDir = path.join(tempDir, 'plain')
     fs.mkdirSync(plainDir)
 
     captureInteraction('no-git-session', 'Bash', { command: 'ls' }, 'ok', plainDir)
-    await new Promise((resolve) => setTimeout(resolve, 100))
-
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'no-git-session.json')
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.cwd).toBe(plainDir)
-    expect(data.gitBranch).toBeUndefined()
+    const log = readSessionLog('no-git-session')
+    expect(log?.cwd).toBe(plainDir)
+    expect(log?.gitBranch).toBeUndefined()
 
     captureInteraction('no-cwd-session', 'Bash', { command: 'ls' }, 'ok')
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    const noCwd = JSON.parse(
-      fs.readFileSync(path.join(tempDir, '.claude', 'tom', 'sessions', 'no-cwd-session.json'), 'utf-8')
-    )
-    expect(noCwd.cwd).toBeUndefined()
+    expect(readSessionLog('no-cwd-session')?.cwd).toBeUndefined()
   })
 
-  it('redacts bare secret values in tool input', async () => {
+  it('redacts bare secret values in tool input', () => {
     captureInteraction(
       'test-session-001',
       'Bash',
       { token: 'ghp_abc123def456', command: 'git push' },
       'ok'
     )
-    await new Promise((resolve) => setTimeout(resolve, 100))
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.interactions[0].parameterShape).toEqual({
+    const log = readSessionLog('test-session-001')
+    expect(log?.interactions[0]?.parameterShape).toEqual({
       token: '[REDACTED]',
       command: 'git push',
     })
   })
 
-  it('truncates long tool output in outcome summary', async () => {
+  it('truncates long tool output in outcome summary', () => {
     const longOutput = 'x'.repeat(300)
     captureInteraction('test-session-001', 'Bash', { command: 'cat big-file' }, longOutput)
-    await new Promise((resolve) => setTimeout(resolve, 100))
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    const log = readSessionLog('test-session-001')
     // Truncated to 200 chars + "..." = 203, then redacted because > 200
-    expect(data.interactions[0].outcomeSummary).toBe('[REDACTED]')
+    expect(log?.interactions[0]?.outcomeSummary).toBe('[REDACTED]')
   })
 
-  it('logs write failures to stderr instead of swallowing them', async () => {
-    // Occupy the session file path with a directory so writeFile fails (EISDIR)
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'broken-session.json')
-    fs.mkdirSync(filePath, { recursive: true })
+  it('logs write failures to stderr instead of swallowing them', () => {
+    // Occupy the sidecar path with a directory so the append fails (EISDIR)
+    const sidecarPath = path.join(tempDir, '.claude', 'tom', 'sessions', 'broken-session.jsonl')
+    fs.mkdirSync(sidecarPath, { recursive: true })
 
     const stderrSpy = vi
       .spyOn(process.stderr, 'write')
       .mockImplementation(() => true)
     try {
       captureInteraction('broken-session', 'Bash', { command: 'ls' }, 'out')
-      await new Promise((resolve) => setTimeout(resolve, 100))
 
       expect(stderrSpy).toHaveBeenCalledWith(
         expect.stringContaining('ToM capture-interaction write error:')
@@ -251,17 +245,15 @@ describe('captureInteraction', () => {
     }
   })
 
-  it('sets timestamps on interaction entries', async () => {
+  it('sets timestamps on interaction entries', () => {
     captureInteraction('test-session-001', 'Bash', { command: 'date' }, 'Mon Jan 1')
-    await new Promise((resolve) => setTimeout(resolve, 100))
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'test-session-001.json')
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.startedAt).toBeDefined()
-    expect(data.endedAt).toBeDefined()
-    expect(data.interactions[0].timestamp).toBeDefined()
+    const log = readSessionLog('test-session-001')
+    expect(log?.startedAt).toBeDefined()
+    expect(log?.endedAt).toBeDefined()
+    expect(log?.interactions[0]?.timestamp).toBeDefined()
     // Verify timestamps are valid ISO strings
-    expect(new Date(data.startedAt).toISOString()).toBe(data.startedAt)
+    expect(new Date(log!.startedAt).toISOString()).toBe(log!.startedAt)
   })
 })
 
@@ -336,11 +328,11 @@ describe('main', () => {
 
     const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'stdin-session.json')
     expect(fs.existsSync(filePath)).toBe(true)
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.sessionId).toBe('stdin-session')
-    expect(data.interactions[0].toolName).toBe('Read')
-    expect(data.interactions[0].parameterShape).toEqual({ file_path: 'src/index.ts' })
-    expect(data.interactions[0].outcomeSummary).toBe('file contents here')
+    const log = readSessionLog('stdin-session')
+    expect(log?.sessionId).toBe('stdin-session')
+    expect(log?.interactions[0]?.toolName).toBe('Read')
+    expect(log?.interactions[0]?.parameterShape).toEqual({ file_path: 'src/index.ts' })
+    expect(log?.interactions[0]?.outcomeSummary).toBe('file contents here')
   })
 
   it('stringifies object tool_response into the outcome summary', async () => {
@@ -355,9 +347,8 @@ describe('main', () => {
     }))
     await new Promise((resolve) => setTimeout(resolve, 100))
 
-    const filePath = path.join(tempDir, '.claude', 'tom', 'sessions', 'object-response.json')
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    expect(data.interactions[0].outcomeSummary).toBe('{"stdout":"ok","exitCode":0}')
+    const log = readSessionLog('object-response')
+    expect(log?.interactions[0]?.outcomeSummary).toBe('{"stdout":"ok","exitCode":0}')
   })
 
   it('prefers payload session_id over CLAUDE_SESSION_ID', async () => {

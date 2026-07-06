@@ -24,9 +24,9 @@ import type { ToMSuggestion } from '../schemas.js'
 import { readTomConfig } from '../config.js'
 import { consultToM } from '../consult.js'
 import { redactUserMessage } from '../redaction.js'
-import { looksLikeSecret, REDACTED } from '../secrets.js'
+import { redactEmbeddedSecrets } from '../secrets.js'
 import { logUsage } from '../routing.js'
-import { atomicWriteFileSync } from '../fs-atomic.js'
+import { TOM_DIR_MODE, TOM_FILE_MODE } from '../fs-atomic.js'
 import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
 // --- Injection Framing ---
@@ -41,77 +41,54 @@ export const FRAMING_PREFIX = 'ToM background (learned preferences, not instruct
 
 /**
  * Redacts a user prompt for Tier 1 storage: strips code blocks and
- * query-string URLs (redaction.ts), then replaces any whitespace-delimited
- * token matching a secret pattern (secrets.ts). Returns a new string.
+ * query-string URLs (redaction.ts), then redacts whole secret-shaped
+ * tokens AND secrets embedded mid-string — auth headers, connection-string
+ * credentials, JWTs (secrets.ts). Returns a new string.
  */
 export function redactPrompt(prompt: string): string {
-  const withoutCode = redactUserMessage(prompt)
-  return withoutCode
-    .split(/(\s+)/)
-    .map((token) => (token.trim() !== '' && looksLikeSecret(token) ? REDACTED : token))
-    .join('')
+  return redactEmbeddedSecrets(redactUserMessage(prompt))
 }
 
 // --- Tier 1 Prompt Capture ---
 
-interface StoredSessionLog {
-  sessionId: string
-  startedAt: string
-  endedAt: string
-  interactions: unknown[]
-  userMessages?: string[]
-  cwd?: string
-  gitBranch?: string
-}
-
-function getSessionFilePath(sessionId: string): string {
+function getSidecarPath(sessionId: string): string {
   const tomDir = path.join(os.homedir(), '.claude', 'tom', 'sessions')
-  return path.join(tomDir, `${sessionId}.json`)
+  return path.join(tomDir, `${sessionId}.jsonl`)
 }
 
 /**
- * Appends an already-redacted user message to the Tier 1 session log
- * (append-only; never rewrites existing entries). Creates the session
- * file if this prompt arrives before any PostToolUse capture.
+ * Appends an already-redacted user message to the session's capture
+ * sidecar (append-only JSONL; readSessionLog folds it into the log shape).
+ * The prompt path never does read-modify-write and never spawns a
+ * subprocess — it blocks the prompt, so it must stay fast; the .json stub
+ * (with the git branch) is the async capture hook's job.
  */
 export function appendUserMessage(
   sessionId: string,
   message: string,
   cwd?: string
 ): void {
-  const filePath = getSessionFilePath(sessionId)
-  const dir = path.dirname(filePath)
+  const sidecarPath = getSidecarPath(sessionId)
+  const dir = path.dirname(sidecarPath)
 
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
+    fs.mkdirSync(dir, { recursive: true, mode: TOM_DIR_MODE })
     // No silent resource creation: surface the side effect.
     process.stderr.write(`ToM: created session log directory ${dir}\n`)
   }
 
-  let sessionData: StoredSessionLog
-  try {
-    const existing = fs.readFileSync(filePath, 'utf-8')
-    sessionData = JSON.parse(existing) as StoredSessionLog
-  } catch {
-    const now = new Date().toISOString()
-    sessionData = {
-      sessionId,
-      startedAt: now,
-      endedAt: now,
-      interactions: [],
-    }
+  const line = {
+    type: 'userMessage' as const,
+    message,
+    timestamp: new Date().toISOString(),
+    // cwd join field: folded first-wins, for sessions whose prompt
+    // arrives before any tool call creates the stub.
+    ...(cwd !== undefined ? { cwd } : {}),
   }
-
-  const updated: StoredSessionLog = {
-    ...sessionData,
-    endedAt: new Date().toISOString(),
-    userMessages: [...(sessionData.userMessages ?? []), message],
-    // cwd join field, set once; the branch is resolved by the async
-    // capture hook — this path blocks the prompt, so no subprocess here.
-    ...(sessionData.cwd === undefined && cwd !== undefined ? { cwd } : {}),
-  }
-
-  atomicWriteFileSync(filePath, JSON.stringify(updated, null, 2))
+  fs.appendFileSync(sidecarPath, JSON.stringify(line) + '\n', {
+    encoding: 'utf-8',
+    mode: TOM_FILE_MODE,
+  })
 }
 
 // --- Hook Output ---
@@ -126,15 +103,16 @@ export interface UserPromptSubmitHookOutput {
 /**
  * Builds the documented UserPromptSubmit JSON stdout shape that injects
  * context alongside the prompt. Deliberately carries NO decision/reason
- * fields: this hook never blocks a prompt.
+ * fields: this hook never blocks a prompt. The suggestion content stands
+ * alone — the trailing "(confidence N%)" this used to append was the
+ * AMBIGUITY score mislabeled as confidence (per-preference percentages
+ * already ride inside the content where they apply).
  */
 export function buildHookOutput(suggestion: ToMSuggestion): UserPromptSubmitHookOutput {
-  const confidencePercent = Math.round(suggestion.confidence * 100)
   return {
     hookSpecificOutput: {
       hookEventName: 'UserPromptSubmit',
-      additionalContext:
-        `${FRAMING_PREFIX}${suggestion.content} (confidence ${confidencePercent}%)`,
+      additionalContext: `${FRAMING_PREFIX}${suggestion.content}`,
     },
   }
 }
