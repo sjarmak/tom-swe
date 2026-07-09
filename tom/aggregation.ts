@@ -1,4 +1,4 @@
-import type { UserModel, SessionModel, PreferenceCluster } from './schemas.js'
+import type { UserModel, SessionModel, PreferenceCluster, PreferenceCategory } from './schemas.js'
 import type { PreferenceObservation } from './preferences.js'
 import {
   reinforcePreference,
@@ -6,6 +6,8 @@ import {
   applyCorrections,
   resolveConflicts,
   isLegacyGenericKey,
+  canonicalCategoryByKey,
+  dropRefiledCorrections,
   DEFAULT_CORRECTION_PENALTY,
 } from './preferences.js'
 
@@ -71,10 +73,23 @@ function summarizeCategory(
  * and sessionCount by N instead of 1. Cross-session accumulation is unaffected
  * — each distinct session still reinforces once.
  */
-function extractObservations(session: SessionModel): PreferenceObservation[] {
+function extractObservations(
+  session: SessionModel,
+  canonical: ReadonlyMap<string, PreferenceCategory>
+): PreferenceObservation[] {
   const byKey = new Map<string, PreferenceObservation>()
   const add = (observation: PreferenceObservation): void => {
-    byKey.set(`${observation.category}::${observation.key}`, observation)
+    // Re-file the observation under the key's canonical category so the same
+    // concept reinforces ONE cluster instead of splitting across categories.
+    // Keying the dedup map by the resolved category also collapses a
+    // within-session collision (same key seen under both categories) to a
+    // single reinforcement, preserving one-reinforcement-per-session.
+    const canon = canonical.get(observation.key)
+    const resolved: PreferenceObservation =
+      canon !== undefined && canon !== observation.category
+        ? { ...observation, category: canon }
+        : observation
+    byKey.set(`${resolved.category}::${resolved.key}`, resolved)
   }
 
   for (const pref of session.codingPreferences) {
@@ -134,8 +149,13 @@ export function aggregateSessionIntoModel(
     now
   )
 
-  // Step 2: Extract observations from session
-  const observations = extractObservations(session)
+  // Canonical category per key, resolved from the accumulated store. Drives
+  // both observation re-filing and correction deduping so the same concept
+  // stays under one category and a cross-category re-file never self-corrects.
+  const canonical = canonicalCategoryByKey(decayed)
+
+  // Step 2: Extract observations from session (re-filed to canonical category)
+  const observations = extractObservations(session, canonical)
 
   // Step 3: Reinforce or add preferences
   let preferences: readonly PreferenceCluster[] = decayed
@@ -143,10 +163,12 @@ export function aggregateSessionIntoModel(
     preferences = reinforcePreference(preferences, observation, now)
   }
 
-  // Step 4: Apply corrections (absent field on older session models → none)
+  // Step 4: Apply corrections (absent field on older session models → none),
+  // minus cross-category re-files (the analyzer correcting its own prior
+  // category inference, not a user override).
   const corrected = applyCorrections(
     preferences,
-    session.corrections ?? [],
+    dropRefiledCorrections(session.corrections ?? [], canonical),
     correctionPenalty,
     now
   )

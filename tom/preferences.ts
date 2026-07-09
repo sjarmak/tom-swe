@@ -1,4 +1,5 @@
 import type { Correction, PreferenceCategory, PreferenceCluster } from './schemas.js'
+import { PreferenceCategorySchema } from './schemas.js'
 
 // The three preference categories tracked by the ToM system — defined as a
 // Zod enum in schemas.ts (PreferenceCategorySchema) and re-exported here for
@@ -35,6 +36,74 @@ export function isLegacyGenericKey(key: string): boolean {
 }
 
 export const DEFAULT_CORRECTION_PENALTY = 0.5
+
+/**
+ * Maps each preference key to its single canonical category.
+ *
+ * Preference identity is category+key, but the analyzer occasionally files the
+ * same semantic concept under different top-level categories across sessions
+ * (e.g. `execution_backend_for_iteration` as codingPreferences one session and
+ * interactionStyle the next). That splits one concept into two clusters and
+ * lets the analyzer emit a "correction" against its own prior-category
+ * inference. This resolver picks the canonical category deterministically: a
+ * key that already resolves to exactly ONE category in the store maps to it
+ * (first-seen-wins across a chronological rebuild fold). A key already split
+ * across categories has no unambiguous answer and is omitted — callers leave
+ * such keys untouched rather than guessing.
+ *
+ * Purely mechanical (ZFC-safe): it reads the categories already present in the
+ * store; it performs no semantic classification of what a key "should" be.
+ */
+export function canonicalCategoryByKey(
+  preferences: readonly PreferenceCluster[]
+): Map<string, PreferenceCategory> {
+  const categoriesByKey = new Map<string, Set<string>>()
+  for (const p of preferences) {
+    const set = categoriesByKey.get(p.key) ?? new Set<string>()
+    set.add(p.category)
+    categoriesByKey.set(p.key, set)
+  }
+
+  const canonical = new Map<string, PreferenceCategory>()
+  for (const [key, categories] of categoriesByKey) {
+    if (categories.size !== 1) {
+      continue
+    }
+    const [only] = categories
+    if (only === undefined) {
+      continue
+    }
+    // Only accept a known preference category; a legacy/garbage category value
+    // never becomes a canonical target.
+    const parsed = PreferenceCategorySchema.safeParse(only)
+    if (parsed.success) {
+      canonical.set(key, parsed.data)
+    }
+  }
+  return canonical
+}
+
+/**
+ * Drops corrections that are merely the same key re-filed under a different
+ * top-level category. A genuine user correction targets an existing preference,
+ * so its category matches that key's established canonical category. A
+ * correction whose category differs from the key's canonical category is the
+ * analyzer contradicting its own prior inference after re-classifying the
+ * concept — not a user override — so it must neither penalize confidence nor be
+ * recorded as a correction event.
+ *
+ * A key with no established canonical category (never seen, or already split)
+ * is left alone: its corrections pass through unchanged.
+ */
+export function dropRefiledCorrections(
+  corrections: readonly Correction[],
+  canonical: ReadonlyMap<string, PreferenceCategory>
+): Correction[] {
+  return corrections.filter((c) => {
+    const canon = canonical.get(c.key)
+    return canon === undefined || canon === c.category
+  })
+}
 
 /**
  * Reinforces an existing preference or adds a new observation.
