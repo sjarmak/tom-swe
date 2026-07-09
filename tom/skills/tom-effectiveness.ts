@@ -11,16 +11,23 @@ import {
   computeEffectivenessSummary,
   formatEffectiveness,
 } from '../effectiveness.js'
+import {
+  computeFollowThroughSummary,
+  formatFollowThrough,
+} from '../follow-through.js'
 
 export function main(): void {
   const usage = readUsageLog()
-  const summary = computeEffectivenessSummary(usage.entries)
-  const lines = formatEffectiveness(summary)
+  const lines = [
+    ...formatEffectiveness(computeEffectivenessSummary(usage.entries)),
+    ...formatFollowThrough(computeFollowThroughSummary(usage.entries)),
+  ]
   const output =
     lines.length > 0
       ? lines.join('\n')
-      : 'No promotion or correction telemetry recorded yet. ToM populates this ' +
-        'after it has analyzed and promoted preferences across several sessions.'
+      : 'No promotion, correction, or follow-through telemetry recorded yet. ToM ' +
+        'populates this after it has analyzed, injected, and promoted ' +
+        'preferences across several sessions.'
   process.stdout.write(output)
 }
 

@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { Readable } from 'node:stream'
-import { buildModelSummary, buildHookOutput, main } from './session-start'
+import { buildModelSummary, buildHookOutput, injectedKeysFromModel, main } from './session-start'
 import type { UserModel, PreferenceCluster } from '../schemas'
 
 // --- Test Helpers ---
@@ -152,6 +152,36 @@ describe('buildModelSummary', () => {
     const summary = buildModelSummary(model) ?? ''
     expect(summary).toContain('Interaction style: prefers concise replies')
     expect(summary).toContain('Coding style: typescript focused')
+  })
+})
+
+// --- injectedKeysFromModel ---
+
+describe('injectedKeysFromModel', () => {
+  it('returns the category:key ids of the same set the summary injects', () => {
+    const model = createUserModel({
+      preferencesClusters: [
+        pref('testing', 'vitest', 0.6),
+        pref('language', 'typescript', 0.9),
+      ],
+    })
+    // Strongest first, matching injection order.
+    expect(injectedKeysFromModel(model)).toEqual([
+      'codingPreferences:language',
+      'codingPreferences:testing',
+    ])
+  })
+
+  it('excludes low-confidence, promoted, and legacy generic keys', () => {
+    const model = createUserModel({
+      preferencesClusters: [
+        pref('language', 'typescript', 0.9),
+        pref('framework', 'react', 0.3),
+        { ...pref('testing', 'vitest', 0.95), promoted: true },
+        pref('preference', '/some/path', 1.0),
+      ],
+    })
+    expect(injectedKeysFromModel(model)).toEqual(['codingPreferences:language'])
   })
 })
 
@@ -328,6 +358,12 @@ describe('main', () => {
     expect(injection.detail.chars).toBe(
       JSON.parse(stdoutData).hookSpecificOutput.additionalContext.length
     )
+    // injectedKeys names the exact preferences asserted for the outcome
+    // follow-through join.
+    expect(injection.detail.injectedKeys).toEqual([
+      'codingPreferences:language',
+      'codingPreferences:framework',
+    ])
   })
 
   it('logs nothing when no injection happens', async () => {

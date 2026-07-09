@@ -168,7 +168,7 @@ Entry shape (validated by `UsageLogEntrySchema`, exported from `tom/routing.ts`;
 |-----------|------|-----------------|
 | `prompt-hook` | Every prompt submission (this hook blocks the prompt, so its latency matters) | `consulted`, `injected`, `promptChars` |
 | `ambiguity-consultation` | Prompt scored above the ambiguity threshold | `score`, `threshold`, `triggers`, `source` (`bm25`\|`user-model`\|`none`), `suggestionType`, `suggestionKeys`, `suggestionChars` |
-| `session-start-injection` | User-model summary injected at session start | `chars`, `lines`, `preferences` |
+| `session-start-injection` | User-model summary injected at session start | `chars`, `lines`, `preferences`, `injectedKeys` (`category:key` list of the asserted preferences) |
 | `session-analysis` | LLM session analysis succeeded (real model + token usage) | `path: "llm"` |
 | `session-analysis-fallback` | LLM path failed; the session's prior Tier 2 model was preserved if one existed (`preserved`), else the heuristic extractor ran (`heuristic`) | `path: "preserved" \| "heuristic"`, `failure` (typed reason) |
 | `analysis-debounced` | Stop re-fired within the 90s debounce of a fresh analysis | `ageMs`, `debounceMs` |
@@ -181,12 +181,13 @@ Entry shape (validated by `UsageLogEntrySchema`, exported from `tom/routing.ts`;
 | `session-usage-error` | Transcript missing or unreadable | — |
 | `preference-correction` | Corrections applied during aggregation | `corrections` (`category:key` list), `penalty` |
 | `preference-promotion` | A CLAUDE.md marker block actually changed (idempotent regenerations don't log) | `promoted` (`category:key` list), `targets` (changed files) |
+| `preference-follow-through` | Per session that asserted ≥1 preference key: whether each asserted key was corrected or confirmed (left un-corrected) in-session (an outcome-usefulness signal, not just memory stability) | `asserted`, `confirmed`, `corrected` (`category:key` lists) |
 | `promotion-file-created` | Global memory file created (no silent resource creation) | `path` |
 | `config-invalid` | `config.json` exists but is malformed or fails validation — the plugin is silently running on defaults (`enabled: false`) until fixed | — |
 | `usage-log-rotated` | usage.log exceeded the size threshold and was archived to `usage-YYYY-MM-DD[-n].log` (archives preserved) | `archive` |
 | `promotion-error` / `session-analysis-error` / `prune-error` / `snapshot-error` | Pipeline failures (never silent) | — |
 
-The acceptance loop joins on preference keys: an `ambiguity-consultation` whose `suggestionKeys` contains `category:key`, followed by a `preference-correction` listing the same key, is a rejected suggestion; absence of a correction while the preference's confidence grows is acceptance.
+The acceptance loop joins on preference keys: an `ambiguity-consultation` whose `suggestionKeys` contains `category:key`, followed by a `preference-correction` listing the same key, is a rejected suggestion; absence of a correction while the preference's confidence grows is acceptance. The Stop hook makes this join explicit: it records a per-session `preference-follow-through` tying every key asserted that session (SessionStart `injectedKeys` + user-model `suggestionKeys`) to whether the user corrected or confirmed it, and `/tom-effectiveness` reports the pooled follow-through rate — an outcome metric, versus the promotion rollup's memory-stability proxy. Only real `category:key` preferences count (bm25 provenance keys are excluded), and "confirmed" means only that the key was not overridden in-session, not that it improved an answer.
 
 Cost overhead joins `session-analysis` against `session-usage` on `sessionId`. The four usage buckets are reported raw: cache reads are far cheaper than uncached input, so any collapsed "overhead %" is a pricing judgment — `/tom-status` shows an unweighted in+out share and labels it as such; weight the buckets per-model for cost-true numbers. Example:
 

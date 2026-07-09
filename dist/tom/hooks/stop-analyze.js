@@ -14504,6 +14504,33 @@ function rotateUsageLogIfNeeded(maxBytes = USAGE_LOG_ROTATE_BYTES) {
   });
   return true;
 }
+function readUsageLog() {
+  const logPath = path4.join(globalTomDir(), "usage.log");
+  let content;
+  try {
+    content = fs4.readFileSync(logPath, "utf-8");
+  } catch {
+    return { entries: [], invalidLines: 0 };
+  }
+  const entries = [];
+  let invalidLines = 0;
+  for (const line of content.split("\n")) {
+    if (line.trim() === "") {
+      continue;
+    }
+    try {
+      const parsed = UsageLogEntrySchema.safeParse(JSON.parse(line));
+      if (parsed.success) {
+        entries.push(parsed.data);
+      } else {
+        invalidLines += 1;
+      }
+    } catch {
+      invalidLines += 1;
+    }
+  }
+  return { entries, invalidLines };
+}
 
 // tom/config.ts
 var TomConfigSchema = external_exports.strictObject({
@@ -14708,6 +14735,35 @@ function buildMemoryIndex(scope = "global") {
     documents.push({ id: "user-model", content, tier: 3 });
   }
   return buildIndex(documents);
+}
+
+// tom/follow-through.ts
+function detailStringArray(entry, key) {
+  const value = entry.detail?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((v) => typeof v === "string");
+}
+function assertedKeysForSession(entries, sessionId) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const entry of entries) {
+    if (entry.sessionId !== sessionId) continue;
+    if (entry.operation === "session-start-injection") {
+      for (const key of detailStringArray(entry, "injectedKeys")) keys.add(key);
+    } else if (entry.operation === "ambiguity-consultation" && entry.detail?.["source"] === "user-model") {
+      for (const key of detailStringArray(entry, "suggestionKeys")) keys.add(key);
+    }
+  }
+  return [...keys];
+}
+function splitFollowThrough(asserted, correctedKeys) {
+  const correctedSet = new Set(correctedKeys);
+  const confirmed = [];
+  const corrected = [];
+  for (const key of asserted) {
+    if (correctedSet.has(key)) corrected.push(key);
+    else confirmed.push(key);
+  }
+  return { confirmed, corrected };
 }
 
 // tom/transcript-usage.ts
@@ -15888,6 +15944,7 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
   );
   writeUserModel(aggregatedUserModel, "global");
   const corrections = sessionModel.corrections ?? [];
+  const correctedKeys = corrections.map((c) => `${c.category}:${c.key}`);
   if (corrections.length > 0) {
     logUsage({
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -15896,9 +15953,21 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
       tokenCount: 0,
       sessionId,
       detail: {
-        corrections: corrections.map((c) => `${c.category}:${c.key}`),
+        corrections: correctedKeys,
         penalty: config2.correctionPenalty
       }
+    });
+  }
+  const asserted = assertedKeysForSession(readUsageLog().entries, sessionId);
+  if (asserted.length > 0) {
+    const { confirmed, corrected } = splitFollowThrough(asserted, correctedKeys);
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "preference-follow-through",
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: { asserted, confirmed, corrected }
     });
   }
   try {

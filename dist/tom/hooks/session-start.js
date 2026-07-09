@@ -32,6 +32,7 @@ var session_start_exports = {};
 __export(session_start_exports, {
   buildHookOutput: () => buildHookOutput,
   buildModelSummary: () => buildModelSummary,
+  injectedKeysFromModel: () => injectedKeysFromModel,
   main: () => main
 });
 module.exports = __toCommonJS(session_start_exports);
@@ -14202,12 +14203,18 @@ function isExcludedSession() {
 // tom/hooks/session-start.ts
 var MIN_CONFIDENCE = 0.5;
 var MAX_PREFERENCE_LINES = 7;
-function buildModelSummary(model) {
-  const confidentPrefs = [...model.preferencesClusters].filter(
+function confidentInjectablePrefs(model) {
+  return [...model.preferencesClusters].filter(
     (p) => p.confidence >= MIN_CONFIDENCE && p.promoted !== true && // Legacy generic keys ('preference'/'pattern') are collapsed noise —
     // never inject them into session context.
     !isLegacyGenericKey(p.key)
   ).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
+}
+function injectedKeysFromModel(model) {
+  return confidentInjectablePrefs(model).map((p) => `${p.category}:${p.key}`);
+}
+function buildModelSummary(model) {
+  const confidentPrefs = confidentInjectablePrefs(model);
   const lines = [];
   if (confidentPrefs.length > 0) {
     for (const pref of confidentPrefs) {
@@ -14266,7 +14273,8 @@ async function main(stream = process.stdin) {
     detail: {
       chars: summary.length,
       lines: summaryLines.length,
-      preferences: summaryLines.filter((l) => l.startsWith("- ")).length
+      preferences: summaryLines.filter((l) => l.startsWith("- ")).length,
+      injectedKeys: injectedKeysFromModel(model)
     }
   });
 }
@@ -14277,5 +14285,6 @@ if (require.main === module) {
 0 && (module.exports = {
   buildHookOutput,
   buildModelSummary,
+  injectedKeysFromModel,
   main
 });

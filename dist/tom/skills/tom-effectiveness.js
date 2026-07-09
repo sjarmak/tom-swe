@@ -14172,12 +14172,54 @@ function formatEffectiveness(summary) {
   return lines;
 }
 
+// tom/follow-through.ts
+function detailStringArray2(entry, key) {
+  const value = entry.detail?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((v) => typeof v === "string");
+}
+function round22(n) {
+  return Math.round(n * 100) / 100;
+}
+function computeFollowThroughSummary(entries) {
+  let sessions = 0;
+  let assertedKeys = 0;
+  let confirmedKeys = 0;
+  let correctedKeys = 0;
+  for (const entry of entries) {
+    if (entry.operation !== "preference-follow-through") continue;
+    sessions += 1;
+    assertedKeys += detailStringArray2(entry, "asserted").length;
+    confirmedKeys += detailStringArray2(entry, "confirmed").length;
+    correctedKeys += detailStringArray2(entry, "corrected").length;
+  }
+  return {
+    hasData: sessions > 0,
+    sessions,
+    assertedKeys,
+    confirmedKeys,
+    correctedKeys,
+    followThroughRate: assertedKeys > 0 ? round22(confirmedKeys / assertedKeys * 100) : 0
+  };
+}
+function formatFollowThrough(summary) {
+  if (!summary.hasData) return [];
+  return [
+    "## Follow-through (injected/consulted keys, confirmed vs corrected in-session)",
+    `- Follow-through rate: ${summary.followThroughRate}% (${summary.confirmedKeys}/${summary.assertedKeys} asserted keys survived un-corrected across ${summary.sessions} sessions; ${summary.correctedKeys} corrected).`,
+    "- Confirmed = asserted and not overridden in the same session; measures whether asserting a preference held up, not that it improved an answer.",
+    ""
+  ];
+}
+
 // tom/skills/tom-effectiveness.ts
 function main() {
   const usage = readUsageLog();
-  const summary = computeEffectivenessSummary(usage.entries);
-  const lines = formatEffectiveness(summary);
-  const output = lines.length > 0 ? lines.join("\n") : "No promotion or correction telemetry recorded yet. ToM populates this after it has analyzed and promoted preferences across several sessions.";
+  const lines = [
+    ...formatEffectiveness(computeEffectivenessSummary(usage.entries)),
+    ...formatFollowThrough(computeFollowThroughSummary(usage.entries))
+  ];
+  const output = lines.length > 0 ? lines.join("\n") : "No promotion, correction, or follow-through telemetry recorded yet. ToM populates this after it has analyzed, injected, and promoted preferences across several sessions.";
   process.stdout.write(output);
 }
 if (require.main === module) {
