@@ -8,7 +8,7 @@
  * Exits silently when ToM is disabled, internally invoked, or no model exists.
  */
 
-import type { UserModel } from '../schemas.js'
+import type { UserModel, PreferenceCluster } from '../schemas.js'
 import { readUserModel } from '../memory-io.js'
 import { isLegacyGenericKey } from '../preferences.js'
 import { sanitizeForInjection } from '../render-guard.js'
@@ -27,15 +27,13 @@ const MAX_PREFERENCE_LINES = 7
 // --- Summary ---
 
 /**
- * Builds a compact, human-readable summary of the user model.
- * Returns null when the model carries no confident preferences and
- * no style summaries (nothing worth injecting).
- *
- * Promoted preferences are excluded: they already ride along via their
- * CLAUDE.md marker block, and double-injection wastes context budget.
+ * The confident, injectable preferences in the order they are injected:
+ * confidence floor met, not promoted, not a legacy generic key, strongest
+ * first, capped. Shared by the summary text and the injected-keys telemetry
+ * so both describe exactly the same set.
  */
-export function buildModelSummary(model: UserModel): string | null {
-  const confidentPrefs = [...model.preferencesClusters]
+function confidentInjectablePrefs(model: UserModel): PreferenceCluster[] {
+  return [...model.preferencesClusters]
     .filter(
       p =>
         p.confidence >= MIN_CONFIDENCE &&
@@ -46,6 +44,28 @@ export function buildModelSummary(model: UserModel): string | null {
     )
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, MAX_PREFERENCE_LINES)
+}
+
+/**
+ * The `category:key` identifiers of the preferences this model would inject,
+ * in injection order. Logged with the session-start-injection event so the
+ * outcome follow-through join (follow-through.ts) can tie an asserted key to a
+ * later in-session correction-or-confirmation.
+ */
+export function injectedKeysFromModel(model: UserModel): string[] {
+  return confidentInjectablePrefs(model).map(p => `${p.category}:${p.key}`)
+}
+
+/**
+ * Builds a compact, human-readable summary of the user model.
+ * Returns null when the model carries no confident preferences and
+ * no style summaries (nothing worth injecting).
+ *
+ * Promoted preferences are excluded: they already ride along via their
+ * CLAUDE.md marker block, and double-injection wastes context budget.
+ */
+export function buildModelSummary(model: UserModel): string | null {
+  const confidentPrefs = confidentInjectablePrefs(model)
 
   const lines: string[] = []
 
@@ -129,6 +149,8 @@ export async function main(
 
   // Injected-context volume is a first-class metric (over-injection is a
   // failure mode): record what this injection cost in context budget.
+  // injectedKeys names the exact preferences asserted, so the outcome
+  // follow-through join can tie them to a later in-session correction.
   const summaryLines = summary.split('\n')
   logUsage({
     timestamp: new Date().toISOString(),
@@ -140,6 +162,7 @@ export async function main(
       chars: summary.length,
       lines: summaryLines.length,
       preferences: summaryLines.filter(l => l.startsWith('- ')).length,
+      injectedKeys: injectedKeysFromModel(model),
     },
   })
 }

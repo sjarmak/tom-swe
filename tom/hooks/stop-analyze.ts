@@ -25,7 +25,8 @@ import {
 import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
-import { getModelForOperation, logUsage, rotateUsageLogIfNeeded } from '../routing.js'
+import { getModelForOperation, logUsage, readUsageLog, rotateUsageLogIfNeeded } from '../routing.js'
+import { assertedKeysForSession, splitFollowThrough } from '../follow-through.js'
 import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { computeVocabularyEcho } from '../vocabulary-echo.js'
@@ -388,6 +389,9 @@ export async function analyzeCompletedSession(
     sessionModel.corrections ?? [],
     canonicalCategoryByKey(previousUserModel?.preferencesClusters ?? [])
   )
+  // Derived from the FILTERED corrections so follow-through's "corrected" set
+  // also excludes self-refiles (a re-filed key is not a user override).
+  const correctedKeys = corrections.map((c) => `${c.category}:${c.key}`)
   if (corrections.length > 0) {
     logUsage({
       timestamp: new Date().toISOString(),
@@ -396,9 +400,28 @@ export async function analyzeCompletedSession(
       tokenCount: 0,
       sessionId,
       detail: {
-        corrections: corrections.map((c) => `${c.category}:${c.key}`),
+        corrections: correctedKeys,
         penalty: config.correctionPenalty,
       },
+    })
+  }
+
+  // Outcome follow-through: tie the preference keys ASSERTED this session
+  // (SessionStart injection + user-model consultation, read back from the log
+  // stream — no new runtime state threaded) to whether the user corrected or
+  // confirmed (left un-corrected) each one in-session. One record per session
+  // that asserted anything; the confirmed case is the majority, so this is NOT
+  // gated on corrections existing (see follow-through.ts for the metric).
+  const asserted = assertedKeysForSession(readUsageLog().entries, sessionId)
+  if (asserted.length > 0) {
+    const { confirmed, corrected } = splitFollowThrough(asserted, correctedKeys)
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'preference-follow-through',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: { asserted, confirmed, corrected },
     })
   }
 
