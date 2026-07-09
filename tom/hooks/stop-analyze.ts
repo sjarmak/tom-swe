@@ -31,7 +31,11 @@ import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { computeVocabularyEcho } from '../vocabulary-echo.js'
 import { extractSessionModel } from '../session-extract.js'
 import { runPromotion } from '../promotion.js'
-import { isLegacyGenericKey } from '../preferences.js'
+import {
+  isLegacyGenericKey,
+  canonicalCategoryByKey,
+  dropRefiledCorrections,
+} from '../preferences.js'
 import { judgeDerivability } from '../promotion-gate.js'
 import type { GateCandidate } from '../promotion-gate.js'
 import { pruneOldSessions } from '../pruning.js'
@@ -376,7 +380,14 @@ export async function analyzeCompletedSession(
 
   // Telemetry for the external memory-eval harness: one entry per
   // correction batch, listing category:key pairs and the applied penalty.
-  const corrections = sessionModel.corrections ?? []
+  // Cross-category re-files (the analyzer correcting its own prior-category
+  // inference, not a user override) are dropped against the prior Tier 3
+  // model's canonical categories — matching what aggregation applied — so a
+  // mere re-file emits no correction event.
+  const corrections = dropRefiledCorrections(
+    sessionModel.corrections ?? [],
+    canonicalCategoryByKey(previousUserModel?.preferencesClusters ?? [])
+  )
   if (corrections.length > 0) {
     logUsage({
       timestamp: new Date().toISOString(),

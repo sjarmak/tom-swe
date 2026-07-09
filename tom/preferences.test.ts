@@ -4,6 +4,8 @@ import {
   decayPreferences,
   applyCorrections,
   resolveConflicts,
+  canonicalCategoryByKey,
+  dropRefiledCorrections,
   DEFAULT_CORRECTION_PENALTY,
   type PreferenceCategory,
 } from './preferences.js'
@@ -437,5 +439,84 @@ describe('preference categories', () => {
     }
     const result = reinforcePreference(existing, observation)
     expect(result[0]?.category).toBe('emotionalSignals')
+  })
+})
+
+describe('canonicalCategoryByKey', () => {
+  it('resolves a key present under a single category to that category', () => {
+    const clusters: PreferenceCluster[] = [
+      makePreference({
+        category: 'codingPreferences',
+        key: 'execution_backend_for_iteration',
+        value: 'local_scripts',
+      }),
+    ]
+    const canonical = canonicalCategoryByKey(clusters)
+    expect(canonical.get('execution_backend_for_iteration')).toBe(
+      'codingPreferences'
+    )
+  })
+
+  it('omits a key already split across two categories (no canonical answer)', () => {
+    const clusters: PreferenceCluster[] = [
+      makePreference({
+        category: 'codingPreferences',
+        key: 'execution_backend_for_iteration',
+      }),
+      makePreference({
+        category: 'interactionStyle',
+        key: 'execution_backend_for_iteration',
+      }),
+    ]
+    const canonical = canonicalCategoryByKey(clusters)
+    expect(canonical.has('execution_backend_for_iteration')).toBe(false)
+  })
+
+  it('ignores clusters whose category is not a known preference category', () => {
+    const clusters: PreferenceCluster[] = [
+      makePreference({ category: 'legacyGarbage', key: 'orphan' }),
+    ]
+    const canonical = canonicalCategoryByKey(clusters)
+    expect(canonical.has('orphan')).toBe(false)
+  })
+})
+
+describe('dropRefiledCorrections', () => {
+  const canonical = new Map<string, PreferenceCategory>([
+    ['execution_backend_for_iteration', 'codingPreferences'],
+  ])
+
+  it('drops a correction filed under a different category than the key resolves to', () => {
+    const corrections: Correction[] = [
+      {
+        category: 'interactionStyle',
+        key: 'execution_backend_for_iteration',
+        evidence: 're-filed under a new category',
+      },
+    ]
+    expect(dropRefiledCorrections(corrections, canonical)).toEqual([])
+  })
+
+  it('keeps a correction filed under the same category the key resolves to', () => {
+    const corrections: Correction[] = [
+      {
+        category: 'codingPreferences',
+        key: 'execution_backend_for_iteration',
+        correctedValue: 'remote_sandbox',
+        evidence: 'genuine user override',
+      },
+    ]
+    expect(dropRefiledCorrections(corrections, canonical)).toEqual(corrections)
+  })
+
+  it('keeps a correction whose key has no established canonical category', () => {
+    const corrections: Correction[] = [
+      {
+        category: 'interactionStyle',
+        key: 'brand_new_key',
+        evidence: 'first-ever correction for this key',
+      },
+    ]
+    expect(dropRefiledCorrections(corrections, canonical)).toEqual(corrections)
   })
 })
