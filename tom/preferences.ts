@@ -46,10 +46,12 @@ export const DEFAULT_CORRECTION_PENALTY = 0.5
  * interactionStyle the next). That splits one concept into two clusters and
  * lets the analyzer emit a "correction" against its own prior-category
  * inference. This resolver picks the canonical category deterministically: a
- * key that already resolves to exactly ONE category in the store maps to it
- * (first-seen-wins across a chronological rebuild fold). A key already split
- * across categories has no unambiguous answer and is omitted — callers leave
- * such keys untouched rather than guessing.
+ * key that has only ever been seen under ONE category in the store maps to it.
+ * A key already split across categories has no unambiguous answer and is
+ * omitted — callers leave such keys untouched rather than guessing (reconciling
+ * an existing split is a separate, judgment-laden concern; see the follow-up
+ * bead, since collapsing to a winner risks merging genuinely-distinct concepts
+ * that happen to share a key string).
  *
  * Purely mechanical (ZFC-safe): it reads the categories already present in the
  * store; it performs no semantic classification of what a key "should" be.

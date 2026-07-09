@@ -14186,20 +14186,20 @@ function round22(n) {
   return Math.round(n * 100) / 100;
 }
 function computeFollowThroughSummary(entries) {
-  let sessions = 0;
+  let analyses = 0;
   let assertedKeys = 0;
   let confirmedKeys = 0;
   let correctedKeys = 0;
   for (const entry of entries) {
     if (entry.operation !== "preference-follow-through") continue;
-    sessions += 1;
+    analyses += 1;
     assertedKeys += detailStringArray2(entry, "asserted").length;
     confirmedKeys += detailStringArray2(entry, "confirmed").length;
     correctedKeys += detailStringArray2(entry, "corrected").length;
   }
   return {
-    hasData: sessions > 0,
-    sessions,
+    hasData: analyses > 0,
+    analyses,
     assertedKeys,
     confirmedKeys,
     correctedKeys,
@@ -14210,8 +14210,9 @@ function formatFollowThrough(summary) {
   if (!summary.hasData) return [];
   return [
     "## Follow-through (injected/consulted keys, confirmed vs corrected in-session)",
-    `- Follow-through rate: ${summary.followThroughRate}% (${summary.confirmedKeys}/${summary.assertedKeys} asserted keys survived un-corrected across ${summary.sessions} sessions; ${summary.correctedKeys} corrected).`,
+    `- Follow-through rate: ${summary.followThroughRate}% (${summary.confirmedKeys}/${summary.assertedKeys} asserted keys survived un-corrected across ${summary.analyses} analysis runs; ${summary.correctedKeys} corrected).`,
     "- Confirmed = asserted and not overridden in the same session; measures whether asserting a preference held up, not that it improved an answer.",
+    "- Exposure unit is the analysis run (per-turn Stop analysis), matching the correction/promotion rates, not the host session.",
     ""
   ];
 }

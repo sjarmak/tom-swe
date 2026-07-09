@@ -153,8 +153,22 @@ describe('computeFollowThroughSummary', () => {
   it('reports no data for an empty log', () => {
     const summary = computeFollowThroughSummary([])
     expect(summary.hasData).toBe(false)
-    expect(summary.sessions).toBe(0)
+    expect(summary.analyses).toBe(0)
     expect(summary.followThroughRate).toBe(0)
+  })
+
+  it('counts the exposure unit as the analysis run, not the host session', () => {
+    // The Stop analyzer re-runs per turn, so one host session can emit several
+    // preference-follow-through records. The summary sums per record (per
+    // analysis run) — matching preference-correction/promotion — rather than
+    // deduping to one per sessionId.
+    const entries = [
+      followThrough('2026-07-01T00:00:00.000Z', 'same-session', ['a:b'], ['a:b'], []),
+      followThrough('2026-07-01T01:00:00.000Z', 'same-session', ['a:b'], ['a:b'], []),
+    ]
+    const summary = computeFollowThroughSummary(entries)
+    expect(summary.analyses).toBe(2)
+    expect(summary.assertedKeys).toBe(2)
   })
 
   it('aggregates emitted follow-through records into a rate', () => {
@@ -176,7 +190,7 @@ describe('computeFollowThroughSummary', () => {
     ]
     const summary = computeFollowThroughSummary(entries)
     expect(summary.hasData).toBe(true)
-    expect(summary.sessions).toBe(2)
+    expect(summary.analyses).toBe(2)
     expect(summary.assertedKeys).toBe(3)
     expect(summary.confirmedKeys).toBe(2)
     expect(summary.correctedKeys).toBe(1)
