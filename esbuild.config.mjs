@@ -16,6 +16,7 @@ const entryPoints = [
   'tom/hooks/stop-analyze.ts',
   // Skills
   'tom/skills/tom-status.ts',
+  'tom/skills/tom-effectiveness.ts',
   'tom/skills/tom-inspect.ts',
   'tom/skills/tom-reset.ts',
   'tom/skills/tom-forget-export.ts',
