@@ -302,5 +302,36 @@ describe('routing', () => {
       expect(result.entries).toHaveLength(1)
       expect(result.invalidLines).toBe(2)
     })
+
+    it('sessionId filter returns only that session and skips parsing other lines', () => {
+      logUsage({
+        timestamp: '2026-01-15T10:00:00.000Z',
+        operation: 'session-start-injection',
+        model: 'none',
+        tokenCount: 0,
+        sessionId: 'sess-A',
+        detail: { injectedKeys: ['codingPreferences:x'] },
+      })
+      logUsage({
+        timestamp: '2026-01-15T10:05:00.000Z',
+        operation: 'session-start-injection',
+        model: 'none',
+        tokenCount: 0,
+        sessionId: 'sess-B',
+        detail: { injectedKeys: ['interactionStyle:y'] },
+      })
+
+      const filtered = readUsageLog({ sessionId: 'sess-A' })
+      expect(filtered.entries).toHaveLength(1)
+      expect(filtered.entries[0]?.sessionId).toBe('sess-A')
+
+      // A malformed line for the OTHER session is never parsed, so it does not
+      // inflate invalidLines under a session-scoped read (parse is skipped by
+      // the substring pre-filter); the unfiltered read still catches it.
+      const logPath = path.join(tmpDir, '.claude', 'tom', 'usage.log')
+      fs.appendFileSync(logPath, '{ broken json for sess-B \n', 'utf-8')
+      expect(readUsageLog({ sessionId: 'sess-A' }).invalidLines).toBe(0)
+      expect(readUsageLog().invalidLines).toBe(1)
+    })
   })
 })

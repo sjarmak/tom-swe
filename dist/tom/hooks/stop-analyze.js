@@ -14536,7 +14536,7 @@ function rotateUsageLogIfNeeded(maxBytes = USAGE_LOG_ROTATE_BYTES) {
   });
   return true;
 }
-function readUsageLog() {
+function readUsageLog(opts) {
   const logPath = path4.join(globalTomDir(), "usage.log");
   let content;
   try {
@@ -14544,10 +14544,14 @@ function readUsageLog() {
   } catch {
     return { entries: [], invalidLines: 0 };
   }
+  const sessionFilter = opts?.sessionId;
   const entries = [];
   let invalidLines = 0;
   for (const line of content.split("\n")) {
     if (line.trim() === "") {
+      continue;
+    }
+    if (sessionFilter !== void 0 && !line.includes(sessionFilter)) {
       continue;
     }
     try {
@@ -15993,7 +15997,10 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
       }
     });
   }
-  const asserted = assertedKeysForSession(readUsageLog().entries, sessionId);
+  const asserted = assertedKeysForSession(
+    readUsageLog({ sessionId }).entries,
+    sessionId
+  );
   if (asserted.length > 0) {
     const { confirmed, corrected } = splitFollowThrough(asserted, correctedKeys);
     logUsage({

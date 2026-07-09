@@ -412,7 +412,12 @@ export async function analyzeCompletedSession(
   // confirmed (left un-corrected) each one in-session. One record per session
   // that asserted anything; the confirmed case is the majority, so this is NOT
   // gated on corrections existing (see follow-through.ts for the metric).
-  const asserted = assertedKeysForSession(readUsageLog().entries, sessionId)
+  // Session-scoped read: only this session's lines are parsed (the whole
+  // usage.log grows to ~5MB between rotations, and this runs on every Stop).
+  const asserted = assertedKeysForSession(
+    readUsageLog({ sessionId }).entries,
+    sessionId
+  )
   if (asserted.length > 0) {
     const { confirmed, corrected } = splitFollowThrough(asserted, correctedKeys)
     logUsage({

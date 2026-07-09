@@ -13958,7 +13958,7 @@ var UsageLogEntrySchema = external_exports.looseObject({
   detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
 });
 var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
-function readUsageLog() {
+function readUsageLog(opts) {
   const logPath = path3.join(globalTomDir(), "usage.log");
   let content;
   try {
@@ -13966,10 +13966,14 @@ function readUsageLog() {
   } catch {
     return { entries: [], invalidLines: 0 };
   }
+  const sessionFilter = opts?.sessionId;
   const entries = [];
   let invalidLines = 0;
   for (const line of content.split("\n")) {
     if (line.trim() === "") {
+      continue;
+    }
+    if (sessionFilter !== void 0 && !line.includes(sessionFilter)) {
       continue;
     }
     try {
