@@ -246,6 +246,16 @@ describe('email / PII redaction', () => {
     expect(result).toBe('git@github.com:org/repo.git cc [REDACTED]')
   })
 
+  it('still redacts an email in a user:secret / user@host:port shape (no path)', () => {
+    // The SSH-remote exclusion requires a PATH ('/') after the colon. A bare
+    // colon (credential pair or port, no path) must NOT spare the email, or a
+    // combolist/Basic-auth pair leaks. Regression for the too-broad `(?!:\S)`.
+    expect(redactEmbeddedSecrets('curl -u steph@example.com:hunter2 https://x')).toBe(
+      'curl -u [REDACTED]:hunter2 https://x'
+    )
+    expect(redactEmbeddedSecrets('user@example.com:5432')).toBe('[REDACTED]:5432')
+  })
+
   it('handles a large @-free input in linear time (ReDoS guard)', () => {
     // The bounded quantifiers keep the pattern linear; on unbounded call sites
     // (redactPrompt, truncateDetail) an @-free paste must not stall. Assert both

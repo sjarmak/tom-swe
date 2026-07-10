@@ -1066,10 +1066,13 @@ describe('analyzeCompletedSession', () => {
       entries.some((e) => e['operation'] === 'preference-correction')
     ).toBe(false)
 
-    // FOLD basis = the pre-session store, which does not contain foo_pref at
-    // all, so aggregateSessionIntoModel would KEEP the very same correction.
-    // The mismatch is the divergence: telemetry under-reports one genuine
-    // correction event (persisted Tier 3, driven by the fold, is unaffected).
+    // FOLD basis = the pre-session store (empty for foo_pref), under which
+    // dropRefiledCorrections KEEPS the correction — the opposite of the
+    // telemetry filter above. That contrast IS the documented divergence. Note
+    // the divergence is only observable in telemetry here: with empty
+    // preferences, applyCorrections is a no-op regardless, so persisted Tier 3
+    // is identical either way. This asserts the fold-basis branch directly (the
+    // pipeline never exposes it) to pin why the two bases disagree.
     expect(dropRefiledCorrections([correction], canonicalCategoryByKey([]))).toEqual([
       correction,
     ])
