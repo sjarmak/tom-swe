@@ -485,9 +485,28 @@ export async function analyzeCompletedSession(
   // Telemetry for the external memory-eval harness: one entry per
   // correction batch, listing category:key pairs and the applied penalty.
   // Cross-category re-files (the analyzer correcting its own prior-category
-  // inference, not a user override) are dropped against the prior Tier 3
-  // model's canonical categories — matching what aggregation applied — so a
-  // mere re-file emits no correction event.
+  // inference, not a user override) are dropped so a mere re-file emits no
+  // correction event.
+  //
+  // The canonical categories here come from previousUserModel (last Stop's
+  // persisted Tier 3), which APPROXIMATES the basis aggregation actually used.
+  // The fold in aggregateSessionIntoModel drops this session's corrections
+  // against the canonical of the store as it stood BEFORE folding this session
+  // (its pre-session `decayed` state). Because the rebuild folds each session
+  // with asOf = its own endedAt, decay is deterministic for a fixed session
+  // set, so on a session's FIRST analysis previousUserModel equals that
+  // pre-session state exactly and the filter matches the fold. The two diverge
+  // only when this session is RE-ANALYZED across turns: previousUserModel then
+  // already carries this session's own earlier-turn categories, while the fresh
+  // rebuild folds the session exactly once. For a brand-new key this session
+  // both introduced (under category X) and re-filed a correction for (under
+  // Y != X) between turns, the filter drops that correction (prior canonical
+  // says X) though the single fold kept it (its pre-session canonical had no
+  // entry for the key). The effect is telemetry-only: one genuine correction
+  // event under-reported. The persisted Tier 3 model uses the fold's own
+  // canonical and is unaffected. Low frequency; sharing the fold's mid-fold
+  // per-session canonical would mean threading it out of the pure rebuild, so
+  // the approximation stands rather than couple the two modules.
   const corrections = dropRefiledCorrections(
     sessionModel.corrections ?? [],
     canonicalCategoryByKey(previousUserModel?.preferencesClusters ?? [])
