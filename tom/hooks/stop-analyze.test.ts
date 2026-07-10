@@ -11,6 +11,7 @@ import {
 } from './stop-analyze'
 import type { UserModel, PreferenceCluster } from '../schemas'
 import { analyzeSessionWithLlm } from '../llm-analyze'
+import { canonicalCategoryByKey, dropRefiledCorrections } from '../preferences'
 
 // Never spawn the real claude CLI in tests: the LLM path is mocked and
 // defaults to failure so existing pipeline tests exercise the heuristic
@@ -1015,6 +1016,66 @@ describe('analyzeCompletedSession', () => {
     expect(
       entries.some((e) => e['operation'] === 'preference-correction')
     ).toBe(false)
+  })
+
+  it('under-reports a cross-turn re-filed correction (documents the previousUserModel-vs-fold approximation)', async () => {
+    // Pins the divergence documented at the dropRefiledCorrections call site.
+    // previousUserModel (last Stop's persisted Tier 3) already carries THIS
+    // session's own earlier-turn observation: key `foo_pref` under
+    // codingPreferences. No Tier 2 session-model carries the key, so the fresh
+    // rebuild's pre-session canonical (the basis aggregation actually folds
+    // against) has no entry for it.
+    seedUserModel({
+      category: 'codingPreferences',
+      key: 'foo_pref',
+      value: 'earlier_turn_value',
+      confidence: 0.6,
+      lastUpdated: new Date().toISOString(),
+      sessionCount: 1,
+    })
+    writeSessionFile('refile-divergence-test')
+    // This turn the analyzer re-files the same brand-new key under a different
+    // category and emits a correction there (no correctedValue: a pure re-file).
+    const correction = {
+      category: 'interactionStyle' as const,
+      key: 'foo_pref',
+      evidence: 'analyzer re-classified the concept between turns',
+    }
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'refile-divergence-test',
+        intent: 'reclassify',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [correction],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('refile-divergence-test')
+
+    // TELEMETRY basis = canonicalCategoryByKey(previousUserModel) =
+    // {foo_pref -> codingPreferences}. The correction's category
+    // (interactionStyle) differs, so the telemetry filter DROPS it and emits no
+    // correction event. This is the documented approximation in action.
+    const entries = readUsageEntries()
+    expect(
+      entries.some((e) => e['operation'] === 'preference-correction')
+    ).toBe(false)
+
+    // FOLD basis = the pre-session store (empty for foo_pref), under which
+    // dropRefiledCorrections KEEPS the correction — the opposite of the
+    // telemetry filter above. That contrast IS the documented divergence. Note
+    // the divergence is only observable in telemetry here: with empty
+    // preferences, applyCorrections is a no-op regardless, so persisted Tier 3
+    // is identical either way. This asserts the fold-basis branch directly (the
+    // pipeline never exposes it) to pin why the two bases disagree.
+    expect(dropRefiledCorrections([correction], canonicalCategoryByKey([]))).toEqual([
+      correction,
+    ])
   })
 
   it('applies corrections to the persisted user model', async () => {

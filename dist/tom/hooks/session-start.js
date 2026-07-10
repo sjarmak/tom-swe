@@ -14138,8 +14138,26 @@ var EMBEDDED_SECRET_PATTERNS = [
   // (local ≤64, domain ≤255) so the pattern stays linear-time: `redactPrompt`
   // and `truncateDetail` call this on unbounded input that bypasses the
   // MAX_VALUE_LENGTH cap, and the synchronous prompt hook must not stall.
+  //
+  // Two dev-syntax false positives are excluded (tom-swe-nsn) without widening
+  // the local-part class or unbounding a quantifier:
+  //  - Retina/image assets (`logo@2x.png`): a leading negative lookahead drops
+  //    known image extensions (png/jpg/jpeg/svg/webp/gif/ico) as the TLD — none
+  //    is a real TLD, so this cannot suppress a genuine email.
+  //  - scp-style git remotes (`git@github.com:org/repo.git`): `(?!:[^\s]{0,255}/)`
+  //    refuses to match only when the TLD is followed by `:` and a path segment
+  //    (a `/` within a bounded run) — the `host:org/repo` shape. This is scoped
+  //    deliberately narrowly: a bare `email:password` or `email:5432` (colon but
+  //    no following path) STILL redacts, so credential/combolist pairs and
+  //    `user@host:port` connection fragments are not leaked. The residual spared
+  //    case is `user@host:port/path` (a schemeless URL with a path), far rarer
+  //    than the combolist shape. `(?![A-Za-z])` forces the TLD to be its full
+  //    label so the engine cannot shrink it (e.g. `com`→`co`) to alter the
+  //    following-char anchoring. The bound on `[^\s]{0,255}` keeps it linear.
+  //    The image-extension exclusion is lowercase-only (real asset filenames
+  //    are lowercase; an uppercase `.PNG` over-redacts, the safe direction).
   {
-    pattern: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}/g,
+    pattern: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.(?!(?:png|jpe?g|svg|webp|gif|ico)\b)[A-Za-z]{2,24}(?![A-Za-z])(?!:[^\s]{0,255}\/)/g,
     replacement: REDACTED
   }
 ];
