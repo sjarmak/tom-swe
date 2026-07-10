@@ -13985,6 +13985,11 @@ var UsageLogEntrySchema = external_exports.looseObject({
   reason: external_exports.string().optional(),
   detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
 });
+function usageDetailStringArray(entry, key) {
+  const value = entry.detail?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((v) => typeof v === "string");
+}
 var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
 function readUsageLog(opts) {
   const logPath = path3.join(globalTomDir(), "usage.log");
@@ -14020,11 +14025,6 @@ function readUsageLog(opts) {
 
 // tom/effectiveness.ts
 var THIN_AFTER_WINDOW = 15;
-function detailStringArray(entry, key) {
-  const value = entry.detail?.[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter((v) => typeof v === "string");
-}
 function round2(n) {
   return Math.round(n * 100) / 100;
 }
@@ -14060,14 +14060,14 @@ function computeEffectivenessSummary(entries) {
         analysisTimestamps.push(ts);
         break;
       case "preference-promotion":
-        for (const key of detailStringArray(entry, "promoted")) {
+        for (const key of usageDetailStringArray(entry, "promoted")) {
           promotionEventCount.set(key, (promotionEventCount.get(key) ?? 0) + 1);
           const prior = firstPromotedAt.get(key);
           if (prior === void 0 || ts < prior) firstPromotedAt.set(key, ts);
         }
         break;
       case "preference-correction":
-        for (const key of detailStringArray(entry, "corrections")) {
+        for (const key of usageDetailStringArray(entry, "corrections")) {
           const list = correctionsByKey.get(key) ?? [];
           list.push(ts);
           correctionsByKey.set(key, list);
@@ -14135,7 +14135,7 @@ function computeEffectivenessSummary(entries) {
     if (entry.operation === "preference-correction") {
       weekCorrections.set(
         week,
-        (weekCorrections.get(week) ?? 0) + detailStringArray(entry, "corrections").length
+        (weekCorrections.get(week) ?? 0) + usageDetailStringArray(entry, "corrections").length
       );
     } else if (entry.operation === "session-analysis" || entry.operation === "session-analysis-fallback") {
       weekAnalyses.set(week, (weekAnalyses.get(week) ?? 0) + 1);
@@ -14205,11 +14205,6 @@ function formatEffectiveness(summary) {
 }
 
 // tom/follow-through.ts
-function detailStringArray2(entry, key) {
-  const value = entry.detail?.[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter((v) => typeof v === "string");
-}
 function round22(n) {
   return Math.round(n * 100) / 100;
 }
@@ -14221,9 +14216,9 @@ function computeFollowThroughSummary(entries) {
   for (const entry of entries) {
     if (entry.operation !== "preference-follow-through") continue;
     analyses += 1;
-    assertedKeys += detailStringArray2(entry, "asserted").length;
-    confirmedKeys += detailStringArray2(entry, "confirmed").length;
-    correctedKeys += detailStringArray2(entry, "corrected").length;
+    assertedKeys += usageDetailStringArray(entry, "asserted").length;
+    confirmedKeys += usageDetailStringArray(entry, "confirmed").length;
+    correctedKeys += usageDetailStringArray(entry, "corrected").length;
   }
   return {
     hasData: analyses > 0,

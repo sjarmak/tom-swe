@@ -35,7 +35,7 @@
  *   rate is forward-looking.
  */
 
-import type { UsageLogEntry } from './routing.js'
+import { usageDetailStringArray, type UsageLogEntry } from './routing.js'
 
 // --- Types ---
 
@@ -60,12 +60,6 @@ export interface FollowThroughSummary {
 
 // --- Helpers ---
 
-function detailStringArray(entry: UsageLogEntry, key: string): readonly string[] {
-  const value = entry.detail?.[key]
-  if (!Array.isArray(value)) return []
-  return value.filter((v): v is string => typeof v === 'string')
-}
-
 function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
@@ -86,12 +80,12 @@ export function assertedKeysForSession(
   for (const entry of entries) {
     if (entry.sessionId !== sessionId) continue
     if (entry.operation === 'session-start-injection') {
-      for (const key of detailStringArray(entry, 'injectedKeys')) keys.add(key)
+      for (const key of usageDetailStringArray(entry, 'injectedKeys')) keys.add(key)
     } else if (
       entry.operation === 'ambiguity-consultation' &&
       entry.detail?.['source'] === 'user-model'
     ) {
-      for (const key of detailStringArray(entry, 'suggestionKeys')) keys.add(key)
+      for (const key of usageDetailStringArray(entry, 'suggestionKeys')) keys.add(key)
     }
   }
   return [...keys]
@@ -137,9 +131,9 @@ export function computeFollowThroughSummary(
   for (const entry of entries) {
     if (entry.operation !== 'preference-follow-through') continue
     analyses += 1
-    assertedKeys += detailStringArray(entry, 'asserted').length
-    confirmedKeys += detailStringArray(entry, 'confirmed').length
-    correctedKeys += detailStringArray(entry, 'corrected').length
+    assertedKeys += usageDetailStringArray(entry, 'asserted').length
+    confirmedKeys += usageDetailStringArray(entry, 'confirmed').length
+    correctedKeys += usageDetailStringArray(entry, 'corrected').length
   }
 
   return {

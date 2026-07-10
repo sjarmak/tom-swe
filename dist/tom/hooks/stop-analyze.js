@@ -14643,6 +14643,11 @@ var LOG_FILE_MODE = 384;
 function prefKeyForTelemetry(category, key) {
   return `${category}:${sanitizeValue(key)}`;
 }
+function usageDetailStringArray(entry, key) {
+  const value = entry.detail?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((v) => typeof v === "string");
+}
 function logUsage(entry) {
   const logPath = path4.join(globalTomDir(), "usage.log");
   const dir = path4.dirname(logPath);
@@ -14920,19 +14925,14 @@ function buildMemoryIndex(scope = "global") {
 }
 
 // tom/follow-through.ts
-function detailStringArray(entry, key) {
-  const value = entry.detail?.[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter((v) => typeof v === "string");
-}
 function assertedKeysForSession(entries, sessionId) {
   const keys = /* @__PURE__ */ new Set();
   for (const entry of entries) {
     if (entry.sessionId !== sessionId) continue;
     if (entry.operation === "session-start-injection") {
-      for (const key of detailStringArray(entry, "injectedKeys")) keys.add(key);
+      for (const key of usageDetailStringArray(entry, "injectedKeys")) keys.add(key);
     } else if (entry.operation === "ambiguity-consultation" && entry.detail?.["source"] === "user-model") {
-      for (const key of detailStringArray(entry, "suggestionKeys")) keys.add(key);
+      for (const key of usageDetailStringArray(entry, "suggestionKeys")) keys.add(key);
     }
   }
   return [...keys];

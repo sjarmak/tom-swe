@@ -27,7 +27,7 @@
  *   and accepted, not that it improved any answer.
  */
 
-import type { UsageLogEntry } from './routing.js'
+import { usageDetailStringArray, type UsageLogEntry } from './routing.js'
 
 // --- Types ---
 
@@ -84,12 +84,6 @@ export interface EffectivenessSummary {
 
 // --- Helpers ---
 
-function detailStringArray(entry: UsageLogEntry, key: string): readonly string[] {
-  const value = entry.detail?.[key]
-  if (!Array.isArray(value)) return []
-  return value.filter((v): v is string => typeof v === 'string')
-}
-
 function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
@@ -139,14 +133,14 @@ export function computeEffectivenessSummary(
         analysisTimestamps.push(ts)
         break
       case 'preference-promotion':
-        for (const key of detailStringArray(entry, 'promoted')) {
+        for (const key of usageDetailStringArray(entry, 'promoted')) {
           promotionEventCount.set(key, (promotionEventCount.get(key) ?? 0) + 1)
           const prior = firstPromotedAt.get(key)
           if (prior === undefined || ts < prior) firstPromotedAt.set(key, ts)
         }
         break
       case 'preference-correction':
-        for (const key of detailStringArray(entry, 'corrections')) {
+        for (const key of usageDetailStringArray(entry, 'corrections')) {
           const list = correctionsByKey.get(key) ?? []
           list.push(ts)
           correctionsByKey.set(key, list)
@@ -227,7 +221,7 @@ export function computeEffectivenessSummary(
     if (entry.operation === 'preference-correction') {
       weekCorrections.set(
         week,
-        (weekCorrections.get(week) ?? 0) + detailStringArray(entry, 'corrections').length
+        (weekCorrections.get(week) ?? 0) + usageDetailStringArray(entry, 'corrections').length
       )
     } else if (
       entry.operation === 'session-analysis' ||

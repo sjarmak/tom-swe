@@ -8,8 +8,10 @@ import {
   logUsage,
   readUsageLog,
   prefKeyForTelemetry,
+  usageDetailStringArray,
   TELEMETRY_SCHEMA_VERSION,
 } from './routing.js'
+import type { UsageLogEntry } from './routing.js'
 
 describe('routing', () => {
   let tmpDir: string
@@ -42,6 +44,38 @@ describe('routing', () => {
     it('redacts an oversized key (length cap)', () => {
       const huge = 'x'.repeat(500)
       expect(prefKeyForTelemetry('interactionStyle', huge)).toBe('interactionStyle:[REDACTED]')
+    })
+  })
+
+  describe('usageDetailStringArray', () => {
+    const entry = (detail: Record<string, unknown>): UsageLogEntry => ({
+      timestamp: '2026-07-10T00:00:00.000Z',
+      operation: 'test',
+      model: 'none',
+      tokenCount: 0,
+      detail,
+    })
+
+    it('returns the string members of a detail array', () => {
+      expect(usageDetailStringArray(entry({ injectedKeys: ['a', 'b'] }), 'injectedKeys')).toEqual([
+        'a',
+        'b',
+      ])
+    })
+
+    it('filters out non-string members', () => {
+      expect(usageDetailStringArray(entry({ k: ['a', 1, null, 'b', {}] }), 'k')).toEqual(['a', 'b'])
+    })
+
+    it('returns empty for a missing key, a non-array value, or absent detail', () => {
+      expect(usageDetailStringArray(entry({ k: 'not-an-array' }), 'k')).toEqual([])
+      expect(usageDetailStringArray(entry({}), 'missing')).toEqual([])
+      expect(
+        usageDetailStringArray(
+          { timestamp: 't', operation: 'o', model: 'none', tokenCount: 0 },
+          'k'
+        )
+      ).toEqual([])
     })
   })
 

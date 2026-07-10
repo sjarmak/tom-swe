@@ -137,6 +137,22 @@ export function prefKeyForTelemetry(category: string, key: string): string {
 }
 
 /**
+ * Reads a usage.log entry's `detail[key]` as an array of strings, dropping any
+ * non-string members and returning [] when the field is absent or not an array.
+ * The safe accessor for the `category:key` list fields (injectedKeys,
+ * suggestionKeys, promoted, corrections, asserted/confirmed/corrected) that
+ * telemetry consumers join on.
+ */
+export function usageDetailStringArray(
+  entry: UsageLogEntry,
+  key: string
+): readonly string[] {
+  const value = entry.detail?.[key]
+  if (!Array.isArray(value)) return []
+  return value.filter((v): v is string => typeof v === 'string')
+}
+
+/**
  * Appends a usage log entry as a JSON line to tom/usage.log, stamping the
  * telemetry schema version. Creates directories if they do not exist.
  */
