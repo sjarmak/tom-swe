@@ -112,6 +112,124 @@ describe('sanitizeValue', () => {
   ])('leaves benign strings unchanged: %s', (_label, value) => {
     expect(sanitizeValue(value)).toBe(value)
   })
+
+  it('preserves the host of a credentialed connection string whose host has an email-shaped TLD', () => {
+    // Regression: the email pattern must run after (and not re-match) the
+    // '[REDACTED]@host' span the url-credential pattern leaves behind. The host
+    // here (mail.corp.example.io) is deliberately email-shaped to isolate that
+    // interaction; if the email pattern ran first or matched the redacted span,
+    // the host would be lost.
+    expect(sanitizeValue('mysql://root:hunter2@mail.corp.example.io:3306/db')).toBe(
+      `mysql://${REDACTED}@mail.corp.example.io:3306/db`
+    )
+  })
+})
+
+describe('AWS secret access key', () => {
+  it('redacts a labelled key=value form (whole token)', () => {
+    // The embedded AWS pattern redacts the value first; the resulting single
+    // token `aws_secret_access_key=[REDACTED]` then also matches the existing
+    // `/[A-Z_]+_KEY=[^\s]+/i` whole-token pattern during tokenization, so it
+    // collapses to a bare [REDACTED]. Either mechanism alone prevents the leak.
+    const result = redactEmbeddedSecrets(
+      'aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+    )
+    expect(result).not.toContain('wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY')
+    expect(result).toBe(REDACTED)
+  })
+
+  it('redacts a quoted JSON/YAML labelled form, preserving label and quotes', () => {
+    const result = redactEmbeddedSecrets(
+      '"aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"'
+    )
+    expect(result).toBe(`"aws_secret_access_key": "${REDACTED}"`)
+  })
+
+  it('redacts the space-delimited CLI form, preserving the command and label', () => {
+    const result = redactEmbeddedSecrets(
+      'aws configure set aws_secret_access_key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+    )
+    expect(result).toBe(`aws configure set aws_secret_access_key ${REDACTED}`)
+  })
+
+  it('does NOT redact a bare 40-char identifier with no secret_access_key label', () => {
+    // FP-safety: a bare 40-char base64-ish token is ambiguous (git hashes,
+    // resource IDs). Only the labelled form is redacted.
+    const bare = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+    expect(redactEmbeddedSecrets(`resource ${bare} done`)).toBe(`resource ${bare} done`)
+  })
+
+  it('does not fire on prose mentioning the key name without a value', () => {
+    const prose = 'set the aws_secret_access_key in your environment'
+    expect(redactEmbeddedSecrets(prose)).toBe(prose)
+  })
+})
+
+describe('Pwd= / ODBC connection-string passwords', () => {
+  it('redacts a Pwd= value in a semicolon-delimited connection string, preserving structure', () => {
+    const result = redactEmbeddedSecrets('Server=h;Database=prod;Pwd=hunter2;')
+    expect(result).toBe(`Server=h;Database=prod;Pwd=${REDACTED};`)
+  })
+
+  it('redacts an uppercase PWD= form', () => {
+    const result = redactEmbeddedSecrets('DRIVER={ODBC};UID=admin;PWD=s3cr3t')
+    expect(result).not.toContain('s3cr3t')
+    expect(result).toContain('UID=admin')
+  })
+
+  it('redacts a brace-quoted value that embeds a semicolon, as a whole unit', () => {
+    // ODBC brace-quoting lets a value contain a literal ';'. The value must be
+    // consumed as a whole {...} unit or the tail ('word}') leaks in cleartext.
+    const result = redactEmbeddedSecrets(
+      'Driver={SQL Server};Server=h;Pwd={p@ss;word};UID=admin'
+    )
+    expect(result).not.toContain('word')
+    expect(result).toBe(`Driver={SQL Server};Server=h;Pwd=${REDACTED};UID=admin`)
+  })
+
+  it('does not fire on the OLDPWD shell env var', () => {
+    const value = 'OLDPWD=/home/user/project'
+    expect(redactEmbeddedSecrets(value)).toBe(value)
+  })
+
+  it('does not fire on a bare pwd command', () => {
+    expect(redactEmbeddedSecrets('cd /tmp && pwd')).toBe('cd /tmp && pwd')
+  })
+})
+
+describe('email / PII redaction', () => {
+  it('redacts a bare email value', () => {
+    expect(sanitizeValue('steph@example.com')).toBe(REDACTED)
+  })
+
+  it('redacts an email embedded in a command, preserving surrounding text', () => {
+    const result = redactEmbeddedSecrets('git config user.email steph@example.com')
+    expect(result).not.toContain('steph@example.com')
+    expect(result).toContain('git config user.email')
+  })
+
+  it('redacts every email occurrence', () => {
+    const result = redactEmbeddedSecrets('cc a@x.io and b@y.org')
+    expect(result).toBe(`cc ${REDACTED} and ${REDACTED}`)
+  })
+
+  it('leaves a bare @host with no TLD unchanged', () => {
+    expect(redactEmbeddedSecrets('run on user@localhost now')).toBe(
+      'run on user@localhost now'
+    )
+  })
+
+  it('handles a large @-free input in linear time (ReDoS guard)', () => {
+    // The bounded quantifiers keep the pattern linear; on unbounded call sites
+    // (redactPrompt, truncateDetail) an @-free paste must not stall. Assert both
+    // correctness (unchanged) and that it completes well under a generous bound.
+    const large = 'a'.repeat(200_000)
+    const start = performance.now()
+    const result = redactEmbeddedSecrets(large)
+    const elapsedMs = performance.now() - start
+    expect(result).toBe(large)
+    expect(elapsedMs).toBeLessThan(500)
+  })
 })
 
 describe('redactEmbeddedSecrets', () => {

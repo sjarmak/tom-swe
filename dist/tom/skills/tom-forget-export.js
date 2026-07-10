@@ -14181,6 +14181,41 @@ var EMBEDDED_SECRET_PATTERNS = [
   {
     pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
     replacement: REDACTED
+  },
+  // AWS secret access keys: context-anchored, NOT a bare 40-char base64 token.
+  // A lone 40-char base64 string is ambiguous (git hashes, resource IDs), so we
+  // only redact when the literal `secret_access_key` label precedes the value.
+  // The label + a 40+-char base64 run together carry near-zero false-positive
+  // risk. Separators accepted: `=`, `:`, or whitespace (covers `key=val`,
+  // `"key": "val"`, and the space-delimited CLI form `aws configure set … val`).
+  // The `AWS_SECRET_ACCESS_KEY=…` env-assignment form is already caught upstream
+  // by the `/[A-Z_]+_KEY=[^\s]+/i` whole-token pattern. Label and any opening
+  // quote are preserved; only the value is redacted.
+  {
+    pattern: /((?:aws[_-]?)?secret[_-]?access[_-]?key["']?\s*[:=]?\s*["']?)[A-Za-z0-9/+]{40,}={0,2}/gi,
+    replacement: `$1${REDACTED}`
+  },
+  // ODBC/ADO connection-string passwords using the `Pwd=` abbreviation, which
+  // the whole-token `/password[=:].+/i` pattern misses. Connection strings are
+  // `;`-delimited (never split by the whitespace tokenizer below). A value may
+  // be brace-quoted (`Pwd={p@ss;word}`) to embed a literal `;`, so the
+  // brace-quoted form is matched as a whole `{...}` unit first; otherwise the
+  // value runs to the next `;` or whitespace. The `\b` before `pwd` avoids
+  // firing inside `OLDPWD`. Full `Password=`/`password=` forms are already
+  // whole-value-redacted upstream and are intentionally left to that path. Key
+  // is preserved; only the value is redacted.
+  { pattern: /(\bpwd\s*=\s*)(?:\{[^}]*\}|[^;\s]+)/gi, replacement: `$1${REDACTED}` },
+  // Email addresses (PII). The local-part class excludes `[` and `]`, so this
+  // cannot re-match the `[REDACTED]@host` span the URL-credential pattern above
+  // leaves behind — keeping this entry after that pattern is load-bearing for
+  // connection-string host preservation. Requires a dotted TLD, so a bare
+  // `user@localhost` is left intact. Quantifiers are bounded to RFC 5321 limits
+  // (local ≤64, domain ≤255) so the pattern stays linear-time: `redactPrompt`
+  // and `truncateDetail` call this on unbounded input that bypasses the
+  // MAX_VALUE_LENGTH cap, and the synchronous prompt hook must not stall.
+  {
+    pattern: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}/g,
+    replacement: REDACTED
   }
 ];
 
