@@ -179,8 +179,17 @@ export function rotateUsageLogIfNeeded(
  * Reads and validates the usage log. Lines that fail to parse or validate
  * are counted, not silently dropped, so consumers can surface corruption.
  * Returns empty results when the log does not exist yet.
+ *
+ * `opts.sessionId` restricts the read to one session's entries via a cheap
+ * substring pre-filter: lines that cannot mention that sessionId skip
+ * JSON.parse/Zod entirely. This keeps the Stop-hook follow-through read O(this
+ * session's lines) instead of O(whole log) — the exact `entry.sessionId`
+ * match still happens downstream, so the filter only avoids parse cost, never
+ * changes which entries a caller ultimately accepts. `invalidLines` then
+ * counts only corruption among the retained (session-matching) lines; callers
+ * that must audit whole-log corruption (tom-status) omit the option.
  */
-export function readUsageLog(): UsageLogReadResult {
+export function readUsageLog(opts?: { readonly sessionId?: string }): UsageLogReadResult {
   const logPath = path.join(globalTomDir(), 'usage.log')
 
   let content: string
@@ -190,11 +199,15 @@ export function readUsageLog(): UsageLogReadResult {
     return { entries: [], invalidLines: 0 }
   }
 
+  const sessionFilter = opts?.sessionId
   const entries: UsageLogEntry[] = []
   let invalidLines = 0
 
   for (const line of content.split('\n')) {
     if (line.trim() === '') {
+      continue
+    }
+    if (sessionFilter !== undefined && !line.includes(sessionFilter)) {
       continue
     }
     try {

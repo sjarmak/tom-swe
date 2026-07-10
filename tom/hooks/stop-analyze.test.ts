@@ -866,6 +866,93 @@ describe('analyzeCompletedSession', () => {
     expect(detail['penalty']).toBe(0.5)
   })
 
+  it('emits a follow-through record splitting injected keys into confirmed vs corrected', async () => {
+    // Seed the session-start injection that asserted two preference keys, as a
+    // prior process would have written it before this Stop analyzes the session.
+    const tomDir = path.join(tempDir, '.claude', 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
+    fs.appendFileSync(
+      path.join(tomDir, 'usage.log'),
+      JSON.stringify({
+        v: 1,
+        timestamp: '2026-07-01T00:00:00.000Z',
+        operation: 'session-start-injection',
+        model: 'none',
+        tokenCount: 0,
+        sessionId: 'follow-through-test',
+        detail: {
+          chars: 80,
+          lines: 2,
+          preferences: 2,
+          injectedKeys: ['codingPreferences:language', 'interactionStyle:verbosity'],
+        },
+      }) + '\n',
+      'utf-8'
+    )
+    writeSessionFile('follow-through-test')
+    // The user corrects exactly one of the two asserted keys in-session.
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'follow-through-test',
+        intent: 'switch language',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [
+          {
+            category: 'codingPreferences',
+            key: 'language',
+            correctedValue: 'rust',
+            evidence: 'user switched from typescript to rust',
+          },
+        ],
+      },
+      tokensUsed: 100,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('follow-through-test')
+
+    const entries = readUsageEntries()
+    const record = entries.find(
+      (e) => e['operation'] === 'preference-follow-through'
+    )
+    expect(record).toBeDefined()
+    expect(record?.['sessionId']).toBe('follow-through-test')
+    const detail = (record?.['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['asserted']).toEqual([
+      'codingPreferences:language',
+      'interactionStyle:verbosity',
+    ])
+    expect(detail['corrected']).toEqual(['codingPreferences:language'])
+    expect(detail['confirmed']).toEqual(['interactionStyle:verbosity'])
+  })
+
+  it('does not emit a follow-through record when nothing was asserted', async () => {
+    writeSessionFile('no-assertion-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'no-assertion-test',
+        intent: 'quick fix',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [],
+      },
+      tokensUsed: 50,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('no-assertion-test')
+
+    const entries = readUsageEntries()
+    expect(
+      entries.find((e) => e['operation'] === 'preference-follow-through')
+    ).toBeUndefined()
+  })
+
   it('uses the configured correctionPenalty in correction telemetry', async () => {
     const tomDir = path.join(tempDir, '.claude', 'tom')
     fs.mkdirSync(tomDir, { recursive: true })

@@ -14048,7 +14048,7 @@ function logUsage(entry) {
   fs3.appendFileSync(logPath, line, { encoding: "utf-8", mode: LOG_FILE_MODE });
 }
 var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
-function readUsageLog() {
+function readUsageLog(opts) {
   const logPath = path3.join(globalTomDir(), "usage.log");
   let content;
   try {
@@ -14056,10 +14056,14 @@ function readUsageLog() {
   } catch {
     return { entries: [], invalidLines: 0 };
   }
+  const sessionFilter = opts?.sessionId;
   const entries = [];
   let invalidLines = 0;
   for (const line of content.split("\n")) {
     if (line.trim() === "") {
+      continue;
+    }
+    if (sessionFilter !== void 0 && !line.includes(sessionFilter)) {
       continue;
     }
     try {

@@ -13958,7 +13958,7 @@ var UsageLogEntrySchema = external_exports.looseObject({
   detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
 });
 var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
-function readUsageLog() {
+function readUsageLog(opts) {
   const logPath = path3.join(globalTomDir(), "usage.log");
   let content;
   try {
@@ -13966,10 +13966,14 @@ function readUsageLog() {
   } catch {
     return { entries: [], invalidLines: 0 };
   }
+  const sessionFilter = opts?.sessionId;
   const entries = [];
   let invalidLines = 0;
   for (const line of content.split("\n")) {
     if (line.trim() === "") {
+      continue;
+    }
+    if (sessionFilter !== void 0 && !line.includes(sessionFilter)) {
       continue;
     }
     try {
@@ -14172,12 +14176,55 @@ function formatEffectiveness(summary) {
   return lines;
 }
 
+// tom/follow-through.ts
+function detailStringArray2(entry, key) {
+  const value = entry.detail?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((v) => typeof v === "string");
+}
+function round22(n) {
+  return Math.round(n * 100) / 100;
+}
+function computeFollowThroughSummary(entries) {
+  let analyses = 0;
+  let assertedKeys = 0;
+  let confirmedKeys = 0;
+  let correctedKeys = 0;
+  for (const entry of entries) {
+    if (entry.operation !== "preference-follow-through") continue;
+    analyses += 1;
+    assertedKeys += detailStringArray2(entry, "asserted").length;
+    confirmedKeys += detailStringArray2(entry, "confirmed").length;
+    correctedKeys += detailStringArray2(entry, "corrected").length;
+  }
+  return {
+    hasData: analyses > 0,
+    analyses,
+    assertedKeys,
+    confirmedKeys,
+    correctedKeys,
+    followThroughRate: assertedKeys > 0 ? round22(confirmedKeys / assertedKeys * 100) : 0
+  };
+}
+function formatFollowThrough(summary) {
+  if (!summary.hasData) return [];
+  return [
+    "## Follow-through (injected/consulted keys, confirmed vs corrected in-session)",
+    `- Follow-through rate: ${summary.followThroughRate}% (${summary.confirmedKeys}/${summary.assertedKeys} asserted keys survived un-corrected across ${summary.analyses} analysis runs; ${summary.correctedKeys} corrected).`,
+    "- Confirmed = asserted and not overridden in the same session; measures whether asserting a preference held up, not that it improved an answer.",
+    "- Exposure unit is the analysis run (per-turn Stop analysis), matching the correction/promotion rates, not the host session.",
+    ""
+  ];
+}
+
 // tom/skills/tom-effectiveness.ts
 function main() {
   const usage = readUsageLog();
-  const summary = computeEffectivenessSummary(usage.entries);
-  const lines = formatEffectiveness(summary);
-  const output = lines.length > 0 ? lines.join("\n") : "No promotion or correction telemetry recorded yet. ToM populates this after it has analyzed and promoted preferences across several sessions.";
+  const lines = [
+    ...formatEffectiveness(computeEffectivenessSummary(usage.entries)),
+    ...formatFollowThrough(computeFollowThroughSummary(usage.entries))
+  ];
+  const output = lines.length > 0 ? lines.join("\n") : "No promotion, correction, or follow-through telemetry recorded yet. ToM populates this after it has analyzed, injected, and promoted preferences across several sessions.";
   process.stdout.write(output);
 }
 if (require.main === module) {

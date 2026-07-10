@@ -14165,6 +14165,35 @@ function isLegacyGenericKey(key) {
   return LEGACY_GENERIC_KEYS.has(key);
 }
 var DEFAULT_CORRECTION_PENALTY = 0.5;
+function canonicalCategoryByKey(preferences) {
+  const categoriesByKey = /* @__PURE__ */ new Map();
+  for (const p of preferences) {
+    const set2 = categoriesByKey.get(p.key) ?? /* @__PURE__ */ new Set();
+    set2.add(p.category);
+    categoriesByKey.set(p.key, set2);
+  }
+  const canonical = /* @__PURE__ */ new Map();
+  for (const [key, categories] of categoriesByKey) {
+    if (categories.size !== 1) {
+      continue;
+    }
+    const [only] = categories;
+    if (only === void 0) {
+      continue;
+    }
+    const parsed = PreferenceCategorySchema.safeParse(only);
+    if (parsed.success) {
+      canonical.set(key, parsed.data);
+    }
+  }
+  return canonical;
+}
+function dropRefiledCorrections(corrections, canonical) {
+  return corrections.filter((c) => {
+    const canon = canonical.get(c.key);
+    return canon === void 0 || canon === c.category;
+  });
+}
 function reinforcePreference(preferences, observation, asOf = /* @__PURE__ */ new Date()) {
   const now = asOf.toISOString();
   const matchIndex = preferences.findIndex(
@@ -14287,10 +14316,12 @@ function summarizeCategory(clusters, category) {
     (a, b) => b.confidence !== a.confidence ? b.confidence - a.confidence : a.key.localeCompare(b.key)
   ).slice(0, SUMMARY_MAX_ENTRIES).map((c) => `${c.key}: ${c.value}`).join("; ");
 }
-function extractObservations(session) {
+function extractObservations(session, canonical) {
   const byKey = /* @__PURE__ */ new Map();
   const add = (observation) => {
-    byKey.set(`${observation.category}::${observation.key}`, observation);
+    const canon = canonical.get(observation.key);
+    const resolved = canon !== void 0 && canon !== observation.category ? { ...observation, category: canon } : observation;
+    byKey.set(`${resolved.category}::${resolved.key}`, resolved);
   };
   for (const pref of session.codingPreferences) {
     add(
@@ -14311,14 +14342,15 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
     decayDays,
     now
   );
-  const observations = extractObservations(session);
+  const canonical = canonicalCategoryByKey(decayed);
+  const observations = extractObservations(session, canonical);
   let preferences = decayed;
   for (const observation of observations) {
     preferences = reinforcePreference(preferences, observation, now);
   }
   const corrected = applyCorrections(
     preferences,
-    session.corrections ?? [],
+    dropRefiledCorrections(session.corrections ?? [], canonical),
     correctionPenalty,
     now
   );
@@ -14503,6 +14535,37 @@ function rotateUsageLogIfNeeded(maxBytes = USAGE_LOG_ROTATE_BYTES) {
     detail: { archive: path4.basename(archivePath) }
   });
   return true;
+}
+function readUsageLog(opts) {
+  const logPath = path4.join(globalTomDir(), "usage.log");
+  let content;
+  try {
+    content = fs4.readFileSync(logPath, "utf-8");
+  } catch {
+    return { entries: [], invalidLines: 0 };
+  }
+  const sessionFilter = opts?.sessionId;
+  const entries = [];
+  let invalidLines = 0;
+  for (const line of content.split("\n")) {
+    if (line.trim() === "") {
+      continue;
+    }
+    if (sessionFilter !== void 0 && !line.includes(sessionFilter)) {
+      continue;
+    }
+    try {
+      const parsed = UsageLogEntrySchema.safeParse(JSON.parse(line));
+      if (parsed.success) {
+        entries.push(parsed.data);
+      } else {
+        invalidLines += 1;
+      }
+    } catch {
+      invalidLines += 1;
+    }
+  }
+  return { entries, invalidLines };
 }
 
 // tom/config.ts
@@ -14708,6 +14771,35 @@ function buildMemoryIndex(scope = "global") {
     documents.push({ id: "user-model", content, tier: 3 });
   }
   return buildIndex(documents);
+}
+
+// tom/follow-through.ts
+function detailStringArray(entry, key) {
+  const value = entry.detail?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((v) => typeof v === "string");
+}
+function assertedKeysForSession(entries, sessionId) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const entry of entries) {
+    if (entry.sessionId !== sessionId) continue;
+    if (entry.operation === "session-start-injection") {
+      for (const key of detailStringArray(entry, "injectedKeys")) keys.add(key);
+    } else if (entry.operation === "ambiguity-consultation" && entry.detail?.["source"] === "user-model") {
+      for (const key of detailStringArray(entry, "suggestionKeys")) keys.add(key);
+    }
+  }
+  return [...keys];
+}
+function splitFollowThrough(asserted, correctedKeys) {
+  const correctedSet = new Set(correctedKeys);
+  const confirmed = [];
+  const corrected = [];
+  for (const key of asserted) {
+    if (correctedSet.has(key)) corrected.push(key);
+    else confirmed.push(key);
+  }
+  return { confirmed, corrected };
 }
 
 // tom/transcript-usage.ts
@@ -15887,7 +15979,11 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
     previousUserModel
   );
   writeUserModel(aggregatedUserModel, "global");
-  const corrections = sessionModel.corrections ?? [];
+  const corrections = dropRefiledCorrections(
+    sessionModel.corrections ?? [],
+    canonicalCategoryByKey(previousUserModel?.preferencesClusters ?? [])
+  );
+  const correctedKeys = corrections.map((c) => `${c.category}:${c.key}`);
   if (corrections.length > 0) {
     logUsage({
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -15896,9 +15992,24 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
       tokenCount: 0,
       sessionId,
       detail: {
-        corrections: corrections.map((c) => `${c.category}:${c.key}`),
+        corrections: correctedKeys,
         penalty: config2.correctionPenalty
       }
+    });
+  }
+  const asserted = assertedKeysForSession(
+    readUsageLog({ sessionId }).entries,
+    sessionId
+  );
+  if (asserted.length > 0) {
+    const { confirmed, corrected } = splitFollowThrough(asserted, correctedKeys);
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "preference-follow-through",
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: { asserted, confirmed, corrected }
     });
   }
   try {

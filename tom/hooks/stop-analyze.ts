@@ -25,13 +25,18 @@ import {
 import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
-import { getModelForOperation, logUsage, rotateUsageLogIfNeeded } from '../routing.js'
+import { getModelForOperation, logUsage, readUsageLog, rotateUsageLogIfNeeded } from '../routing.js'
+import { assertedKeysForSession, splitFollowThrough } from '../follow-through.js'
 import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { computeVocabularyEcho } from '../vocabulary-echo.js'
 import { extractSessionModel } from '../session-extract.js'
 import { runPromotion } from '../promotion.js'
-import { isLegacyGenericKey } from '../preferences.js'
+import {
+  isLegacyGenericKey,
+  canonicalCategoryByKey,
+  dropRefiledCorrections,
+} from '../preferences.js'
 import { judgeDerivability } from '../promotion-gate.js'
 import type { GateCandidate } from '../promotion-gate.js'
 import { pruneOldSessions } from '../pruning.js'
@@ -376,7 +381,17 @@ export async function analyzeCompletedSession(
 
   // Telemetry for the external memory-eval harness: one entry per
   // correction batch, listing category:key pairs and the applied penalty.
-  const corrections = sessionModel.corrections ?? []
+  // Cross-category re-files (the analyzer correcting its own prior-category
+  // inference, not a user override) are dropped against the prior Tier 3
+  // model's canonical categories — matching what aggregation applied — so a
+  // mere re-file emits no correction event.
+  const corrections = dropRefiledCorrections(
+    sessionModel.corrections ?? [],
+    canonicalCategoryByKey(previousUserModel?.preferencesClusters ?? [])
+  )
+  // Derived from the FILTERED corrections so follow-through's "corrected" set
+  // also excludes self-refiles (a re-filed key is not a user override).
+  const correctedKeys = corrections.map((c) => `${c.category}:${c.key}`)
   if (corrections.length > 0) {
     logUsage({
       timestamp: new Date().toISOString(),
@@ -385,9 +400,33 @@ export async function analyzeCompletedSession(
       tokenCount: 0,
       sessionId,
       detail: {
-        corrections: corrections.map((c) => `${c.category}:${c.key}`),
+        corrections: correctedKeys,
         penalty: config.correctionPenalty,
       },
+    })
+  }
+
+  // Outcome follow-through: tie the preference keys ASSERTED this session
+  // (SessionStart injection + user-model consultation, read back from the log
+  // stream — no new runtime state threaded) to whether the user corrected or
+  // confirmed (left un-corrected) each one in-session. One record per session
+  // that asserted anything; the confirmed case is the majority, so this is NOT
+  // gated on corrections existing (see follow-through.ts for the metric).
+  // Session-scoped read: only this session's lines are parsed (the whole
+  // usage.log grows to ~5MB between rotations, and this runs on every Stop).
+  const asserted = assertedKeysForSession(
+    readUsageLog({ sessionId }).entries,
+    sessionId
+  )
+  if (asserted.length > 0) {
+    const { confirmed, corrected } = splitFollowThrough(asserted, correctedKeys)
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'preference-follow-through',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: { asserted, confirmed, corrected },
     })
   }
 

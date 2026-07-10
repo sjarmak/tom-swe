@@ -715,3 +715,65 @@ describe('aggregateSessionIntoModel style summaries', () => {
     expect(r1.interactionStyleSummary).not.toBe('OLD')
   })
 })
+
+describe('taxonomy stability: canonical category per key (tom-swe-0da)', () => {
+  const KEY = 'execution_backend_for_iteration'
+
+  // Synthetic analysis pair: session A files the key under codingPreferences;
+  // session B re-files the SAME key under interactionStyle and emits a
+  // cross-category correction against the systems own prior inference.
+  it('resolves the key to exactly one category and drops the cross-category re-file correction', () => {
+    const sessionA = makeSessionModel({
+      sessionId: 'session-A',
+      interactionPatterns: [],
+      codingPreferences: [{ key: KEY, value: 'local_scripts' }],
+      corrections: [],
+      endedAt: '2026-07-06T00:00:00.000Z',
+    })
+    const sessionB = makeSessionModel({
+      sessionId: 'session-B',
+      // Same concept re-filed under a different top-level category…
+      interactionPatterns: [{ key: KEY, value: 'local_scripts' }],
+      codingPreferences: [],
+      // …and a "correction" against the prior codingPreferences inference,
+      // which is the system correcting itself, not a real user override.
+      corrections: [
+        {
+          category: 'interactionStyle',
+          key: KEY,
+          correctedValue: 'local_scripts',
+          evidence: 'analyzer re-filed the concept under interactionStyle',
+        },
+      ],
+      endedAt: '2026-07-07T00:00:00.000Z',
+    })
+
+    const afterA = aggregateSessionIntoModel(
+      makeUserModel(),
+      sessionA,
+      30,
+      0.5,
+      new Date(sessionA.endedAt as string)
+    )
+    const afterB = aggregateSessionIntoModel(
+      afterA,
+      sessionB,
+      30,
+      0.5,
+      new Date(sessionB.endedAt as string)
+    )
+
+    const forKey = afterB.preferencesClusters.filter((c) => c.key === KEY)
+    // AC part 1: the key resolves to exactly one category.
+    expect(forKey).toHaveLength(1)
+    expect(forKey[0]?.category).toBe('codingPreferences')
+
+    // AC part 2 (effect side): the cross-category "correction" was dropped, so
+    // it neither penalized confidence nor stamped correction provenance. Two
+    // reinforcements (A + B remapped) net ~0.2 after one day of decay; a
+    // surviving correction would have spawned a second interactionStyle cluster
+    // (caught above) and stamped learnedVia='correction'.
+    expect(forKey[0]?.confidence).toBeGreaterThan(0.15)
+    expect(forKey[0]?.learnedVia).toBeUndefined()
+  })
+})
