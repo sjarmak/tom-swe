@@ -21,7 +21,7 @@ import { isLegacyGenericKey } from './preferences.js'
 import { sanitizeForInjection } from './render-guard.js'
 import { search } from './bm25.js'
 import type { BM25Index, BM25SearchResult } from './bm25.js'
-import { logUsage } from './routing.js'
+import { logUsage, prefKeyForTelemetry } from './routing.js'
 
 // --- Configuration ---
 
@@ -141,7 +141,7 @@ function buildSuggestionFromUserModel(
   return parseResult.success
     ? {
         suggestion: parseResult.data,
-        keys: topPrefs.map(p => `${p.category}:${p.key}`),
+        keys: topPrefs.map(p => prefKeyForTelemetry(p.category, p.key)),
       }
     : null
 }

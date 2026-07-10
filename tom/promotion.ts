@@ -28,6 +28,7 @@ import type { DerivabilityGate } from './promotion-gate.js'
 import { isLegacyGenericKey } from './preferences.js'
 import { sanitizeForInjection } from './render-guard.js'
 import { logUsage } from './routing.js'
+import { sanitizeValue } from './secrets.js'
 
 // --- Markers ---
 
@@ -329,6 +330,17 @@ function prefIdentity(pref: PreferenceCluster): string {
 }
 
 /**
+ * Identity string for the durable usage.log, with the key and value passed
+ * through secret detection first. Distinct from prefIdentity, which is the
+ * in-memory join key for gate verdicts and MUST keep the real value — only the
+ * logged emission is redacted (see prefKeyForTelemetry in routing.ts for why
+ * sanitization lives at the emission site, not the coining site).
+ */
+function redactedPrefIdentity(pref: PreferenceCluster): string {
+  return `${pref.category}::${sanitizeValue(pref.key)}::${sanitizeValue(pref.value)}`
+}
+
+/**
  * Regenerates one target's marker block from the promotable set.
  * An empty set removes the block (retirement to zero); the block is always
  * a wholesale projection of the current store, never an edit. Returns
@@ -375,7 +387,7 @@ function logSkipped(
     model: 'none',
     tokenCount: 0,
     reason,
-    detail: { target, reason, skipped: skipped.map(prefIdentity) },
+    detail: { target, reason, skipped: skipped.map(redactedPrefIdentity) },
   })
 }
 

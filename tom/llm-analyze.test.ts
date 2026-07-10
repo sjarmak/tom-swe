@@ -495,6 +495,30 @@ describe('parseAnalysisOutput', () => {
     }
   })
 
+  it('redacts a structured secret embedded in the raw no-json-found detail', () => {
+    // The failure path dumps raw LLM output verbatim into the durable
+    // session-analysis-fallback entry; a token in that output must not leak.
+    const result = parseAnalysisOutput('Authorization: Bearer sk-abcdef1234567890XYZ', 's1')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toBe('no-json-found')
+      expect(result.detail).toContain('[REDACTED]')
+      expect(result.detail).not.toContain('sk-abcdef1234567890XYZ')
+    }
+  })
+
+  it('redacts a long opaque credential blob in the raw failure detail', () => {
+    // A base64 credential blob with no structured prefix would otherwise sit
+    // cleartext in the raw-output dump; the opaque-blob backstop catches it.
+    const blob = 'wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYabcdef0123456789ABCDEF'
+    const result = parseAnalysisOutput(`garbage prefix ${blob}`, 's1')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.detail).not.toContain(blob)
+      expect(result.detail).toContain('[REDACTED]')
+    }
+  })
+
   it('preserves any coined key without warning (no hardcoded allow-list)', () => {
     // tom-swe-3mb removed the stale ALLOWED_KEYS constraint and its advisory
     // warn. Any snake_case key the analyzer coins flows through to storage —

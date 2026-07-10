@@ -13945,6 +13945,34 @@ function globalTomDir() {
   return path2.join(os.homedir(), ".claude", "tom");
 }
 
+// tom/secrets.ts
+var REDACTED = "[REDACTED]";
+var EMBEDDED_SECRET_PATTERNS = [
+  // Authorization header values anywhere in a command. Bearer is
+  // case-insensitive (mirrors the anchored pattern); Basic is case-sensitive
+  // with a length floor so prose like "basic authentication" is not swallowed.
+  { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: REDACTED },
+  { pattern: /\bBasic\s+[A-Za-z0-9+/=]{16,}/g, replacement: REDACTED },
+  // AWS access key IDs anywhere, e.g. inside `AWS_ACCESS_KEY_ID=AKIA...`.
+  { pattern: /\bAKIA[A-Z0-9]{16}\b/g, replacement: REDACTED },
+  // JWTs anywhere: header.payload[.signature].
+  {
+    pattern: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g,
+    replacement: REDACTED
+  },
+  // URL connection-string credentials (scheme://user:pass@host): redact the
+  // credential pair, keep scheme and host readable.
+  { pattern: /(\/\/)[^\s/:@]+:[^\s@]+@/g, replacement: `$1${REDACTED}@` },
+  // PEM private-key blocks (RSA/EC/OPENSSH/PKCS8), including the JSON-escaped
+  // form embedded in service-account keys (\n between armor and body). Matched
+  // as a whole block so the base64 body never survives; the armor is specific
+  // enough to carry zero false-positive risk.
+  {
+    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    replacement: REDACTED
+  }
+];
+
 // tom/routing.ts
 var UsageLogEntrySchema = external_exports.looseObject({
   v: external_exports.number().optional(),

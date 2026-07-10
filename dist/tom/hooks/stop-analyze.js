@@ -14513,6 +14513,92 @@ var os3 = __toESM(require("node:os"));
 var fs4 = __toESM(require("node:fs"));
 var path4 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
+
+// tom/secrets.ts
+var REDACTED = "[REDACTED]";
+var MAX_VALUE_LENGTH = 200;
+var SECRET_PATTERNS = [
+  /^sk-[a-zA-Z0-9_-]+$/,
+  // OpenAI-style keys
+  /^ghp_[a-zA-Z0-9]+$/,
+  // GitHub personal tokens
+  /^gho_[a-zA-Z0-9]+$/,
+  // GitHub OAuth tokens
+  /^ghs_[a-zA-Z0-9]+$/,
+  // GitHub server tokens
+  /^github_pat_[a-zA-Z0-9_]+$/,
+  // GitHub fine-grained PATs
+  /^Bearer\s+.+/i,
+  // Bearer tokens
+  /^Basic\s+.+/i,
+  // Basic auth
+  /^token\s+.+/i,
+  // Generic token prefix
+  /^xox[bposa]-[a-zA-Z0-9-]+$/,
+  // Slack tokens
+  /^AKIA[A-Z0-9]{16}$/,
+  // AWS access keys
+  /^eyJ[a-zA-Z0-9_-]+\.eyJ/,
+  // JWT tokens
+  /password[=:].+/i,
+  // password= or password:
+  /^[a-f0-9]{40}$/,
+  // 40-char hex (git hashes, some tokens)
+  /^npm_[a-zA-Z0-9]+$/,
+  // npm tokens
+  /^pypi-[a-zA-Z0-9]+$/,
+  // PyPI tokens
+  /[A-Z_]+=sk-[a-zA-Z0-9_-]+/,
+  // ENV_VAR=secret patterns
+  /[A-Z_]+_KEY=[^\s]+/i
+  // API_KEY=value patterns
+];
+var EMBEDDED_SECRET_PATTERNS = [
+  // Authorization header values anywhere in a command. Bearer is
+  // case-insensitive (mirrors the anchored pattern); Basic is case-sensitive
+  // with a length floor so prose like "basic authentication" is not swallowed.
+  { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: REDACTED },
+  { pattern: /\bBasic\s+[A-Za-z0-9+/=]{16,}/g, replacement: REDACTED },
+  // AWS access key IDs anywhere, e.g. inside `AWS_ACCESS_KEY_ID=AKIA...`.
+  { pattern: /\bAKIA[A-Z0-9]{16}\b/g, replacement: REDACTED },
+  // JWTs anywhere: header.payload[.signature].
+  {
+    pattern: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g,
+    replacement: REDACTED
+  },
+  // URL connection-string credentials (scheme://user:pass@host): redact the
+  // credential pair, keep scheme and host readable.
+  { pattern: /(\/\/)[^\s/:@]+:[^\s@]+@/g, replacement: `$1${REDACTED}@` },
+  // PEM private-key blocks (RSA/EC/OPENSSH/PKCS8), including the JSON-escaped
+  // form embedded in service-account keys (\n between armor and body). Matched
+  // as a whole block so the base64 body never survives; the armor is specific
+  // enough to carry zero false-positive risk.
+  {
+    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    replacement: REDACTED
+  }
+];
+function looksLikeSecret(value) {
+  return SECRET_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+function redactEmbeddedSecrets(value) {
+  let result = value;
+  for (const { pattern, replacement } of EMBEDDED_SECRET_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result.split(/(\s+)/).map((token) => token.trim() !== "" && looksLikeSecret(token) ? REDACTED : token).join("");
+}
+function sanitizeValue(value) {
+  if (looksLikeSecret(value)) {
+    return REDACTED;
+  }
+  if (value.length > MAX_VALUE_LENGTH) {
+    return REDACTED;
+  }
+  return redactEmbeddedSecrets(value);
+}
+
+// tom/routing.ts
 var TELEMETRY_SCHEMA_VERSION = 1;
 var UsageLogEntrySchema = external_exports.looseObject({
   v: external_exports.number().optional(),
@@ -14554,6 +14640,9 @@ function getModelForOperation(operation) {
 }
 var LOG_DIR_MODE = 448;
 var LOG_FILE_MODE = 384;
+function prefKeyForTelemetry(category, key) {
+  return `${category}:${sanitizeValue(key)}`;
+}
 function logUsage(entry) {
   const logPath = path4.join(globalTomDir(), "usage.log");
   const dir = path4.dirname(logPath);
@@ -14999,8 +15088,10 @@ function buildAnalysisPrompt(sessionLog, vocabulary = []) {
   ].join("\n");
 }
 var DETAIL_MAX_LENGTH = 500;
+var OPAQUE_BLOB = /[A-Za-z0-9+/_-]{32,}={0,2}/g;
 function truncateDetail(text) {
-  return text.length > DETAIL_MAX_LENGTH ? `${text.slice(0, DETAIL_MAX_LENGTH)}\u2026` : text;
+  const redacted = redactEmbeddedSecrets(text).replace(OPAQUE_BLOB, REDACTED);
+  return redacted.length > DETAIL_MAX_LENGTH ? `${redacted.slice(0, DETAIL_MAX_LENGTH)}\u2026` : redacted;
 }
 function extractFirstJsonObject(text) {
   const start = text.indexOf("{");
@@ -15367,6 +15458,9 @@ function isProjectScoped(pref) {
 function prefIdentity(pref) {
   return `${pref.category}::${pref.key}::${pref.value}`;
 }
+function redactedPrefIdentity(pref) {
+  return `${pref.category}::${sanitizeValue(pref.key)}::${sanitizeValue(pref.value)}`;
+}
 function projectBlockOntoFile(filePath, prefs) {
   if (prefs.length === 0) {
     return removePromotionBlock(filePath);
@@ -15395,7 +15489,7 @@ function logSkipped(target, reason, skipped) {
     model: "none",
     tokenCount: 0,
     reason,
-    detail: { target, reason, skipped: skipped.map(prefIdentity) }
+    detail: { target, reason, skipped: skipped.map(redactedPrefIdentity) }
   });
 }
 function applyTargetGates(prefs, target, gate, applyDerivability) {
@@ -15865,11 +15959,22 @@ function reconcilePreferenceCategories(rebuiltModel, previousModel, sessionId) {
       tokenCount: 0,
       sessionId,
       detail: {
+        // Sanitize the key and every value before they land in the durable
+        // usage.log — this is the one collapse-telemetry path that logs raw
+        // preference VALUES, so it applies the same structured-secret backstop
+        // as the category:key sites.
         collapses: novelCollapses.map((c) => ({
-          key: c.key,
+          key: sanitizeValue(c.key),
           winner: c.winner,
-          resolvedValue: resolvedValueByGroup.get(`${c.winner}::${c.key}`),
-          refiled: c.refiled
+          // resolveConflicts guarantees exactly one cluster per winner::key, so
+          // this lookup always hits; the `?? ''` only satisfies the string type.
+          resolvedValue: sanitizeValue(
+            resolvedValueByGroup.get(`${c.winner}::${c.key}`) ?? ""
+          ),
+          refiled: c.refiled.map((r) => ({
+            ...r,
+            value: sanitizeValue(r.value)
+          }))
         }))
       }
     });
@@ -16093,7 +16198,7 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
     sessionModel.corrections ?? [],
     canonicalCategoryByKey(previousUserModel?.preferencesClusters ?? [])
   );
-  const correctedKeys = corrections.map((c) => `${c.category}:${c.key}`);
+  const correctedKeys = corrections.map((c) => prefKeyForTelemetry(c.category, c.key));
   if (corrections.length > 0) {
     logUsage({
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -16136,7 +16241,7 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
         tokenCount: 0,
         sessionId,
         detail: {
-          promoted: promotion.promoted.map((p) => `${p.category}:${p.key}`),
+          promoted: promotion.promoted.map((p) => prefKeyForTelemetry(p.category, p.key)),
           targets: promotion.targets
         }
       });

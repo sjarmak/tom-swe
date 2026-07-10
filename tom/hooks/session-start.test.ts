@@ -172,6 +172,16 @@ describe('injectedKeysFromModel', () => {
     ])
   })
 
+  it('redacts a key that trips structured-secret detection before it enters telemetry', () => {
+    // Defense-in-depth: if the analyzer ever coins a structured secret as a key,
+    // the durable usage.log gets the redacted form. The persisted model keeps
+    // the real key (identity is unchanged) — only the emitted string is guarded.
+    const model = createUserModel({
+      preferencesClusters: [pref('ghp_ABCDEF1234567890', 'x', 0.9)],
+    })
+    expect(injectedKeysFromModel(model)).toEqual(['codingPreferences:[REDACTED]'])
+  })
+
   it('excludes low-confidence, promoted, and legacy generic keys', () => {
     const model = createUserModel({
       preferencesClusters: [

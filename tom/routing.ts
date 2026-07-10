@@ -11,6 +11,7 @@ import * as os from 'node:os'
 import { z } from 'zod'
 
 import { globalTomDir } from './memory-io.js'
+import { sanitizeValue } from './secrets.js'
 
 // --- Types ---
 
@@ -109,6 +110,31 @@ export function getModelForOperation(operation: OperationType): string {
 /** Store permissions: match fs-atomic's 0700 dirs / 0600 files. */
 const LOG_DIR_MODE = 0o700
 const LOG_FILE_MODE = 0o600
+
+/**
+ * Formats a preference identity (`category:key`) for the durable usage.log,
+ * redacting a key that trips secret detection or the length cap first.
+ *
+ * Applied at every telemetry EMISSION site rather than at the LLM coining site:
+ * usage.log re-derives these strings from the current persisted clusters on
+ * every session, so sanitizing here also covers keys that were persisted before
+ * this guard existed, and — critically — leaves the in-memory/on-disk model's
+ * real key untouched, so preference identity (category+key), reinforcement,
+ * promotion, and vocabulary reuse are never corrupted by a shared `[REDACTED]`
+ * bucket. sanitizeValue is a structured-secret + oversized-value backstop; it
+ * cannot detect a semantically-paraphrased key (a snake_case topic name is not
+ * a structured token), which is not mechanically detectable and out of scope.
+ *
+ * Edge case: two distinct secret-shaped keys in one session both collapse to
+ * `[REDACTED]`, so the follow-through join (splitFollowThrough) could mis-pair
+ * an asserted key with an unrelated correction. This is negligible in practice
+ * — the analyzer coins short snake_case keys that essentially never match a
+ * secret pattern — and preferring redaction over a faithful join is the right
+ * trade for the degenerate case.
+ */
+export function prefKeyForTelemetry(category: string, key: string): string {
+  return `${category}:${sanitizeValue(key)}`
+}
 
 /**
  * Appends a usage log entry as a JSON line to tom/usage.log, stamping the

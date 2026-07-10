@@ -25,7 +25,8 @@ import {
 import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
-import { getModelForOperation, logUsage, readUsageLog, rotateUsageLogIfNeeded } from '../routing.js'
+import { getModelForOperation, logUsage, prefKeyForTelemetry, readUsageLog, rotateUsageLogIfNeeded } from '../routing.js'
+import { sanitizeValue } from '../secrets.js'
 import { assertedKeysForSession, splitFollowThrough } from '../follow-through.js'
 import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
@@ -143,11 +144,22 @@ export function reconcilePreferenceCategories(
       tokenCount: 0,
       sessionId,
       detail: {
+        // Sanitize the key and every value before they land in the durable
+        // usage.log — this is the one collapse-telemetry path that logs raw
+        // preference VALUES, so it applies the same structured-secret backstop
+        // as the category:key sites.
         collapses: novelCollapses.map((c) => ({
-          key: c.key,
+          key: sanitizeValue(c.key),
           winner: c.winner,
-          resolvedValue: resolvedValueByGroup.get(`${c.winner}::${c.key}`),
-          refiled: c.refiled,
+          // resolveConflicts guarantees exactly one cluster per winner::key, so
+          // this lookup always hits; the `?? ''` only satisfies the string type.
+          resolvedValue: sanitizeValue(
+            resolvedValueByGroup.get(`${c.winner}::${c.key}`) ?? ''
+          ),
+          refiled: c.refiled.map((r) => ({
+            ...r,
+            value: sanitizeValue(r.value),
+          })),
         })),
       },
     })
@@ -482,7 +494,7 @@ export async function analyzeCompletedSession(
   )
   // Derived from the FILTERED corrections so follow-through's "corrected" set
   // also excludes self-refiles (a re-filed key is not a user override).
-  const correctedKeys = corrections.map((c) => `${c.category}:${c.key}`)
+  const correctedKeys = corrections.map((c) => prefKeyForTelemetry(c.category, c.key))
   if (corrections.length > 0) {
     logUsage({
       timestamp: new Date().toISOString(),
@@ -544,7 +556,7 @@ export async function analyzeCompletedSession(
         tokenCount: 0,
         sessionId,
         detail: {
-          promoted: promotion.promoted.map((p) => `${p.category}:${p.key}`),
+          promoted: promotion.promoted.map((p) => prefKeyForTelemetry(p.category, p.key)),
           targets: promotion.targets,
         },
       })

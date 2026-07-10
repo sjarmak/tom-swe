@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process'
 
 import type { SessionLog, SessionModel } from './schemas.js'
 import { SessionModelSchema } from './schemas.js'
+import { redactEmbeddedSecrets, REDACTED } from './secrets.js'
 
 // --- Types ---
 
@@ -181,8 +182,27 @@ export function buildAnalysisPrompt(
 
 const DETAIL_MAX_LENGTH = 500
 
+// A long opaque base64/base64url/hex run with no structured prefix — key
+// material, signatures, service-account blobs. Applied ONLY to failure-detail
+// text (raw LLM output / stderr), never to preference values: at 32+ chars this
+// would over-redact legitimate content, but in an error DUMP over-redaction is
+// the safe default. sanitizeValue's whole-value length cap does not apply here
+// (a 500-char diagnostic is mostly non-secret prose we want to keep).
+const OPAQUE_BLOB = /[A-Za-z0-9+/_-]{32,}={0,2}/g
+
+/**
+ * Prepares a failure-detail string for the durable usage.log. Error paths dump
+ * raw LLM output (`no-json-found` carries `modelText` verbatim) and stderr into
+ * the same append-only log; redact structured secrets AND any long opaque blob
+ * BEFORE truncating, so a credential near the 500-char boundary is caught in
+ * full rather than sliced past the pattern. Redaction is a structured-secret +
+ * opaque-blob backstop, not paraphrase detection (see prefKeyForTelemetry).
+ */
 function truncateDetail(text: string): string {
-  return text.length > DETAIL_MAX_LENGTH ? `${text.slice(0, DETAIL_MAX_LENGTH)}…` : text
+  const redacted = redactEmbeddedSecrets(text).replace(OPAQUE_BLOB, REDACTED)
+  return redacted.length > DETAIL_MAX_LENGTH
+    ? `${redacted.slice(0, DETAIL_MAX_LENGTH)}…`
+    : redacted
 }
 
 /**

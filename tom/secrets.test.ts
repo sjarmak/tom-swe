@@ -130,4 +130,19 @@ describe('redactEmbeddedSecrets', () => {
   it('returns benign strings unchanged', () => {
     expect(redactEmbeddedSecrets('ls -la /home/user')).toBe('ls -la /home/user')
   })
+
+  it('redacts a PEM private-key block wholesale, preserving surrounding text', () => {
+    const pem =
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD\n90p1yl0Q\n-----END RSA PRIVATE KEY-----'
+    const result = redactEmbeddedSecrets(`key is ${pem} done`)
+    expect(result).toBe(`key is ${REDACTED} done`)
+    expect(result).not.toContain('MIIBOgIBAAJBAKj34GkxFhD')
+  })
+
+  it('redacts a JSON-escaped PEM block (service-account key form)', () => {
+    const escaped =
+      '-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkq\\nhkiG9w0B\\n-----END PRIVATE KEY-----'
+    const result = redactEmbeddedSecrets(escaped)
+    expect(result).toBe(REDACTED)
+  })
 })

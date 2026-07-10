@@ -1303,6 +1303,52 @@ describe('analyzeCompletedSession', () => {
     expect(collapse).toBeUndefined()
   })
 
+  it('redacts a structured secret in the cross-category-collapse telemetry values', () => {
+    // The collapse trace is the one path that logs raw preference VALUES to the
+    // durable usage.log; a secret value must be redacted before it lands there.
+    const key = 'execution_backend_for_iteration'
+    const previous: UserModel = {
+      preferencesClusters: [
+        {
+          category: 'codingPreferences',
+          key,
+          value: 'local_scripts',
+          confidence: 0.5,
+          lastUpdated: '2026-06-01T00:00:00.000Z',
+          sessionCount: 3,
+        },
+      ],
+      interactionStyleSummary: '',
+      codingStyleSummary: '',
+      projectOverrides: {},
+    }
+    const rebuilt: UserModel = {
+      ...previous,
+      preferencesClusters: [
+        previous.preferencesClusters[0] as PreferenceCluster,
+        {
+          category: 'interactionStyle',
+          key,
+          value: 'ghp_ABCDEF1234567890',
+          confidence: 0.1,
+          lastUpdated: '2026-07-01T00:00:00.000Z',
+          sessionCount: 1,
+          learnedVia: 'correction',
+        },
+      ],
+    }
+
+    reconcilePreferenceCategories(rebuilt, previous, 'secret-value-test')
+
+    const collapse = readUsageEntries().find(
+      (e) => e['operation'] === 'preference-cross-category-collapse'
+    )
+    expect(collapse).toBeDefined()
+    const serialized = JSON.stringify(collapse)
+    expect(serialized).not.toContain('ghp_ABCDEF1234567890')
+    expect(serialized).toContain('[REDACTED]')
+  })
+
   it('promotes stable preferences into the global CLAUDE.md and persists promoted flags', async () => {
     seedTier2(9, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })
     writeSessionFile('promotion-test')

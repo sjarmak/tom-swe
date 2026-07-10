@@ -7,6 +7,7 @@ import {
   getModelForOperation,
   logUsage,
   readUsageLog,
+  prefKeyForTelemetry,
   TELEMETRY_SCHEMA_VERSION,
 } from './routing.js'
 
@@ -23,6 +24,25 @@ describe('routing', () => {
   afterEach(() => {
     process.env['HOME'] = originalHome
     fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  describe('prefKeyForTelemetry', () => {
+    it('passes a normal snake_case key through unchanged', () => {
+      expect(prefKeyForTelemetry('codingPreferences', 'execution_backend_for_iteration')).toBe(
+        'codingPreferences:execution_backend_for_iteration'
+      )
+    })
+
+    it('redacts a key that trips structured-secret detection', () => {
+      expect(prefKeyForTelemetry('codingPreferences', 'ghp_ABCDEF1234567890')).toBe(
+        'codingPreferences:[REDACTED]'
+      )
+    })
+
+    it('redacts an oversized key (length cap)', () => {
+      const huge = 'x'.repeat(500)
+      expect(prefKeyForTelemetry('interactionStyle', huge)).toBe('interactionStyle:[REDACTED]')
+    })
   })
 
   describe('getModelForOperation', () => {

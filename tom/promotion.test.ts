@@ -506,6 +506,33 @@ describe('runPromotion', () => {
     )
   })
 
+  it('redacts a structured secret in the value before it enters promotion-skipped telemetry', () => {
+    const projectFile = path.join(projectDir, 'CLAUDE.md')
+    fs.writeFileSync(projectFile, '# Project\n', 'utf-8')
+
+    // A candidate whose value is a structured secret, rejected by the gate.
+    const secretValued = cluster({ key: 'deployRitual', value: 'ghp_ABCDEF1234567890' })
+    const rejectAll = (): ReadonlySet<string> => new Set<string>()
+
+    runPromotion(userModel([secretValued]), DEFAULT_PROMOTION, projectDir, rejectAll)
+
+    const usageLog = fs.readFileSync(
+      path.join(homeDir, '.claude', 'tom', 'usage.log'),
+      'utf-8'
+    )
+    const skipEntry = usageLog
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((e) => e['operation'] === 'promotion-skipped')
+    expect(skipEntry).toBeDefined()
+    const serialized = JSON.stringify(skipEntry)
+    // The value never lands cleartext in the durable log; the join key is the
+    // sanitized identity.
+    expect(serialized).not.toContain('ghp_ABCDEF1234567890')
+    expect(serialized).toContain('[REDACTED]')
+  })
+
   it('caps the block at MAX_BLOCK_PREFERENCES priority-ordered lines', () => {
     fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true })
 

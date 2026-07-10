@@ -14038,6 +14038,92 @@ var os3 = __toESM(require("node:os"));
 var fs3 = __toESM(require("node:fs"));
 var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
+
+// tom/secrets.ts
+var REDACTED = "[REDACTED]";
+var MAX_VALUE_LENGTH = 200;
+var SECRET_PATTERNS = [
+  /^sk-[a-zA-Z0-9_-]+$/,
+  // OpenAI-style keys
+  /^ghp_[a-zA-Z0-9]+$/,
+  // GitHub personal tokens
+  /^gho_[a-zA-Z0-9]+$/,
+  // GitHub OAuth tokens
+  /^ghs_[a-zA-Z0-9]+$/,
+  // GitHub server tokens
+  /^github_pat_[a-zA-Z0-9_]+$/,
+  // GitHub fine-grained PATs
+  /^Bearer\s+.+/i,
+  // Bearer tokens
+  /^Basic\s+.+/i,
+  // Basic auth
+  /^token\s+.+/i,
+  // Generic token prefix
+  /^xox[bposa]-[a-zA-Z0-9-]+$/,
+  // Slack tokens
+  /^AKIA[A-Z0-9]{16}$/,
+  // AWS access keys
+  /^eyJ[a-zA-Z0-9_-]+\.eyJ/,
+  // JWT tokens
+  /password[=:].+/i,
+  // password= or password:
+  /^[a-f0-9]{40}$/,
+  // 40-char hex (git hashes, some tokens)
+  /^npm_[a-zA-Z0-9]+$/,
+  // npm tokens
+  /^pypi-[a-zA-Z0-9]+$/,
+  // PyPI tokens
+  /[A-Z_]+=sk-[a-zA-Z0-9_-]+/,
+  // ENV_VAR=secret patterns
+  /[A-Z_]+_KEY=[^\s]+/i
+  // API_KEY=value patterns
+];
+var EMBEDDED_SECRET_PATTERNS = [
+  // Authorization header values anywhere in a command. Bearer is
+  // case-insensitive (mirrors the anchored pattern); Basic is case-sensitive
+  // with a length floor so prose like "basic authentication" is not swallowed.
+  { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: REDACTED },
+  { pattern: /\bBasic\s+[A-Za-z0-9+/=]{16,}/g, replacement: REDACTED },
+  // AWS access key IDs anywhere, e.g. inside `AWS_ACCESS_KEY_ID=AKIA...`.
+  { pattern: /\bAKIA[A-Z0-9]{16}\b/g, replacement: REDACTED },
+  // JWTs anywhere: header.payload[.signature].
+  {
+    pattern: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g,
+    replacement: REDACTED
+  },
+  // URL connection-string credentials (scheme://user:pass@host): redact the
+  // credential pair, keep scheme and host readable.
+  { pattern: /(\/\/)[^\s/:@]+:[^\s@]+@/g, replacement: `$1${REDACTED}@` },
+  // PEM private-key blocks (RSA/EC/OPENSSH/PKCS8), including the JSON-escaped
+  // form embedded in service-account keys (\n between armor and body). Matched
+  // as a whole block so the base64 body never survives; the armor is specific
+  // enough to carry zero false-positive risk.
+  {
+    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    replacement: REDACTED
+  }
+];
+function looksLikeSecret(value) {
+  return SECRET_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+function redactEmbeddedSecrets(value) {
+  let result = value;
+  for (const { pattern, replacement } of EMBEDDED_SECRET_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result.split(/(\s+)/).map((token) => token.trim() !== "" && looksLikeSecret(token) ? REDACTED : token).join("");
+}
+function sanitizeValue(value) {
+  if (looksLikeSecret(value)) {
+    return REDACTED;
+  }
+  if (value.length > MAX_VALUE_LENGTH) {
+    return REDACTED;
+  }
+  return redactEmbeddedSecrets(value);
+}
+
+// tom/routing.ts
 var TELEMETRY_SCHEMA_VERSION = 1;
 var UsageLogEntrySchema = external_exports.looseObject({
   v: external_exports.number().optional(),
@@ -14052,6 +14138,9 @@ var UsageLogEntrySchema = external_exports.looseObject({
 });
 var LOG_DIR_MODE = 448;
 var LOG_FILE_MODE = 384;
+function prefKeyForTelemetry(category, key) {
+  return `${category}:${sanitizeValue(key)}`;
+}
 function logUsage(entry) {
   const logPath = path3.join(globalTomDir(), "usage.log");
   const dir = path3.dirname(logPath);
@@ -14211,7 +14300,7 @@ function confidentInjectablePrefs(model) {
   ).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);
 }
 function injectedKeysFromModel(model) {
-  return confidentInjectablePrefs(model).map((p) => `${p.category}:${p.key}`);
+  return confidentInjectablePrefs(model).map((p) => prefKeyForTelemetry(p.category, p.key));
 }
 function buildModelSummary(model) {
   const confidentPrefs = confidentInjectablePrefs(model);

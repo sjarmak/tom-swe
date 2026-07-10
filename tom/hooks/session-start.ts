@@ -13,7 +13,7 @@ import { readUserModel } from '../memory-io.js'
 import { isLegacyGenericKey } from '../preferences.js'
 import { sanitizeForInjection } from '../render-guard.js'
 import { isTomEnabled } from '../config.js'
-import { logUsage } from '../routing.js'
+import { logUsage, prefKeyForTelemetry } from '../routing.js'
 import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
 
 // --- Configuration ---
@@ -53,7 +53,7 @@ function confidentInjectablePrefs(model: UserModel): PreferenceCluster[] {
  * later in-session correction-or-confirmation.
  */
 export function injectedKeysFromModel(model: UserModel): string[] {
-  return confidentInjectablePrefs(model).map(p => `${p.category}:${p.key}`)
+  return confidentInjectablePrefs(model).map(p => prefKeyForTelemetry(p.category, p.key))
 }
 
 /**

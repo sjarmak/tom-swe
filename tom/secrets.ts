@@ -63,6 +63,15 @@ const EMBEDDED_SECRET_PATTERNS: readonly EmbeddedSecretPattern[] = [
   // URL connection-string credentials (scheme://user:pass@host): redact the
   // credential pair, keep scheme and host readable.
   { pattern: /(\/\/)[^\s/:@]+:[^\s@]+@/g, replacement: `$1${REDACTED}@` },
+  // PEM private-key blocks (RSA/EC/OPENSSH/PKCS8), including the JSON-escaped
+  // form embedded in service-account keys (\n between armor and body). Matched
+  // as a whole block so the base64 body never survives; the armor is specific
+  // enough to carry zero false-positive risk.
+  {
+    pattern:
+      /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    replacement: REDACTED,
+  },
 ]
 
 // --- Helpers ---
