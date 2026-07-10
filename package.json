@@ -1,6 +1,6 @@
 {
   "name": "tom-swe",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Theory of Mind agent for Claude Code \u2014 learns your coding preferences across sessions",
   "scripts": {
     "build": "node esbuild.config.mjs",
