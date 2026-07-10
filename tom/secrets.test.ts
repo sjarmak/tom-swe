@@ -219,11 +219,50 @@ describe('email / PII redaction', () => {
     )
   })
 
+  it.each([
+    ['scp-style SSH remote', 'git clone git@github.com:org/repo.git'],
+    ['SSH remote with a numeric-leading org path', 'git@github.com:2fa/repo.git'],
+  ])('leaves an SSH/scp git remote host readable (not treated as email PII): %s', (_l, value) => {
+    // Dev-syntax FP: `user@host:path` is an scp-style git remote, not an email.
+    // The email pattern must not fire when the TLD is immediately followed by
+    // `:` + a path (host:path), so the whole remote stays readable in telemetry.
+    expect(redactEmbeddedSecrets(value)).toBe(value)
+  })
+
+  it.each([
+    ['retina PNG', 'logo@2x.png'],
+    ['retina JPG', 'icon@3x.jpg'],
+    ['retina WEBP', 'sprite@2x.webp'],
+  ])('leaves a retina asset filename unchanged (asset extension is not a TLD): %s', (_l, value) => {
+    // Dev-syntax FP: `name@2x.png` is a retina asset, not an email. Known image
+    // extensions (png/jpg/jpeg/svg/webp/gif/ico) are excluded as the TLD.
+    expect(redactEmbeddedSecrets(value)).toBe(value)
+  })
+
+  it('still redacts a real email that happens to sit next to a git remote', () => {
+    // Guard against over-scoping the SSH exclusion: a genuine email in the same
+    // string must still redact while the remote host stays readable.
+    const result = redactEmbeddedSecrets('git@github.com:org/repo.git cc steph@example.com')
+    expect(result).toBe('git@github.com:org/repo.git cc [REDACTED]')
+  })
+
   it('handles a large @-free input in linear time (ReDoS guard)', () => {
     // The bounded quantifiers keep the pattern linear; on unbounded call sites
     // (redactPrompt, truncateDetail) an @-free paste must not stall. Assert both
     // correctness (unchanged) and that it completes well under a generous bound.
     const large = 'a'.repeat(200_000)
+    const start = performance.now()
+    const result = redactEmbeddedSecrets(large)
+    const elapsedMs = performance.now() - start
+    expect(result).toBe(large)
+    expect(elapsedMs).toBeLessThan(500)
+  })
+
+  it('handles a large @-heavy no-TLD input in linear time (ReDoS guard)', () => {
+    // The added asset-extension and SSH-remote lookaheads must not reintroduce
+    // quadratic backtracking: an @-dense paste with no dotted TLD must fail fast
+    // at every `@` rather than re-scanning the domain run.
+    const large = 'a@'.repeat(100_000)
     const start = performance.now()
     const result = redactEmbeddedSecrets(large)
     const elapsedMs = performance.now() - start
