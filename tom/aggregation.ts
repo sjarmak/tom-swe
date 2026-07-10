@@ -55,6 +55,21 @@ function summarizeCategory(
 }
 
 /**
+ * Derives the pair of narrative style summaries from resolved clusters. Shared
+ * by the fold's final step and by any post-fold normalization (e.g. cross-
+ * category reconciliation) that changes the cluster set and must re-derive the
+ * summaries so they never list a value that was recategorized away.
+ */
+export function deriveStyleSummaries(
+  clusters: readonly PreferenceCluster[]
+): { interactionStyleSummary: string; codingStyleSummary: string } {
+  return {
+    interactionStyleSummary: summarizeCategory(clusters, 'interactionStyle'),
+    codingStyleSummary: summarizeCategory(clusters, 'codingPreferences'),
+  }
+}
+
+/**
  * Extracts preference observations from a SessionModel.
  *
  * - codingPreferences → category 'codingPreferences'; keyed entries carry
@@ -180,8 +195,7 @@ export function aggregateSessionIntoModel(
   // (mechanical, no LLM) and return a new UserModel.
   return {
     preferencesClusters: resolved,
-    interactionStyleSummary: summarizeCategory(resolved, 'interactionStyle'),
-    codingStyleSummary: summarizeCategory(resolved, 'codingPreferences'),
+    ...deriveStyleSummaries(resolved),
     projectOverrides: { ...currentModel.projectOverrides },
   }
 }

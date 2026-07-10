@@ -14439,6 +14439,12 @@ function summarizeCategory(clusters, category) {
     (a, b) => b.confidence !== a.confidence ? b.confidence - a.confidence : a.key.localeCompare(b.key)
   ).slice(0, SUMMARY_MAX_ENTRIES).map((c) => `${c.key}: ${c.value}`).join("; ");
 }
+function deriveStyleSummaries(clusters) {
+  return {
+    interactionStyleSummary: summarizeCategory(clusters, "interactionStyle"),
+    codingStyleSummary: summarizeCategory(clusters, "codingPreferences")
+  };
+}
 function extractObservations(session, canonical) {
   const byKey = /* @__PURE__ */ new Map();
   const add = (observation) => {
@@ -14480,8 +14486,7 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
   const resolved = resolveConflicts(corrected);
   return {
     preferencesClusters: resolved,
-    interactionStyleSummary: summarizeCategory(resolved, "interactionStyle"),
-    codingStyleSummary: summarizeCategory(resolved, "codingPreferences"),
+    ...deriveStyleSummaries(resolved),
     projectOverrides: { ...currentModel.projectOverrides }
   };
 }

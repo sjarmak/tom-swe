@@ -6,6 +6,7 @@ import {
   resolveConflicts,
   canonicalCategoryByKey,
   dropRefiledCorrections,
+  reconcileCrossCategorySplits,
   DEFAULT_CORRECTION_PENALTY,
   type PreferenceCategory,
 } from './preferences.js'
@@ -518,5 +519,173 @@ describe('dropRefiledCorrections', () => {
       },
     ]
     expect(dropRefiledCorrections(corrections, canonical)).toEqual(corrections)
+  })
+})
+
+describe('reconcileCrossCategorySplits', () => {
+  it('collapses a key split across two categories to the higher-confidence category', () => {
+    // The motivating live case: execution_backend_for_iteration under BOTH
+    // codingPreferences (0.469) and interactionStyle (0.047). The two
+    // categories accumulate independently once split, so confidence faithfully
+    // reflects which category was used more — codingPreferences wins.
+    const clusters: PreferenceCluster[] = [
+      makePreference({
+        category: 'codingPreferences',
+        key: 'execution_backend_for_iteration',
+        value: 'local_scripts',
+        confidence: 0.469,
+        lastUpdated: '2026-06-01T00:00:00.000Z',
+      }),
+      makePreference({
+        category: 'interactionStyle',
+        key: 'execution_backend_for_iteration',
+        value: 'local_scripts',
+        confidence: 0.047,
+        lastUpdated: '2026-05-01T00:00:00.000Z',
+        learnedVia: 'correction',
+      }),
+    ]
+    const { preferences, collapses } = reconcileCrossCategorySplits(clusters)
+
+    // After reconciliation the key lives under exactly one category.
+    const cats = new Set(
+      preferences
+        .filter((p) => p.key === 'execution_backend_for_iteration')
+        .map((p) => p.category)
+    )
+    expect(cats).toEqual(new Set(['codingPreferences']))
+    expect(canonicalCategoryByKey(preferences).get('execution_backend_for_iteration')).toBe(
+      'codingPreferences'
+    )
+
+    expect(collapses).toHaveLength(1)
+    expect(collapses[0]?.key).toBe('execution_backend_for_iteration')
+    expect(collapses[0]?.winner).toBe('codingPreferences')
+    expect(collapses[0]?.refiled).toEqual([
+      {
+        fromCategory: 'interactionStyle',
+        value: 'local_scripts',
+        confidence: 0.047,
+        learnedViaCorrection: true,
+      },
+    ])
+  })
+
+  it('re-files the loser value rather than dropping it: a more recent correction survives', () => {
+    // The loser cluster carries a genuine, recent user correction to a NEW
+    // value. Re-filing into the winner category and resolving by recency keeps
+    // that value in the model (recategorized), so the correction is never
+    // silently discarded (house rule: no silent failures).
+    const clusters: PreferenceCluster[] = [
+      makePreference({
+        category: 'codingPreferences',
+        key: 'execution_backend_for_iteration',
+        value: 'local_scripts',
+        confidence: 0.469,
+        lastUpdated: '2026-06-01T00:00:00.000Z',
+      }),
+      makePreference({
+        category: 'interactionStyle',
+        key: 'execution_backend_for_iteration',
+        value: 'remote_sandbox',
+        confidence: 0.047,
+        lastUpdated: '2026-07-01T00:00:00.000Z',
+        learnedVia: 'correction',
+      }),
+    ]
+    const { preferences } = reconcileCrossCategorySplits(clusters)
+
+    const survivor = preferences.filter(
+      (p) => p.key === 'execution_backend_for_iteration'
+    )
+    expect(survivor).toHaveLength(1)
+    expect(survivor[0]?.category).toBe('codingPreferences')
+    // Recency wins: the later-updated correction value survives.
+    expect(survivor[0]?.value).toBe('remote_sandbox')
+  })
+
+  it('re-files a non-winner GARBAGE category so the key resolves to a single valid category', () => {
+    const clusters: PreferenceCluster[] = [
+      makePreference({
+        category: 'codingPreferences',
+        key: 'execution_backend_for_iteration',
+        value: 'local_scripts',
+        confidence: 0.3,
+      }),
+      makePreference({
+        category: 'legacyGarbage',
+        key: 'execution_backend_for_iteration',
+        value: 'stale',
+        confidence: 0.9,
+        lastUpdated: '2026-01-01T00:00:00.000Z',
+      }),
+    ]
+    const { preferences, collapses } = reconcileCrossCategorySplits(clusters)
+    // A garbage category is never a winner candidate; codingPreferences wins
+    // regardless of the garbage cluster's higher raw confidence.
+    expect(collapses[0]?.winner).toBe('codingPreferences')
+    const cats = new Set(preferences.map((p) => p.category))
+    expect(cats).toEqual(new Set(['codingPreferences']))
+  })
+
+  it('leaves a key split only across garbage categories untouched (no valid winner)', () => {
+    const clusters: PreferenceCluster[] = [
+      makePreference({ category: 'garbageA', key: 'orphan', value: 'x' }),
+      makePreference({ category: 'garbageB', key: 'orphan', value: 'y' }),
+    ]
+    const { preferences, collapses } = reconcileCrossCategorySplits(clusters)
+    expect(collapses).toHaveLength(0)
+    expect(preferences).toHaveLength(2)
+  })
+
+  it('leaves single-category keys untouched and reports no collapses', () => {
+    const clusters: PreferenceCluster[] = [
+      makePreference({ category: 'codingPreferences', key: 'language', value: 'TS' }),
+      makePreference({ category: 'interactionStyle', key: 'verbosity', value: 'concise' }),
+    ]
+    const { preferences, collapses } = reconcileCrossCategorySplits(clusters)
+    expect(collapses).toHaveLength(0)
+    expect(preferences).toEqual(clusters)
+  })
+
+  it('skips legacy generic keys even when they appear under multiple categories', () => {
+    // 'preference'/'pattern' fold unrelated observations; collapsing them is
+    // meaningless. They must never be reconciled.
+    const clusters: PreferenceCluster[] = [
+      makePreference({ category: 'codingPreferences', key: 'preference', value: 'a' }),
+      makePreference({ category: 'interactionStyle', key: 'preference', value: 'b' }),
+    ]
+    const { collapses } = reconcileCrossCategorySplits(clusters)
+    expect(collapses).toHaveLength(0)
+  })
+
+  it('breaks a confidence tie deterministically on category name (ascending)', () => {
+    const clusters: PreferenceCluster[] = [
+      makePreference({
+        category: 'interactionStyle',
+        key: 'k',
+        value: 'i',
+        confidence: 0.2,
+      }),
+      makePreference({
+        category: 'codingPreferences',
+        key: 'k',
+        value: 'c',
+        confidence: 0.2,
+      }),
+    ]
+    const { collapses } = reconcileCrossCategorySplits(clusters)
+    // 'codingPreferences' < 'interactionStyle' → codingPreferences wins.
+    expect(collapses[0]?.winner).toBe('codingPreferences')
+  })
+
+  it('does not mutate the input array', () => {
+    const clusters: PreferenceCluster[] = [
+      makePreference({ category: 'codingPreferences', key: 'k', value: 'c' }),
+      makePreference({ category: 'interactionStyle', key: 'k', value: 'i' }),
+    ]
+    const snapshot = JSON.parse(JSON.stringify(clusters))
+    reconcileCrossCategorySplits(clusters)
+    expect(clusters).toEqual(snapshot)
   })
 })

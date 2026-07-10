@@ -6,8 +6,10 @@ import { Readable } from 'node:stream'
 import {
   readRawSessionLog,
   analyzeCompletedSession,
+  reconcilePreferenceCategories,
   main,
 } from './stop-analyze'
+import type { UserModel, PreferenceCluster } from '../schemas'
 import { analyzeSessionWithLlm } from '../llm-analyze'
 
 // Never spawn the real claude CLI in tests: the LLM path is mocked and
@@ -267,6 +269,7 @@ describe('analyzeCompletedSession', () => {
 
   function readUsageEntries(): Array<Record<string, unknown>> {
     const logPath = path.join(tempDir, '.claude', 'tom', 'usage.log')
+    if (!fs.existsSync(logPath)) return []
     return fs.readFileSync(logPath, 'utf-8')
       .trim()
       .split('\n')
@@ -1101,6 +1104,204 @@ describe('analyzeCompletedSession', () => {
       )
     }
   }
+
+  /**
+   * Seeds one Tier 2 session carrying the same key under BOTH categories —
+   * the shape that forms a cross-category split during the rebuild fold
+   * (canonicalCategoryByKey is empty when the key is first seen, so both
+   * categories are added before any canonical answer exists).
+   */
+  function seedSplitTier2(key: string): void {
+    const modelsDir = path.join(tempDir, '.claude', 'tom', 'session-models')
+    fs.mkdirSync(modelsDir, { recursive: true })
+    const model = {
+      sessionId: `seed-split-${key}`,
+      intent: 'seed split session',
+      interactionPatterns: [{ key, value: 'from_interaction' }],
+      codingPreferences: [{ key, value: 'from_coding' }],
+      satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+      corrections: [],
+      // Oldest session, so the split forms before either category is
+      // established — later single-category sessions then can't re-file it.
+      endedAt: new Date(Date.now() - 600_000).toISOString(),
+    }
+    fs.writeFileSync(
+      path.join(modelsDir, `${model.sessionId}.json`),
+      JSON.stringify(model),
+      'utf-8'
+    )
+  }
+
+  it('collapses a pre-existing cross-category split to one category on rebuild, with a telemetry trace', async () => {
+    // Reinforce codingPreferences twice so it out-weighs interactionStyle and
+    // wins reconciliation deterministically by confidence.
+    seedTier2(2, {
+      category: 'codingPreferences',
+      key: 'execution_backend_for_iteration',
+      value: 'local_scripts',
+    })
+    seedSplitTier2('execution_backend_for_iteration')
+    writeSessionFile('split-collapse-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'split-collapse-test',
+        intent: 'trigger rebuild',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [],
+      },
+      tokensUsed: 10,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('split-collapse-test')
+
+    const userModel = JSON.parse(
+      fs.readFileSync(path.join(tempDir, '.claude', 'tom', 'user-model.json'), 'utf-8')
+    ) as { preferencesClusters: Array<Record<string, unknown>> }
+    const cats = new Set(
+      userModel.preferencesClusters
+        .filter((p) => p['key'] === 'execution_backend_for_iteration')
+        .map((p) => p['category'])
+    )
+    expect(cats).toEqual(new Set(['codingPreferences']))
+
+    const collapse = readUsageEntries().find(
+      (e) => e['operation'] === 'preference-cross-category-collapse'
+    )
+    expect(collapse).toBeDefined()
+    const detail = collapse?.['detail'] as {
+      collapses: Array<{ key: string; winner: string; refiled: unknown[] }>
+    }
+    expect(detail.collapses[0]?.key).toBe('execution_backend_for_iteration')
+    expect(detail.collapses[0]?.winner).toBe('codingPreferences')
+    expect(detail.collapses[0]?.refiled.length).toBeGreaterThan(0)
+  })
+
+  it('suppresses collapse telemetry once the previous model already resolved the key', async () => {
+    seedTier2(2, {
+      category: 'codingPreferences',
+      key: 'execution_backend_for_iteration',
+      value: 'local_scripts',
+    })
+    seedSplitTier2('execution_backend_for_iteration')
+    // Previous model already has the key collapsed to the eventual winner, so
+    // this rebuild's re-collapse is not new information and must not re-log.
+    seedUserModel({
+      category: 'codingPreferences',
+      key: 'execution_backend_for_iteration',
+      value: 'local_scripts',
+      confidence: 0.5,
+      lastUpdated: new Date().toISOString(),
+      sessionCount: 3,
+    })
+    writeSessionFile('split-suppress-test')
+    mockAnalyzeWithLlm.mockResolvedValue({
+      ok: true,
+      model: {
+        sessionId: 'split-suppress-test',
+        intent: 'trigger rebuild',
+        interactionPatterns: [],
+        codingPreferences: [],
+        satisfactionSignals: { frustration: false, satisfaction: true, urgency: 'low' },
+        corrections: [],
+      },
+      tokensUsed: 10,
+      path: 'llm',
+    })
+
+    await analyzeCompletedSession('split-suppress-test')
+
+    const collapse = readUsageEntries().find(
+      (e) => e['operation'] === 'preference-cross-category-collapse'
+    )
+    expect(collapse).toBeUndefined()
+  })
+
+  function makeSplitReconcileInputs(
+    interactionValue: string,
+    interactionUpdatedAt: string
+  ): { rebuilt: UserModel; previous: UserModel } {
+    const key = 'execution_backend_for_iteration'
+    const previous: UserModel = {
+      preferencesClusters: [
+        {
+          category: 'codingPreferences',
+          key,
+          value: 'local_scripts',
+          confidence: 0.5,
+          lastUpdated: '2026-06-01T00:00:00.000Z',
+          sessionCount: 3,
+        },
+      ],
+      interactionStyleSummary: '',
+      codingStyleSummary: '',
+      projectOverrides: {},
+    }
+    // A persistently-split key re-forms the split each rebuild; codingPreferences
+    // still out-weighs interactionStyle by confidence, so the winner CATEGORY is
+    // unchanged from `previous`. Only the value may differ.
+    const rebuilt: UserModel = {
+      ...previous,
+      preferencesClusters: [
+        previous.preferencesClusters[0] as PreferenceCluster,
+        {
+          category: 'interactionStyle',
+          key,
+          value: interactionValue,
+          confidence: 0.1,
+          lastUpdated: interactionUpdatedAt,
+          sessionCount: 1,
+          learnedVia: 'correction',
+        },
+      ],
+    }
+    return { rebuilt, previous }
+  }
+
+  it('re-logs a collapse when fresh losing-category evidence flips the resolved value (winner category unchanged)', () => {
+    // The audit-trail gap: without value-aware suppression this collapse would
+    // be silenced because the winner category (codingPreferences) is unchanged,
+    // yet the resolved value silently flips to the fresher correction.
+    const { rebuilt, previous } = makeSplitReconcileInputs(
+      'remote_sandbox',
+      '2026-07-01T00:00:00.000Z'
+    )
+    const result = reconcilePreferenceCategories(rebuilt, previous, 'flip-test')
+
+    const survivor = result.preferencesClusters.filter(
+      (p) => p.key === 'execution_backend_for_iteration'
+    )
+    expect(survivor).toHaveLength(1)
+    expect(survivor[0]?.category).toBe('codingPreferences')
+    expect(survivor[0]?.value).toBe('remote_sandbox')
+
+    const collapse = readUsageEntries().find(
+      (e) => e['operation'] === 'preference-cross-category-collapse'
+    )
+    expect(collapse).toBeDefined()
+    const detail = collapse?.['detail'] as {
+      collapses: Array<{ resolvedValue: string; refiled: unknown[] }>
+    }
+    expect(detail.collapses[0]?.resolvedValue).toBe('remote_sandbox')
+  })
+
+  it('suppresses the collapse when winner category AND resolved value are both unchanged', () => {
+    // Steady state: the split re-forms but resolves to the same value the
+    // previous model already had — nothing new to report.
+    const { rebuilt, previous } = makeSplitReconcileInputs(
+      'local_scripts',
+      '2026-05-01T00:00:00.000Z'
+    )
+    reconcilePreferenceCategories(rebuilt, previous, 'stable-test')
+
+    const collapse = readUsageEntries().find(
+      (e) => e['operation'] === 'preference-cross-category-collapse'
+    )
+    expect(collapse).toBeUndefined()
+  })
 
   it('promotes stable preferences into the global CLAUDE.md and persists promoted flags', async () => {
     seedTier2(9, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })

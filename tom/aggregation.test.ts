@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { aggregateSessionIntoModel } from './aggregation.js'
+import { aggregateSessionIntoModel, deriveStyleSummaries } from './aggregation.js'
 import type { UserModel, SessionModel, PreferenceCluster } from './schemas.js'
 
 function makePreference(
@@ -554,6 +554,32 @@ describe('aggregateSessionIntoModel style summaries', () => {
     expect(result.interactionStyleSummary).not.toContain('TypeScript')
     expect(result.codingStyleSummary).toContain('language: TypeScript')
     expect(result.codingStyleSummary).not.toContain('concise')
+  })
+
+  it('deriveStyleSummaries matches the summaries aggregateSessionIntoModel emits (behavior-preserving extraction)', () => {
+    const clusters = [
+      makePreference({
+        category: 'interactionStyle',
+        key: 'verbosity',
+        value: 'concise',
+        confidence: 0.8,
+        lastUpdated: recent,
+      }),
+      makePreference({
+        category: 'codingPreferences',
+        key: 'language',
+        value: 'TypeScript',
+        confidence: 0.9,
+        lastUpdated: recent,
+      }),
+    ]
+    const model = makeUserModel({ preferencesClusters: clusters })
+    const session = makeSessionModel({ interactionPatterns: [], codingPreferences: [] })
+    const viaAggregate = aggregateSessionIntoModel(model, session, 30, 0.5, new Date(recent))
+    const viaHelper = deriveStyleSummaries(viaAggregate.preferencesClusters)
+
+    expect(viaHelper.interactionStyleSummary).toBe(viaAggregate.interactionStyleSummary)
+    expect(viaHelper.codingStyleSummary).toBe(viaAggregate.codingStyleSummary)
   })
 
   it('produces empty-string summaries for empty clusters (no crash)', () => {

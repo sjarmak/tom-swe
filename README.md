@@ -182,6 +182,7 @@ Entry shape (validated by `UsageLogEntrySchema`, exported from `tom/routing.ts`;
 | `preference-correction` | Corrections applied during aggregation | `corrections` (`category:key` list), `penalty` |
 | `preference-promotion` | A CLAUDE.md marker block actually changed (idempotent regenerations don't log) | `promoted` (`category:key` list), `targets` (changed files) |
 | `preference-follow-through` | Per session that asserted ≥1 preference key: whether each asserted key was corrected or confirmed (left un-corrected) in-session (an outcome-usefulness signal, not just memory stability) | `asserted`, `confirmed`, `corrected` (`category:key` lists) |
+| `preference-cross-category-collapse` | A key split across categories was collapsed to one canonical category on rebuild (logged when the resolved winner category or value differs from what the previous model already had — steady-state re-collapses are suppressed) | `collapses` (list of `{key, winner, resolvedValue, refiled: [{fromCategory, value, confidence, learnedViaCorrection}]}`) |
 | `promotion-file-created` | Global memory file created (no silent resource creation) | `path` |
 | `config-invalid` | `config.json` exists but is malformed or fails validation — the plugin is silently running on defaults (`enabled: false`) until fixed | — |
 | `usage-log-rotated` | usage.log exceeded the size threshold and was archived to `usage-YYYY-MM-DD[-n].log` (archives preserved) | `archive` |

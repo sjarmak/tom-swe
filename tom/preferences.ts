@@ -107,6 +107,128 @@ export function dropRefiledCorrections(
   })
 }
 
+/** One loser cluster moved off its category during a cross-category collapse. */
+export interface CrossCategoryRefile {
+  readonly fromCategory: string
+  readonly value: string
+  readonly confidence: number
+  /** True when the moved cluster carried a user correction (surfaced so a
+   * correction is never discarded without a telemetry trace). */
+  readonly learnedViaCorrection: boolean
+}
+
+/** A single key's collapse from a cross-category split to one canonical category. */
+export interface CrossCategoryCollapse {
+  readonly key: string
+  readonly winner: PreferenceCategory
+  readonly refiled: readonly CrossCategoryRefile[]
+}
+
+/**
+ * Picks the winning category for a key spread across several categories.
+ *
+ * Only a valid PreferenceCategory can win — a legacy/garbage category value is
+ * never a canonical target. The candidate with the highest total confidence
+ * wins; ties break on category name ascending so the choice is deterministic.
+ * Returns undefined when the key has no valid category at all (nothing to
+ * collapse to).
+ *
+ * After resolveConflicts there is exactly one cluster per (category, key), so
+ * the per-category sum is just that cluster's confidence; summing keeps the
+ * function correct if ever handed an unresolved array.
+ */
+function pickWinnerCategory(
+  clusters: readonly PreferenceCluster[]
+): PreferenceCategory | undefined {
+  const confidenceByCategory = new Map<PreferenceCategory, number>()
+  for (const c of clusters) {
+    const parsed = PreferenceCategorySchema.safeParse(c.category)
+    if (!parsed.success) continue
+    confidenceByCategory.set(
+      parsed.data,
+      (confidenceByCategory.get(parsed.data) ?? 0) + c.confidence
+    )
+  }
+  if (confidenceByCategory.size === 0) return undefined
+
+  return [...confidenceByCategory.entries()].sort((a, b) =>
+    b[1] !== a[1] ? b[1] - a[1] : a[0].localeCompare(b[0])
+  )[0]?.[0]
+}
+
+/**
+ * Reconciles keys that are split across more than one category — a one-time
+ * cleanup for splits already in the store when the canonicalCategoryByKey fix
+ * shipped (it prevents NEW splits but is a no-op for pre-existing ones because
+ * canonicalCategoryByKey omits any key with categories.size !== 1).
+ *
+ * For each such key (legacy generic keys excluded), the highest-confidence
+ * valid category wins and every non-winner cluster — including garbage
+ * categories — is RE-FILED into the winner, then resolveConflicts collapses the
+ * now-duplicate values by recency. Re-file (not drop) is deliberate: a loser
+ * cluster can carry a genuine user correction that dropRefiledCorrections
+ * preserves for split keys, so deleting it would silently discard a real
+ * correction. Re-filing keeps the value in the model (recategorized); recency
+ * then decides which value survives, exactly as any same-category conflict.
+ *
+ * Purely mechanical (ZFC-safe): it reads categories and confidences already in
+ * the store; it performs no semantic classification of what a key "should" be.
+ * Two genuinely-distinct concepts that happen to share a key string are merged
+ * here — the returned collapses record every moved cluster so the merge is
+ * auditable rather than silent.
+ *
+ * Returns a new array (immutable) and the list of collapses for telemetry.
+ */
+export function reconcileCrossCategorySplits(
+  preferences: readonly PreferenceCluster[]
+): { preferences: PreferenceCluster[]; collapses: CrossCategoryCollapse[] } {
+  const clustersByKey = new Map<string, PreferenceCluster[]>()
+  for (const p of preferences) {
+    const list = clustersByKey.get(p.key) ?? []
+    list.push(p)
+    clustersByKey.set(p.key, list)
+  }
+
+  const collapses: CrossCategoryCollapse[] = []
+  const winnerByKey = new Map<string, PreferenceCategory>()
+
+  for (const [key, clusters] of clustersByKey) {
+    if (isLegacyGenericKey(key)) continue
+    const categories = new Set(clusters.map((c) => c.category))
+    if (categories.size <= 1) continue
+
+    const winner = pickWinnerCategory(clusters)
+    if (winner === undefined) continue
+
+    winnerByKey.set(key, winner)
+    collapses.push({
+      key,
+      winner,
+      refiled: clusters
+        .filter((c) => c.category !== winner)
+        .map((c) => ({
+          fromCategory: c.category,
+          value: c.value,
+          confidence: c.confidence,
+          learnedViaCorrection: c.learnedVia === 'correction',
+        })),
+    })
+  }
+
+  if (collapses.length === 0) {
+    return { preferences: [...preferences], collapses }
+  }
+
+  const refiled = preferences.map((p) => {
+    const winner = winnerByKey.get(p.key)
+    return winner !== undefined && p.category !== winner
+      ? { ...p, category: winner }
+      : p
+  })
+
+  return { preferences: resolveConflicts(refiled), collapses }
+}
+
 /**
  * Reinforces an existing preference or adds a new observation.
  *

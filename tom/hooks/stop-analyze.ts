@@ -13,7 +13,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type { SessionLog, SessionModel } from '../schemas.js'
+import type { SessionLog, SessionModel, UserModel } from '../schemas.js'
 import {
   readSessionLog,
   readUserModel,
@@ -36,7 +36,9 @@ import {
   isLegacyGenericKey,
   canonicalCategoryByKey,
   dropRefiledCorrections,
+  reconcileCrossCategorySplits,
 } from '../preferences.js'
+import { deriveStyleSummaries } from '../aggregation.js'
 import { judgeDerivability } from '../promotion-gate.js'
 import type { GateCandidate } from '../promotion-gate.js'
 import { pruneOldSessions } from '../pruning.js'
@@ -73,6 +75,85 @@ export interface AnalysisResult {
   readonly userModelUpdated: boolean
   readonly indexRebuilt: boolean
   readonly error?: string
+}
+
+/**
+ * Collapses any preference key split across categories to a single canonical
+ * category and returns the reconciled model, emitting one
+ * `preference-cross-category-collapse` telemetry entry per collapse that
+ * represents NEW information.
+ *
+ * The store rebuilds from Tier 2 every Stop, so a persistently-split key (its
+ * oldest session tagged the key under two categories) re-forms the split on
+ * every rebuild; naive per-rebuild logging would spam. A collapse is suppressed
+ * only when the previous model already resolved the key to the SAME winner AND
+ * the SAME value — i.e. genuine steady state. A changed resolved value (fresh
+ * losing-category evidence winning by recency) re-logs, so the audit trail
+ * never goes silent on a real preference change even when the winning category
+ * is unchanged.
+ *
+ * Runs AFTER carryPromotedFlags (so a restored promoted flag rides the re-filed
+ * cluster onto the winner) and BEFORE runPromotion (so promotion never sees a
+ * still-split key).
+ */
+export function reconcilePreferenceCategories(
+  rebuiltModel: UserModel,
+  previousModel: UserModel | null,
+  sessionId: string
+): UserModel {
+  const { preferences: reconciledClusters, collapses } =
+    reconcileCrossCategorySplits(rebuiltModel.preferencesClusters)
+  if (collapses.length === 0) {
+    return rebuiltModel
+  }
+
+  const reconciledModel: UserModel = {
+    ...rebuiltModel,
+    preferencesClusters: reconciledClusters,
+    // Summaries were derived pre-reconcile; re-derive so neither lists a value
+    // that was recategorized away.
+    ...deriveStyleSummaries(reconciledClusters),
+  }
+
+  const priorCanonical = canonicalCategoryByKey(
+    previousModel?.preferencesClusters ?? []
+  )
+  const priorValueByGroup = new Map(
+    (previousModel?.preferencesClusters ?? []).map((p) => [
+      `${p.category}::${p.key}`,
+      p.value,
+    ])
+  )
+  const resolvedValueByGroup = new Map(
+    reconciledClusters.map((p) => [`${p.category}::${p.key}`, p.value])
+  )
+  const novelCollapses = collapses.filter((c) => {
+    const group = `${c.winner}::${c.key}`
+    const alreadyResolved =
+      priorCanonical.get(c.key) === c.winner &&
+      priorValueByGroup.get(group) === resolvedValueByGroup.get(group)
+    return !alreadyResolved
+  })
+
+  if (novelCollapses.length > 0) {
+    logUsage({
+      timestamp: new Date().toISOString(),
+      operation: 'preference-cross-category-collapse',
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: {
+        collapses: novelCollapses.map((c) => ({
+          key: c.key,
+          winner: c.winner,
+          resolvedValue: resolvedValueByGroup.get(`${c.winner}::${c.key}`),
+          refiled: c.refiled,
+        })),
+      },
+    })
+  }
+
+  return reconciledModel
 }
 
 /**
@@ -368,7 +449,7 @@ export async function analyzeCompletedSession(
   // latest analysis of a session REPLACES its contribution.
   const previousUserModel = readUserModel('global')
   const config = readTomConfig()
-  const aggregatedUserModel = carryPromotedFlags(
+  const rebuiltModel = carryPromotedFlags(
     rebuildUserModelFromTier2(
       'global',
       config.preferenceDecayDays,
@@ -376,6 +457,16 @@ export async function analyzeCompletedSession(
       previousUserModel
     ),
     previousUserModel
+  )
+
+  // Collapse any key split across categories to a single canonical category
+  // (keeps the persisted model single-category) and emit a telemetry trace of
+  // real collapses. See reconcilePreferenceCategories for the ordering and
+  // suppression rationale.
+  const aggregatedUserModel = reconcilePreferenceCategories(
+    rebuiltModel,
+    previousUserModel,
+    sessionId
   )
   writeUserModel(aggregatedUserModel, 'global')
 

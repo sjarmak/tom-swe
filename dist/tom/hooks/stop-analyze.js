@@ -32,7 +32,8 @@ var stop_analyze_exports = {};
 __export(stop_analyze_exports, {
   analyzeCompletedSession: () => analyzeCompletedSession,
   main: () => main,
-  readRawSessionLog: () => readRawSessionLog
+  readRawSessionLog: () => readRawSessionLog,
+  reconcilePreferenceCategories: () => reconcilePreferenceCategories
 });
 module.exports = __toCommonJS(stop_analyze_exports);
 var fs10 = __toESM(require("node:fs"));
@@ -14194,6 +14195,57 @@ function dropRefiledCorrections(corrections, canonical) {
     return canon === void 0 || canon === c.category;
   });
 }
+function pickWinnerCategory(clusters) {
+  const confidenceByCategory = /* @__PURE__ */ new Map();
+  for (const c of clusters) {
+    const parsed = PreferenceCategorySchema.safeParse(c.category);
+    if (!parsed.success) continue;
+    confidenceByCategory.set(
+      parsed.data,
+      (confidenceByCategory.get(parsed.data) ?? 0) + c.confidence
+    );
+  }
+  if (confidenceByCategory.size === 0) return void 0;
+  return [...confidenceByCategory.entries()].sort(
+    (a, b) => b[1] !== a[1] ? b[1] - a[1] : a[0].localeCompare(b[0])
+  )[0]?.[0];
+}
+function reconcileCrossCategorySplits(preferences) {
+  const clustersByKey = /* @__PURE__ */ new Map();
+  for (const p of preferences) {
+    const list = clustersByKey.get(p.key) ?? [];
+    list.push(p);
+    clustersByKey.set(p.key, list);
+  }
+  const collapses = [];
+  const winnerByKey = /* @__PURE__ */ new Map();
+  for (const [key, clusters] of clustersByKey) {
+    if (isLegacyGenericKey(key)) continue;
+    const categories = new Set(clusters.map((c) => c.category));
+    if (categories.size <= 1) continue;
+    const winner = pickWinnerCategory(clusters);
+    if (winner === void 0) continue;
+    winnerByKey.set(key, winner);
+    collapses.push({
+      key,
+      winner,
+      refiled: clusters.filter((c) => c.category !== winner).map((c) => ({
+        fromCategory: c.category,
+        value: c.value,
+        confidence: c.confidence,
+        learnedViaCorrection: c.learnedVia === "correction"
+      }))
+    });
+  }
+  if (collapses.length === 0) {
+    return { preferences: [...preferences], collapses };
+  }
+  const refiled = preferences.map((p) => {
+    const winner = winnerByKey.get(p.key);
+    return winner !== void 0 && p.category !== winner ? { ...p, category: winner } : p;
+  });
+  return { preferences: resolveConflicts(refiled), collapses };
+}
 function reinforcePreference(preferences, observation, asOf = /* @__PURE__ */ new Date()) {
   const now = asOf.toISOString();
   const matchIndex = preferences.findIndex(
@@ -14316,6 +14368,12 @@ function summarizeCategory(clusters, category) {
     (a, b) => b.confidence !== a.confidence ? b.confidence - a.confidence : a.key.localeCompare(b.key)
   ).slice(0, SUMMARY_MAX_ENTRIES).map((c) => `${c.key}: ${c.value}`).join("; ");
 }
+function deriveStyleSummaries(clusters) {
+  return {
+    interactionStyleSummary: summarizeCategory(clusters, "interactionStyle"),
+    codingStyleSummary: summarizeCategory(clusters, "codingPreferences")
+  };
+}
 function extractObservations(session, canonical) {
   const byKey = /* @__PURE__ */ new Map();
   const add = (observation) => {
@@ -14357,8 +14415,7 @@ function aggregateSessionIntoModel(currentModel, session, decayDays = DEFAULT_DE
   const resolved = resolveConflicts(corrected);
   return {
     preferencesClusters: resolved,
-    interactionStyleSummary: summarizeCategory(resolved, "interactionStyle"),
-    codingStyleSummary: summarizeCategory(resolved, "codingPreferences"),
+    ...deriveStyleSummaries(resolved),
     projectOverrides: { ...currentModel.projectOverrides }
   };
 }
@@ -15771,6 +15828,54 @@ var ANALYSIS_DEBOUNCE_MS = 9e4;
 function readRawSessionLog(sessionId) {
   return readSessionLog(sessionId, "global");
 }
+function reconcilePreferenceCategories(rebuiltModel, previousModel, sessionId) {
+  const { preferences: reconciledClusters, collapses } = reconcileCrossCategorySplits(rebuiltModel.preferencesClusters);
+  if (collapses.length === 0) {
+    return rebuiltModel;
+  }
+  const reconciledModel = {
+    ...rebuiltModel,
+    preferencesClusters: reconciledClusters,
+    // Summaries were derived pre-reconcile; re-derive so neither lists a value
+    // that was recategorized away.
+    ...deriveStyleSummaries(reconciledClusters)
+  };
+  const priorCanonical = canonicalCategoryByKey(
+    previousModel?.preferencesClusters ?? []
+  );
+  const priorValueByGroup = new Map(
+    (previousModel?.preferencesClusters ?? []).map((p) => [
+      `${p.category}::${p.key}`,
+      p.value
+    ])
+  );
+  const resolvedValueByGroup = new Map(
+    reconciledClusters.map((p) => [`${p.category}::${p.key}`, p.value])
+  );
+  const novelCollapses = collapses.filter((c) => {
+    const group = `${c.winner}::${c.key}`;
+    const alreadyResolved = priorCanonical.get(c.key) === c.winner && priorValueByGroup.get(group) === resolvedValueByGroup.get(group);
+    return !alreadyResolved;
+  });
+  if (novelCollapses.length > 0) {
+    logUsage({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      operation: "preference-cross-category-collapse",
+      model: NO_MODEL,
+      tokenCount: 0,
+      sessionId,
+      detail: {
+        collapses: novelCollapses.map((c) => ({
+          key: c.key,
+          winner: c.winner,
+          resolvedValue: resolvedValueByGroup.get(`${c.winner}::${c.key}`),
+          refiled: c.refiled
+        }))
+      }
+    });
+  }
+  return reconciledModel;
+}
 async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcriptPath) {
   if (transcriptPath) {
     const usage = readTranscriptUsage(transcriptPath);
@@ -15969,7 +16074,7 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
   }
   const previousUserModel = readUserModel("global");
   const config2 = readTomConfig();
-  const aggregatedUserModel = carryPromotedFlags(
+  const rebuiltModel = carryPromotedFlags(
     rebuildUserModelFromTier2(
       "global",
       config2.preferenceDecayDays,
@@ -15977,6 +16082,11 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
       previousUserModel
     ),
     previousUserModel
+  );
+  const aggregatedUserModel = reconcilePreferenceCategories(
+    rebuiltModel,
+    previousUserModel,
+    sessionId
   );
   writeUserModel(aggregatedUserModel, "global");
   const corrections = dropRefiledCorrections(
@@ -16127,5 +16237,6 @@ if (require.main === module) {
 0 && (module.exports = {
   analyzeCompletedSession,
   main,
-  readRawSessionLog
+  readRawSessionLog,
+  reconcilePreferenceCategories
 });
