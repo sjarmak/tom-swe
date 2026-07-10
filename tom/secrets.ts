@@ -109,8 +109,23 @@ const EMBEDDED_SECRET_PATTERNS: readonly EmbeddedSecretPattern[] = [
   // (local ≤64, domain ≤255) so the pattern stays linear-time: `redactPrompt`
   // and `truncateDetail` call this on unbounded input that bypasses the
   // MAX_VALUE_LENGTH cap, and the synchronous prompt hook must not stall.
+  //
+  // Two dev-syntax false positives are excluded (tom-swe-nsn) without widening
+  // the local-part class or unbounding a quantifier:
+  //  - Retina/image assets (`logo@2x.png`): a leading negative lookahead drops
+  //    known image extensions (png/jpg/jpeg/svg/webp/gif/ico) as the TLD — none
+  //    is a real TLD, so this cannot suppress a genuine email.
+  //  - scp-style git remotes (`git@github.com:org/repo.git`): `(?!:\S)` refuses
+  //    to match when the TLD is immediately followed by `:` + non-whitespace
+  //    (the `host:path` shape). A real email is a terminal token (space, end,
+  //    or closing punctuation), so this only spares `email:nonspace`, which is
+  //    not an email token shape. The port-in-URL case (`host:5432`) is already
+  //    protected by the ordering invariant above, so this stays scoped to the
+  //    bare remote. `(?![A-Za-z])` forces the TLD to be its full label so the
+  //    engine cannot shrink the TLD (e.g. `com`→`co`) to slip past `(?!:\S)`.
   {
-    pattern: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}/g,
+    pattern:
+      /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.(?!(?:png|jpe?g|svg|webp|gif|ico)\b)[A-Za-z]{2,24}(?![A-Za-z])(?!:\S)/g,
     replacement: REDACTED,
   },
 ]
