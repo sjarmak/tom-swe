@@ -1,0 +1,27 @@
+# Pre-commit baseline — installed by ~/.claude/guardrails/install.sh.
+#
+#   pip install pre-commit && pre-commit install
+#
+# Hooks run only on staged files, so adoption is incremental.
+#
+# NOTE: the fleet baseline's language hooks (eslint, prettier) are intentionally
+# omitted here — this repo has no eslint config (the hook errors) and its style
+# is no-semicolon / single-quote, which prettier's defaults would mass-reformat.
+# Enabling them needs matching eslint + prettier configs first (tom-swe-56x).
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      # Corpus / artifact guard: large blobs must never be committed.
+      # Tighten or loosen --maxkb per repo (scix uses 10000 for ADS shards).
+      - id: check-added-large-files
+        args: [--maxkb=5000]
+      - id: detect-private-key
+        # secrets.test.ts carries PEM key *fixtures* that exercise redaction —
+        # not real keys. Exclude it so the hook stays useful elsewhere.
+        exclude: ^tom/secrets\.test\.ts$
