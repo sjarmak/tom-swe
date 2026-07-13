@@ -32,7 +32,7 @@ import { readTranscriptUsage } from '../transcript-usage.js'
 import { analyzeSessionWithLlm } from '../llm-analyze.js'
 import { computeVocabularyEcho } from '../vocabulary-echo.js'
 import { extractSessionModel } from '../session-extract.js'
-import { runPromotion } from '../promotion.js'
+import { cleanupPromotionArtifacts } from '../promotion.js'
 import {
   isLegacyGenericKey,
   canonicalCategoryByKey,
@@ -40,8 +40,6 @@ import {
   reconcileCrossCategorySplits,
 } from '../preferences.js'
 import { deriveStyleSummaries } from '../aggregation.js'
-import { judgeDerivability } from '../promotion-gate.js'
-import type { GateCandidate } from '../promotion-gate.js'
 import { pruneOldSessions } from '../pruning.js'
 import { atomicWriteFileSync } from '../fs-atomic.js'
 import { readHookInput, getSessionId, isExcludedSession } from './hook-input.js'
@@ -93,9 +91,9 @@ export interface AnalysisResult {
  * never goes silent on a real preference change even when the winning category
  * is unchanged.
  *
- * Runs AFTER carryPromotedFlags (so a restored promoted flag rides the re-filed
- * cluster onto the winner) and BEFORE runPromotion (so promotion never sees a
- * still-split key).
+ * Runs AFTER carryPromotedFlags (so a carried flag rides the re-filed cluster
+ * onto the winner) and BEFORE the model is persisted (so the stored Tier 3 is
+ * already single-category).
  */
 export function reconcilePreferenceCategories(
   rebuiltModel: UserModel,
@@ -552,38 +550,47 @@ export async function analyzeCompletedSession(
     })
   }
 
-  // Step 4: Promote stable high-confidence preferences into CLAUDE.md
-  // marker blocks and retire them from injection. Promotion failures must
-  // never break the analysis pipeline (catch, log, continue).
+  // Step 4: One-time upgrade cleanup — strip any tom-swe marker block a prior
+  // promotion pass wrote into a memory file (Option A retires promotion; the
+  // SessionStart hook is now the single surfacing path). Idempotent and safe
+  // on missing files, so this self-heals an upgraded install on the first fire
+  // that still finds a block, then no-ops. Cleanup failures must never break
+  // the analysis pipeline (catch, log, continue).
   try {
-    const gate = (candidates: readonly GateCandidate[]): ReadonlySet<string> | null =>
-      judgeDerivability(candidates, cwd, configuredModel)
-    const promotion = runPromotion(aggregatedUserModel, config.promotion, cwd, gate)
-    // runPromotion returns the same reference when promotion is disabled;
-    // otherwise persist the updated promoted/retired flags.
-    if (promotion.model !== aggregatedUserModel) {
-      writeUserModel(promotion.model, 'global')
-    }
-    // Log only when a memory file actually changed: idempotent block
-    // regenerations used to fire this event on every qualifying Stop
-    // (452 spurious rewrites in 24 days).
-    if (promotion.promoted.length > 0 && promotion.targets.length > 0) {
+    const cleanup = cleanupPromotionArtifacts(cwd)
+    // Modifying a user-tracked memory file is an auditable event — log it once
+    // (only when a block was actually removed; the steady state is silent).
+    if (cleanup.removed.length > 0) {
       logUsage({
         timestamp: new Date().toISOString(),
-        operation: 'preference-promotion',
+        operation: 'promotion-cleanup',
         model: NO_MODEL,
         tokenCount: 0,
         sessionId,
-        detail: {
-          promoted: promotion.promoted.map((p) => prefKeyForTelemetry(p.category, p.key)),
-          targets: promotion.targets,
-        },
+        detail: { removed: cleanup.removed },
+      })
+    }
+    // Per-target failures are surfaced individually (never silent) so one
+    // unwritable file doesn't hide behind another's success.
+    for (const failure of cleanup.errors) {
+      logUsage({
+        timestamp: new Date().toISOString(),
+        operation: 'promotion-cleanup-error',
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        reason: failure.reason,
+        // Structured so consumers can group by target; the presence of `file`
+        // also distinguishes a per-target failure from the backstop catch.
+        detail: { file: failure.file },
       })
     }
   } catch (error) {
+    // Backstop: cleanupPromotionArtifacts isolates per-target failures, so this
+    // only fires on an unexpected error (e.g. telemetry). Never break analysis.
     logUsage({
       timestamp: new Date().toISOString(),
-      operation: 'promotion-error',
+      operation: 'promotion-cleanup-error',
       model: NO_MODEL,
       tokenCount: 0,
       sessionId,

@@ -184,9 +184,10 @@ Entry shape (validated by `UsageLogEntrySchema`, exported from `tom/routing.ts`;
 | `preference-follow-through` | Per session that asserted ≥1 preference key: whether each asserted key was corrected or confirmed (left un-corrected) in-session (an outcome-usefulness signal, not just memory stability) | `asserted`, `confirmed`, `corrected` (`category:key` lists) |
 | `preference-cross-category-collapse` | A key split across categories was collapsed to one canonical category on rebuild (logged when the resolved winner category or value differs from what the previous model already had — steady-state re-collapses are suppressed) | `collapses` (list of `{key, winner, resolvedValue, refiled: [{fromCategory, value, confidence, learnedViaCorrection}]}`) |
 | `promotion-file-created` | Global memory file created (no silent resource creation) | `path` |
+| `promotion-cleanup` | One-time upgrade heal: a retired promotion marker block was stripped from a memory file (Option A; SessionStart injection is now the single surfacing path). Logged only when a block actually changed, then silent | `removed` (changed files) |
 | `config-invalid` | `config.json` exists but is malformed or fails validation — the plugin is silently running on defaults (`enabled: false`) until fixed | — |
 | `usage-log-rotated` | usage.log exceeded the size threshold and was archived to `usage-YYYY-MM-DD[-n].log` (archives preserved) | `archive` |
-| `promotion-error` / `session-analysis-error` / `prune-error` / `snapshot-error` | Pipeline failures (never silent) | — |
+| `promotion-error` / `promotion-cleanup-error` / `session-analysis-error` / `prune-error` / `snapshot-error` | Pipeline failures (never silent) | — |
 
 Every `category:key` identifier and every free-form preference value written to `usage.log` is first passed through the same secret-detection backstop the capture hook uses (`sanitizeValue`): a structured secret (API-key/token/JWT shape) or an oversized string is replaced with `[REDACTED]`. This runs at the telemetry-emission sites, not at the point the analyzer coins a key, so the in-memory model keeps its real key (identity, reinforcement, and promotion are unaffected) and keys persisted before the guard existed are still screened on every emission. It catches structured tokens, not a semantically-paraphrased key — that is not mechanically detectable.
 

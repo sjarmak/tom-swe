@@ -28,16 +28,19 @@ const MAX_PREFERENCE_LINES = 7
 
 /**
  * The confident, injectable preferences in the order they are injected:
- * confidence floor met, not promoted, not a legacy generic key, strongest
- * first, capped. Shared by the summary text and the injected-keys telemetry
- * so both describe exactly the same set.
+ * confidence floor met, not a legacy generic key, strongest first, capped.
+ * Shared by the summary text and the injected-keys telemetry so both describe
+ * exactly the same set.
+ *
+ * Promoted preferences are NOT filtered out (tom-swe-x1m, Option A): the
+ * promote-to-CLAUDE.md subsystem is retired, so the hook is the single
+ * surfacing path and a promoted flag no longer implies a competing sink.
  */
 function confidentInjectablePrefs(model: UserModel): PreferenceCluster[] {
   return [...model.preferencesClusters]
     .filter(
       p =>
         p.confidence >= MIN_CONFIDENCE &&
-        p.promoted !== true &&
         // Legacy generic keys ('preference'/'pattern') are collapsed noise —
         // never inject them into session context.
         !isLegacyGenericKey(p.key)
@@ -60,9 +63,6 @@ export function injectedKeysFromModel(model: UserModel): string[] {
  * Builds a compact, human-readable summary of the user model.
  * Returns null when the model carries no confident preferences and
  * no style summaries (nothing worth injecting).
- *
- * Promoted preferences are excluded: they already ride along via their
- * CLAUDE.md marker block, and double-injection wastes context budget.
  */
 export function buildModelSummary(model: UserModel): string | null {
   const confidentPrefs = confidentInjectablePrefs(model)

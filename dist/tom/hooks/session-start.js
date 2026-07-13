@@ -14352,7 +14352,7 @@ var MIN_CONFIDENCE = 0.5;
 var MAX_PREFERENCE_LINES = 7;
 function confidentInjectablePrefs(model) {
   return [...model.preferencesClusters].filter(
-    (p) => p.confidence >= MIN_CONFIDENCE && p.promoted !== true && // Legacy generic keys ('preference'/'pattern') are collapsed noise —
+    (p) => p.confidence >= MIN_CONFIDENCE && // Legacy generic keys ('preference'/'pattern') are collapsed noise —
     // never inject them into session context.
     !isLegacyGenericKey(p.key)
   ).sort((a, b) => b.confidence - a.confidence).slice(0, MAX_PREFERENCE_LINES);

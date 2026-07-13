@@ -119,7 +119,9 @@ describe('buildModelSummary', () => {
     expect(summary).toContain('typescript')
   })
 
-  it('excludes promoted preferences from the injected summary', () => {
+  it('includes promoted preferences in the injected summary', () => {
+    // Option A (tom-swe-x1m): promote-to-CLAUDE.md is retired, so the hook is
+    // the single surfacing path — a promoted pref injects like any other.
     const promotedPref = { ...pref('testing', 'vitest', 0.95), promoted: true }
     const model = createUserModel({
       preferencesClusters: [
@@ -129,18 +131,17 @@ describe('buildModelSummary', () => {
     })
 
     const summary = buildModelSummary(model) ?? ''
-    // The promoted preference already rides along via CLAUDE.md
-    expect(summary).not.toContain('vitest')
+    expect(summary).toContain('vitest')
     expect(summary).toContain('typescript')
   })
 
-  it('returns null when every confident preference is promoted and no summaries exist', () => {
+  it('injects a promoted preference even when it is the only confident one', () => {
     const model = createUserModel({
       preferencesClusters: [
         { ...pref('testing', 'vitest', 0.95), promoted: true },
       ],
     })
-    expect(buildModelSummary(model)).toBeNull()
+    expect(buildModelSummary(model) ?? '').toContain('vitest')
   })
 
   it('includes interaction and coding style summaries when present', () => {
@@ -182,7 +183,7 @@ describe('injectedKeysFromModel', () => {
     expect(injectedKeysFromModel(model)).toEqual(['codingPreferences:[REDACTED]'])
   })
 
-  it('excludes low-confidence, promoted, and legacy generic keys', () => {
+  it('excludes low-confidence and legacy generic keys but includes promoted', () => {
     const model = createUserModel({
       preferencesClusters: [
         pref('language', 'typescript', 0.9),
@@ -191,7 +192,11 @@ describe('injectedKeysFromModel', () => {
         pref('preference', '/some/path', 1.0),
       ],
     })
-    expect(injectedKeysFromModel(model)).toEqual(['codingPreferences:language'])
+    // Promoted 'testing' (0.95) now surfaces, sorted above 'language' (0.9).
+    expect(injectedKeysFromModel(model)).toEqual([
+      'codingPreferences:testing',
+      'codingPreferences:language',
+    ])
   })
 })
 

@@ -15373,72 +15373,9 @@ function computeVocabularyEcho(vocabulary, model) {
 var fs8 = __toESM(require("node:fs"));
 var path7 = __toESM(require("node:path"));
 var os4 = __toESM(require("node:os"));
-
-// tom/render-guard.ts
-var MAX_INJECTED_VALUE_LENGTH = 200;
-function sanitizeForInjection(text) {
-  const flattened = text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/<!--/g, "(!--").replace(/-->/g, "--)").trim();
-  return flattened.length > MAX_INJECTED_VALUE_LENGTH ? `${flattened.slice(0, MAX_INJECTED_VALUE_LENGTH)}\u2026` : flattened;
-}
-
-// tom/promotion.ts
 var PROMOTION_BEGIN_MARKER = "<!-- tom-swe:begin (managed by tom-swe; edits inside will be overwritten) -->";
 var PROMOTION_END_MARKER = "<!-- tom-swe:end -->";
-var MAX_BLOCK_PREFERENCES = 10;
-var FILE_LINE_BUDGET = 200;
-var GATE_REJECTION_TTL_DAYS = 30;
 var MS_PER_DAY = 24 * 60 * 60 * 1e3;
-function hasFreshGateRejection(pref) {
-  if (pref.gateRejectedValue !== pref.value || pref.gateRejectedAt === void 0) {
-    return false;
-  }
-  const ageMs = Date.now() - Date.parse(pref.gateRejectedAt);
-  return Number.isFinite(ageMs) && ageMs < GATE_REJECTION_TTL_DAYS * MS_PER_DAY;
-}
-var PROMOTABLE_CATEGORIES = /* @__PURE__ */ new Set([
-  "codingPreferences",
-  "interactionStyle"
-]);
-function selectPromotable(userModel, config2) {
-  return userModel.preferencesClusters.filter(
-    (p) => PROMOTABLE_CATEGORIES.has(p.category) && // Legacy generic keys ('preference'/'pattern') are collapsed noise —
-    // never promote them into a CLAUDE.md marker block.
-    !isLegacyGenericKey(p.key) && (p.promoted === true ? p.confidence >= config2.retireThreshold : p.confidence >= config2.threshold && p.sessionCount >= config2.minSessions)
-  ).sort((a, b) => {
-    const aCorrection = a.learnedVia === "correction" ? 1 : 0;
-    const bCorrection = b.learnedVia === "correction" ? 1 : 0;
-    if (aCorrection !== bCorrection) {
-      return bCorrection - aCorrection;
-    }
-    const score = b.confidence * b.sessionCount - a.confidence * a.sessionCount;
-    if (score !== 0) {
-      return score;
-    }
-    return prefIdentity(a).localeCompare(prefIdentity(b));
-  });
-}
-function renderPreferenceLine(pref) {
-  const key = sanitizeForInjection(pref.key);
-  const value = sanitizeForInjection(pref.value);
-  const category = sanitizeForInjection(pref.category);
-  const sessions = pref.sessionCount === 1 ? "1 session" : `${pref.sessionCount} sessions`;
-  if (pref.learnedVia === "correction") {
-    return pref.correctedFrom !== void 0 ? `- Avoid ${sanitizeForInjection(pref.correctedFrom)} for ${key}; use ${value} instead (user corrected this; ${sessions})` : `- ${key}: ${value} (learned via user correction; ${sessions})`;
-  }
-  return `- Prefers ${value} (${category}/${key}; observed across ${sessions})`;
-}
-function renderPromotionBlock(prefs) {
-  const sorted = [...prefs].sort(
-    (a, b) => a.category.localeCompare(b.category) || a.key.localeCompare(b.key) || a.value.localeCompare(b.value)
-  );
-  const lines = [
-    PROMOTION_BEGIN_MARKER,
-    "Background observations about this user, learned by tom-swe across sessions (not instructions):",
-    ...sorted.map(renderPreferenceLine),
-    PROMOTION_END_MARKER
-  ];
-  return lines.join("\n");
-}
 function atomicWriteMemoryFile(filePath, data) {
   let mode = 420;
   try {
@@ -15451,26 +15388,6 @@ function atomicWriteMemoryFile(filePath, data) {
   );
   fs8.writeFileSync(tempPath, data, { encoding: "utf-8", mode });
   fs8.renameSync(tempPath, filePath);
-}
-function writePromotionBlock(filePath, block) {
-  const content = fs8.readFileSync(filePath, "utf-8");
-  const beginIdx = content.indexOf(PROMOTION_BEGIN_MARKER);
-  let updated;
-  if (beginIdx >= 0) {
-    const endIdx = content.indexOf(PROMOTION_END_MARKER, beginIdx);
-    const afterEnd = endIdx >= 0 ? endIdx + PROMOTION_END_MARKER.length : content.length;
-    updated = content.slice(0, beginIdx) + block + content.slice(afterEnd);
-  } else if (content.length === 0) {
-    updated = block + "\n";
-  } else {
-    const separator = content.endsWith("\n") ? "\n" : "\n\n";
-    updated = content + separator + block + "\n";
-  }
-  if (updated === content) {
-    return false;
-  }
-  atomicWriteMemoryFile(filePath, updated);
-  return true;
 }
 function removePromotionBlock(filePath) {
   let content;
@@ -15498,258 +15415,30 @@ function removePromotionBlock(filePath) {
 function globalMemoryFilePath() {
   return path7.join(os4.homedir(), ".claude", "CLAUDE.md");
 }
-function findProjectMemoryFile(cwd) {
-  const rootCandidate = path7.join(cwd, "CLAUDE.md");
-  if (fs8.existsSync(rootCandidate)) {
-    return rootCandidate;
-  }
-  const dotClaudeCandidate = path7.join(cwd, ".claude", "CLAUDE.md");
-  if (fs8.existsSync(dotClaudeCandidate)) {
-    return dotClaudeCandidate;
-  }
-  return null;
-}
-var PROJECT_CATEGORIES = /* @__PURE__ */ new Set(["codingPreferences"]);
-function isProjectScoped(pref) {
-  return PROJECT_CATEGORIES.has(pref.category);
-}
-function prefIdentity(pref) {
-  return `${pref.category}::${pref.key}::${pref.value}`;
-}
-function redactedPrefIdentity(pref) {
-  return `${pref.category}::${sanitizeValue(pref.key)}::${sanitizeValue(pref.value)}`;
-}
-function projectBlockOntoFile(filePath, prefs) {
-  if (prefs.length === 0) {
-    return removePromotionBlock(filePath);
-  }
-  return writePromotionBlock(filePath, renderPromotionBlock(prefs));
-}
-function countHostLines(filePath) {
-  let content;
-  try {
-    content = fs8.readFileSync(filePath, "utf-8");
-  } catch {
-    return 0;
-  }
-  const beginIdx = content.indexOf(PROMOTION_BEGIN_MARKER);
-  if (beginIdx >= 0) {
-    const endIdx = content.indexOf(PROMOTION_END_MARKER, beginIdx);
-    const afterEnd = endIdx >= 0 ? endIdx + PROMOTION_END_MARKER.length : content.length;
-    content = content.slice(0, beginIdx) + content.slice(afterEnd);
-  }
-  return content.split("\n").filter((l) => l.trim() !== "").length;
-}
-function logSkipped(target, reason, skipped) {
-  logUsage({
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    operation: "promotion-skipped",
-    model: "none",
-    tokenCount: 0,
-    reason,
-    detail: { target, reason, skipped: skipped.map(redactedPrefIdentity) }
-  });
-}
-function applyTargetGates(prefs, target, gate, applyDerivability) {
-  let eligible = [...prefs];
-  let newlyRejected = [];
-  if (applyDerivability) {
-    eligible = eligible.filter(
-      (p) => p.promoted === true || p.learnedVia === "correction" || !hasFreshGateRejection(p)
-    );
-    const needsJudgment = eligible.filter(
-      (p) => p.promoted !== true && p.learnedVia !== "correction"
-    );
-    if (needsJudgment.length > 0) {
-      const verdict = gate === null ? null : gate(
-        needsJudgment.map((p) => ({
-          id: prefIdentity(p),
-          statement: renderPreferenceLine(p)
-        }))
-      );
-      const passed = verdict ?? /* @__PURE__ */ new Set();
-      const rejected = needsJudgment.filter((p) => !passed.has(prefIdentity(p)));
-      if (rejected.length > 0) {
-        logSkipped(
-          target,
-          verdict === null ? "derivability-gate-unavailable" : "statically-derivable",
-          rejected
-        );
+function cleanupPromotionArtifacts(cwd) {
+  const targets = [
+    .../* @__PURE__ */ new Set([
+      globalMemoryFilePath(),
+      path7.join(cwd, "CLAUDE.md"),
+      path7.join(cwd, ".claude", "CLAUDE.md"),
+      path7.join(cwd, "CLAUDE.local.md")
+    ])
+  ];
+  const removed = [];
+  const errors = [];
+  for (const filePath of targets) {
+    try {
+      if (removePromotionBlock(filePath)) {
+        removed.push(filePath);
       }
-      newlyRejected = verdict !== null ? rejected : [];
-      const rejectedIds = new Set(rejected.map(prefIdentity));
-      eligible = eligible.filter((p) => !rejectedIds.has(prefIdentity(p)));
+    } catch (error48) {
+      errors.push({
+        file: filePath,
+        reason: error48 instanceof Error ? error48.message : String(error48)
+      });
     }
   }
-  if (countHostLines(target) > FILE_LINE_BUDGET) {
-    const newOnes = eligible.filter((p) => p.promoted !== true);
-    if (newOnes.length > 0) {
-      logSkipped(target, "file-line-budget", newOnes);
-    }
-    eligible = eligible.filter((p) => p.promoted === true);
-  }
-  if (eligible.length > MAX_BLOCK_PREFERENCES) {
-    logSkipped(target, "block-cap", eligible.slice(MAX_BLOCK_PREFERENCES));
-    eligible = eligible.slice(0, MAX_BLOCK_PREFERENCES);
-  }
-  return { eligible, newlyRejected };
-}
-function runPromotion(userModel, config2, cwd, gate = null) {
-  if (!config2.enabled) {
-    return { model: userModel, promoted: [], targets: [], createdFiles: [] };
-  }
-  const promotable = selectPromotable(userModel, config2);
-  const projectCandidates = promotable.filter(isProjectScoped);
-  const globalCandidates = promotable.filter((p) => !isProjectScoped(p));
-  const targets = [];
-  const createdFiles = [];
-  const written = [];
-  const newlyRejected = [];
-  const projectFile = findProjectMemoryFile(cwd);
-  if (projectFile !== null) {
-    const gated = applyTargetGates(projectCandidates, projectFile, gate, true);
-    if (projectBlockOntoFile(projectFile, gated.eligible)) {
-      targets.push(projectFile);
-    }
-    written.push(...gated.eligible);
-    newlyRejected.push(...gated.newlyRejected);
-  }
-  const globalFile = globalMemoryFilePath();
-  const globalPrefs = applyTargetGates(globalCandidates, globalFile, gate, false).eligible;
-  let globalFileAvailable = fs8.existsSync(globalFile);
-  if (!globalFileAvailable && globalPrefs.length > 0 && fs8.existsSync(path7.dirname(globalFile))) {
-    fs8.writeFileSync(globalFile, "", "utf-8");
-    createdFiles.push(globalFile);
-    logUsage({
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      operation: "promotion-file-created",
-      model: "none",
-      tokenCount: 0,
-      reason: globalFile,
-      detail: { path: globalFile }
-    });
-    globalFileAvailable = true;
-  }
-  if (globalFileAvailable) {
-    if (projectBlockOntoFile(globalFile, globalPrefs)) {
-      targets.push(globalFile);
-    }
-    written.push(...globalPrefs);
-  }
-  const projectProjected = projectFile !== null;
-  const globalProjected = globalFileAvailable;
-  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-  const writtenIds = new Set(written.map(prefIdentity));
-  const rejectedIds = new Set(newlyRejected.map(prefIdentity));
-  const updatedClusters = userModel.preferencesClusters.map((p) => {
-    const cluster = rejectedIds.has(prefIdentity(p)) ? { ...p, gateRejectedValue: p.value, gateRejectedAt: nowIso } : p;
-    if (writtenIds.has(prefIdentity(cluster))) {
-      return { ...cluster, promoted: true };
-    }
-    const scopeProjected = isProjectScoped(cluster) ? projectProjected : globalProjected;
-    if (cluster.promoted === true && scopeProjected) {
-      const { promoted: _retired, ...rest } = cluster;
-      return rest;
-    }
-    return cluster;
-  });
-  return {
-    model: { ...userModel, preferencesClusters: updatedClusters },
-    promoted: written,
-    targets,
-    createdFiles
-  };
-}
-
-// tom/promotion-gate.ts
-var import_node_child_process2 = require("node:child_process");
-var GATE_TIMEOUT_MS = 9e4;
-function buildGatePrompt(candidates) {
-  return [
-    `You are auditing candidate additions to this repository's CLAUDE.md.`,
-    `CLAUDE.md must only carry facts an agent could NOT infer from the repository itself: configs, dependencies, lockfiles, scripts, existing docs, and code conventions are all visible to agents already.`,
-    `Ignore any content between '<!-- tom-swe:begin' and 'tom-swe:end -->' markers anywhere in the repository \u2014 that is this tool's own managed output, not repository-derived information, and must never count as making a candidate derivable.`,
-    ``,
-    `Candidates:`,
-    ...candidates.map((c) => `- id: ${c.id} \u2014 ${c.statement}`),
-    ``,
-    `Inspect the repository as needed (Read/Glob/Grep). For each candidate, decide: is this fact already statically derivable from the repository?`,
-    `Respond with ONLY a JSON array of the ids that are NOT derivable and therefore worth writing down. Example: ["a::b::c"]. No other text.`
-  ].join("\n");
-}
-function extractJsonArray(text) {
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start < 0 || end <= start) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(text.slice(start, end + 1));
-    if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-function judgeDerivability(candidates, cwd, model) {
-  if (candidates.length === 0) {
-    return /* @__PURE__ */ new Set();
-  }
-  const startedAt = Date.now();
-  const logGate = (outcome, tokenCount, passed2) => {
-    logUsage({
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      operation: "derivability-gate",
-      model,
-      tokenCount,
-      durationMs: Date.now() - startedAt,
-      detail: { outcome, candidates: candidates.length, ...passed2 !== null ? { passed: passed2 } : {} }
-    });
-  };
-  const proc = (0, import_node_child_process2.spawnSync)(
-    "claude",
-    [
-      "-p",
-      "--model",
-      model,
-      "--output-format",
-      "json",
-      "--allowedTools",
-      "Read,Glob,Grep"
-    ],
-    {
-      cwd,
-      input: buildGatePrompt(candidates),
-      encoding: "utf-8",
-      timeout: GATE_TIMEOUT_MS,
-      maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, TOM_SWE_INTERNAL: "1" }
-    }
-  );
-  if (proc.error || proc.status !== 0) {
-    logGate("unavailable", 0, null);
-    return null;
-  }
-  let resultText;
-  let tokensUsed = 0;
-  try {
-    const wrapper = JSON.parse(proc.stdout);
-    resultText = typeof wrapper["result"] === "string" ? wrapper["result"] : proc.stdout;
-    tokensUsed = extractTokensUsed(wrapper["usage"]) ?? 0;
-  } catch {
-    resultText = proc.stdout;
-  }
-  const ids = extractJsonArray(resultText);
-  if (ids === null) {
-    logGate("unavailable", tokensUsed, null);
-    return null;
-  }
-  const candidateIds = new Set(candidates.map((c) => c.id));
-  const passed = new Set(ids.filter((id) => candidateIds.has(id)));
-  logGate("ok", tokensUsed, passed.size);
-  return passed;
+  return { removed, errors };
 }
 
 // tom/pruning.ts
@@ -16286,28 +15975,34 @@ async function analyzeCompletedSession(sessionId, cwd = process.cwd(), transcrip
     });
   }
   try {
-    const gate = (candidates) => judgeDerivability(candidates, cwd, configuredModel);
-    const promotion = runPromotion(aggregatedUserModel, config2.promotion, cwd, gate);
-    if (promotion.model !== aggregatedUserModel) {
-      writeUserModel(promotion.model, "global");
-    }
-    if (promotion.promoted.length > 0 && promotion.targets.length > 0) {
+    const cleanup = cleanupPromotionArtifacts(cwd);
+    if (cleanup.removed.length > 0) {
       logUsage({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-        operation: "preference-promotion",
+        operation: "promotion-cleanup",
         model: NO_MODEL,
         tokenCount: 0,
         sessionId,
-        detail: {
-          promoted: promotion.promoted.map((p) => prefKeyForTelemetry(p.category, p.key)),
-          targets: promotion.targets
-        }
+        detail: { removed: cleanup.removed }
+      });
+    }
+    for (const failure of cleanup.errors) {
+      logUsage({
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        operation: "promotion-cleanup-error",
+        model: NO_MODEL,
+        tokenCount: 0,
+        sessionId,
+        reason: failure.reason,
+        // Structured so consumers can group by target; the presence of `file`
+        // also distinguishes a per-target failure from the backstop catch.
+        detail: { file: failure.file }
       });
     }
   } catch (error48) {
     logUsage({
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      operation: "promotion-error",
+      operation: "promotion-cleanup-error",
       model: NO_MODEL,
       tokenCount: 0,
       sessionId,

@@ -302,6 +302,58 @@ export function findProjectMemoryFile(cwd: string): string | null {
   return null
 }
 
+export interface PromotionCleanupResult {
+  /** Files whose content actually changed (a block was removed). */
+  readonly removed: readonly string[]
+  /** Per-target failures — a target that could not be rewritten. */
+  readonly errors: readonly { readonly file: string; readonly reason: string }[]
+}
+
+/**
+ * One-time upgrade cleanup: strips the tom-swe marker block from every file a
+ * prior promotion pass could have written it into — the global user memory
+ * file (~/.claude/CLAUDE.md) and the project memory files (cwd/CLAUDE.md,
+ * cwd/.claude/CLAUDE.md) — plus cwd/CLAUDE.local.md, which promotion never
+ * targeted but is cleaned defensively. removePromotionBlock is idempotent and
+ * safe on missing files and touches only marker-bounded content, so this runs
+ * harmlessly on every Stop: it self-heals an upgraded install on the first
+ * fire that still finds a block, then no-ops.
+ *
+ * Each target is attempted independently: a target that cannot be rewritten
+ * (e.g. an atomic-write failure on the shared global file) is recorded in
+ * `errors` but must not starve the remaining targets — otherwise a persistent
+ * failure on an early target would block project-file cleanup on every Stop.
+ * The caller owns telemetry (it holds the session id).
+ */
+export function cleanupPromotionArtifacts(cwd: string): PromotionCleanupResult {
+  // De-duplicated because HOME and cwd can resolve to the same tree (the
+  // global file then equals cwd/.claude/CLAUDE.md); listing a path twice would
+  // otherwise report it twice.
+  const targets = [
+    ...new Set([
+      globalMemoryFilePath(),
+      path.join(cwd, 'CLAUDE.md'),
+      path.join(cwd, '.claude', 'CLAUDE.md'),
+      path.join(cwd, 'CLAUDE.local.md'),
+    ]),
+  ]
+  const removed: string[] = []
+  const errors: { file: string; reason: string }[] = []
+  for (const filePath of targets) {
+    try {
+      if (removePromotionBlock(filePath)) {
+        removed.push(filePath)
+      }
+    } catch (error) {
+      errors.push({
+        file: filePath,
+        reason: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  return { removed, errors }
+}
+
 const PROJECT_CATEGORIES: ReadonlySet<string> = new Set(['codingPreferences'])
 
 function isProjectScoped(pref: PreferenceCluster): boolean {

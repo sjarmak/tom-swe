@@ -10,6 +10,7 @@ import {
   renderPromotionBlock,
   writePromotionBlock,
   removePromotionBlock,
+  cleanupPromotionArtifacts,
   globalMemoryFilePath,
   findProjectMemoryFile,
   runPromotion,
@@ -295,6 +296,102 @@ describe('removePromotionBlock', () => {
     expect(removePromotionBlock(filePath)).toBe(true)
 
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('')
+  })
+})
+
+// --- cleanupPromotionArtifacts ---
+
+describe('cleanupPromotionArtifacts', () => {
+  let tempHome: string
+  let tempCwd: string
+  let originalHome: string | undefined
+
+  beforeEach(() => {
+    tempHome = createTempDir()
+    tempCwd = createTempDir()
+    originalHome = process.env['HOME']
+    process.env['HOME'] = tempHome
+  })
+
+  afterEach(() => {
+    if (originalHome !== undefined) {
+      process.env['HOME'] = originalHome
+    } else {
+      delete process.env['HOME']
+    }
+    fs.rmSync(tempHome, { recursive: true, force: true })
+    fs.rmSync(tempCwd, { recursive: true, force: true })
+  })
+
+  function writeBlock(filePath: string, surrounding: string): void {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    fs.writeFileSync(filePath, surrounding + renderPromotionBlock([cluster()]) + '\n', 'utf-8')
+  }
+
+  it('strips the block from the global and project memory files, returning the changed paths', () => {
+    const globalFile = path.join(tempHome, '.claude', 'CLAUDE.md')
+    const projectFile = path.join(tempCwd, 'CLAUDE.md')
+    writeBlock(globalFile, '# Global\n')
+    writeBlock(projectFile, '# Project\n')
+
+    const result = cleanupPromotionArtifacts(tempCwd)
+
+    expect(result.removed).toContain(globalFile)
+    expect(result.removed).toContain(projectFile)
+    expect(result.errors).toEqual([])
+    expect(fs.readFileSync(globalFile, 'utf-8')).toBe('# Global\n')
+    expect(fs.readFileSync(projectFile, 'utf-8')).toBe('# Project\n')
+  })
+
+  it('also strips a block from cwd/.claude/CLAUDE.md and cwd/CLAUDE.local.md', () => {
+    const dotClaude = path.join(tempCwd, '.claude', 'CLAUDE.md')
+    const localFile = path.join(tempCwd, 'CLAUDE.local.md')
+    writeBlock(dotClaude, '# Dot\n')
+    writeBlock(localFile, '# Local rig notes\n')
+
+    const result = cleanupPromotionArtifacts(tempCwd)
+
+    expect(result.removed).toContain(dotClaude)
+    expect(result.removed).toContain(localFile)
+    expect(fs.readFileSync(dotClaude, 'utf-8')).toBe('# Dot\n')
+    expect(fs.readFileSync(localFile, 'utf-8')).toBe('# Local rig notes\n')
+  })
+
+  it('is safe when files are missing or carry no block (returns empty removed/errors)', () => {
+    // No files at all.
+    expect(cleanupPromotionArtifacts(tempCwd)).toEqual({ removed: [], errors: [] })
+
+    // A plain file with no block is left untouched.
+    const projectFile = path.join(tempCwd, 'CLAUDE.md')
+    fs.writeFileSync(projectFile, '# Just rules\n', 'utf-8')
+    expect(cleanupPromotionArtifacts(tempCwd)).toEqual({ removed: [], errors: [] })
+    expect(fs.readFileSync(projectFile, 'utf-8')).toBe('# Just rules\n')
+  })
+
+  it('removes a block only once across repeated runs (self-healing upgrade)', () => {
+    const projectFile = path.join(tempCwd, 'CLAUDE.md')
+    writeBlock(projectFile, '# Project\n')
+
+    expect(cleanupPromotionArtifacts(tempCwd).removed).toContain(projectFile)
+    // Second run: the block is already gone, so nothing changes.
+    expect(cleanupPromotionArtifacts(tempCwd)).toEqual({ removed: [], errors: [] })
+  })
+
+  it('isolates a per-target failure so later targets are still cleaned', () => {
+    // Global file has a block but its atomic temp path is occupied by a
+    // directory, so its rewrite throws — yet the project file must still clean.
+    const globalFile = path.join(tempHome, '.claude', 'CLAUDE.md')
+    const projectFile = path.join(tempCwd, 'CLAUDE.md')
+    writeBlock(globalFile, '# Global\n')
+    writeBlock(projectFile, '# Project\n')
+    fs.mkdirSync(path.join(tempHome, '.claude', '.tom-swe.CLAUDE.md.tmp'))
+
+    const result = cleanupPromotionArtifacts(tempCwd)
+
+    // Global recorded as an error, project still removed (not starved).
+    expect(result.errors.map((e) => e.file)).toContain(globalFile)
+    expect(result.removed).toContain(projectFile)
+    expect(fs.readFileSync(projectFile, 'utf-8')).toBe('# Project\n')
   })
 })
 

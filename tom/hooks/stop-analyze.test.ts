@@ -12,22 +12,13 @@ import {
 import type { UserModel, PreferenceCluster } from '../schemas'
 import { analyzeSessionWithLlm } from '../llm-analyze'
 import { canonicalCategoryByKey, dropRefiledCorrections } from '../preferences'
+import { PROMOTION_BEGIN_MARKER, PROMOTION_END_MARKER } from '../promotion'
 
 // Never spawn the real claude CLI in tests: the LLM path is mocked and
 // defaults to failure so existing pipeline tests exercise the heuristic
 // fallback. Individual tests override the resolved value.
 vi.mock('../llm-analyze', () => ({
   analyzeSessionWithLlm: vi.fn(),
-}))
-
-// The derivability gate also spawns claude headlessly; tests pass
-// everything through so promotion-pipeline assertions stay focused
-// (gate behavior itself is covered in promotion.test.ts).
-vi.mock('../promotion-gate', () => ({
-  judgeDerivability: vi.fn(
-    (candidates: ReadonlyArray<{ id: string }>) =>
-      new Set(candidates.map((c) => c.id))
-  ),
 }))
 
 const mockAnalyzeWithLlm = vi.mocked(analyzeSessionWithLlm)
@@ -1410,59 +1401,49 @@ describe('analyzeCompletedSession', () => {
     expect(serialized).toContain('[REDACTED]')
   })
 
-  it('promotes stable preferences into the global CLAUDE.md and persists promoted flags', async () => {
+  it('retires promotion: writes no marker block even for stable preferences', async () => {
+    // Option A (tom-swe-x1m): the promote-to-CLAUDE.md subsystem is retired.
+    // 9 sessions clears the old 0.8/5-session bar, yet nothing is written.
     seedTier2(9, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })
     writeSessionFile('promotion-test')
 
     const result = await analyzeCompletedSession('promotion-test')
     expect(result.success).toBe(true)
 
-    // Block written to the global memory file (created since ~/.claude exists)
+    // No block is written to any memory file (cleanup never creates files).
     const globalClaudeMd = path.join(tempDir, '.claude', 'CLAUDE.md')
-    expect(fs.existsSync(globalClaudeMd)).toBe(true)
-    const content = fs.readFileSync(globalClaudeMd, 'utf-8')
-    expect(content).toContain('<!-- tom-swe:begin')
-    expect(content).toContain('Prefers concise')
-    expect(content).toContain('<!-- tom-swe:end -->')
+    expect(fs.existsSync(globalClaudeMd)).toBe(false)
 
-    // Promoted flag persisted in the user model
+    // No promoted flag is set on the model.
     const persisted = JSON.parse(
       fs.readFileSync(path.join(tempDir, '.claude', 'tom', 'user-model.json'), 'utf-8')
-    ) as {
-      preferencesClusters: Array<Record<string, unknown>>
-    }
-    const promoted = persisted.preferencesClusters.find(
-      (p) => p['key'] === 'verbosity'
-    )
-    expect(promoted?.['promoted']).toBe(true)
+    ) as { preferencesClusters: Array<Record<string, unknown>> }
+    const verbosity = persisted.preferencesClusters.find((p) => p['key'] === 'verbosity')
+    expect(verbosity?.['promoted']).toBeUndefined()
 
-    // One preference-promotion usage entry listing pairs and targets
+    // No promotion telemetry is emitted.
     const entries = readUsageEntries()
-    const promotionEntry = entries.find(
-      (e) => e['operation'] === 'preference-promotion'
-    )
-    expect(promotionEntry).toBeDefined()
-    const detail = (promotionEntry?.['detail'] ?? {}) as Record<string, unknown>
-    expect(detail['promoted']).toEqual(['interactionStyle:verbosity'])
-    expect(detail['targets']).toContain(globalClaudeMd)
-    // File creation is logged too — no silent resource creation
-    expect(
-      entries.some((e) => e['operation'] === 'promotion-file-created')
-    ).toBe(true)
+    expect(entries.some((e) => e['operation'] === 'preference-promotion')).toBe(false)
   })
 
-  it('routes stable coding preferences to an existing project CLAUDE.md', async () => {
-    // cwd is tempDir (chdir in beforeEach); the project memory file exists
+  it('strips a pre-existing tom-swe block from the project CLAUDE.md on Stop (upgrade cleanup)', async () => {
+    // cwd is tempDir (chdir in beforeEach); an upgraded install still carries
+    // a block written by the retired promotion pass.
     const projectClaudeMd = path.join(tempDir, 'CLAUDE.md')
-    fs.writeFileSync(projectClaudeMd, '# Project rules\n', 'utf-8')
+    const block = `${PROMOTION_BEGIN_MARKER}\nold promoted pref\n${PROMOTION_END_MARKER}`
+    fs.writeFileSync(projectClaudeMd, `# Project rules\n${block}\n`, 'utf-8')
     seedTier2(9, { category: 'codingPreferences', key: 'testing', value: 'vitest' })
-    writeSessionFile('project-promotion-test')
+    writeSessionFile('project-cleanup-test')
 
-    await analyzeCompletedSession('project-promotion-test')
+    await analyzeCompletedSession('project-cleanup-test')
 
-    const content = fs.readFileSync(projectClaudeMd, 'utf-8')
-    expect(content).toContain('# Project rules')
-    expect(content).toContain('Prefers vitest')
+    // The block is gone; surrounding user content is preserved verbatim.
+    expect(fs.readFileSync(projectClaudeMd, 'utf-8')).toBe('# Project rules\n')
+
+    const cleanup = readUsageEntries().find((e) => e['operation'] === 'promotion-cleanup')
+    expect(cleanup).toBeDefined()
+    const detail = (cleanup?.['detail'] ?? {}) as Record<string, unknown>
+    expect(detail['removed']).toContain(projectClaudeMd)
   })
 
   it('does not inflate confidence when the same session is analyzed repeatedly', async () => {
@@ -1689,34 +1670,31 @@ describe('analyzeCompletedSession', () => {
     expect(fs.existsSync(path.join(modelDir, 'lock-release-test.lock'))).toBe(false)
   })
 
-  it('does not promote preferences below the promotion thresholds', async () => {
-    // 4 sessions → confidence 0.4, below both the 0.8 and 5-session bars.
-    seedTier2(4, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })
-    writeSessionFile('no-promotion-test')
-
-    await analyzeCompletedSession('no-promotion-test')
-
-    expect(fs.existsSync(path.join(tempDir, '.claude', 'CLAUDE.md'))).toBe(false)
-    const entries = readUsageEntries()
-    expect(
-      entries.some((e) => e['operation'] === 'preference-promotion')
-    ).toBe(false)
-  })
-
-  it('logs promotion-error and completes the pipeline when promotion fails', async () => {
-    // A directory at the global CLAUDE.md path makes the block write throw
-    fs.mkdirSync(path.join(tempDir, '.claude', 'CLAUDE.md'), { recursive: true })
+  it('logs promotion-cleanup-error and completes the pipeline when cleanup fails', async () => {
+    // A block exists (so cleanup attempts an atomic rewrite of the global
+    // file), but its atomic temp path is pre-occupied by a directory, so the
+    // write throws EISDIR — exercising the catch. The temp name mirrors
+    // atomicWriteMemoryFile's `.tom-swe.<basename>.tmp` scheme.
+    const claudeDir = path.join(tempDir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(claudeDir, 'CLAUDE.md'),
+      `${PROMOTION_BEGIN_MARKER}\nx\n${PROMOTION_END_MARKER}\n`,
+      'utf-8'
+    )
+    fs.mkdirSync(path.join(claudeDir, '.tom-swe.CLAUDE.md.tmp'))
     seedTier2(9, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })
-    writeSessionFile('promotion-error-test')
+    writeSessionFile('cleanup-error-test')
 
-    const result = await analyzeCompletedSession('promotion-error-test')
+    const result = await analyzeCompletedSession('cleanup-error-test')
 
     expect(result.success).toBe(true)
     expect(result.indexRebuilt).toBe(true)
-    const entries = readUsageEntries()
-    const errorEntry = entries.find((e) => e['operation'] === 'promotion-error')
+    const errorEntry = readUsageEntries().find(
+      (e) => e['operation'] === 'promotion-cleanup-error'
+    )
     expect(errorEntry).toBeDefined()
-    expect(errorEntry?.['sessionId']).toBe('promotion-error-test')
+    expect(errorEntry?.['sessionId']).toBe('cleanup-error-test')
   })
 
   it('aggregates into existing user model', async () => {
