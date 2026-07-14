@@ -21,7 +21,7 @@ deployment {
       instanceOf tom.hooks
     }
     coreProc = proc 'ToM reasoning + modeling (bundled)' {
-      description 'esbuild-inlined logic the hook scripts call: ambiguity, BM25, extraction, aggregation, rebuild, promotion'
+      description 'esbuild-inlined logic the hook scripts call: ambiguity, BM25, extraction, aggregation, rebuild, marker cleanup'
       instanceOf tom.reasoning
       instanceOf tom.modeling
     }
@@ -30,7 +30,7 @@ deployment {
       instanceOf tom.store
     }
     memoryFiles = proc 'CLAUDE.md memory files' {
-      description 'Project ./CLAUDE.md and global ~/.claude/CLAUDE.md — promotion writes a marker-bounded block into existing files only'
+      description 'Project ./CLAUDE.md and global ~/.claude/CLAUDE.md — the promotion write-path is retired; tom-swe now only strips a legacy marker-bounded block from existing files'
       instanceOf claudeCode.settings
     }
     headless = proc 'Headless Claude (claude -p)' {
@@ -45,7 +45,7 @@ deployment {
   hookProc -> tomStore 'read/write JSON tiers + index + log'
   coreProc -> tomStore 'read/write JSON tiers + index + log'
   hookProc -> headless 'Stop: spawn claude -p for analysis'
-  coreProc -> memoryFiles 'promotion: regenerate marker block'
+  coreProc -> memoryFiles 'cleanup: strip legacy marker block'
   harness -> memoryFiles 'reads CLAUDE.md as session memory'
 }
 

@@ -48,7 +48,7 @@ sub-agent (`#planned`) and the model-backed consultation path
 | `tomSystem` | the `tom-swe` system decomposed into containers (built vs planned) |
 | `hooksContainer` | the four lifecycle hooks (`tom/hooks/`) — the Claude Code integration surface |
 | `reasoningContainer` | the reasoning core (`tom/`) — ambiguity, consultation, BM25, LLM + heuristic extraction, telemetry |
-| `modelingContainer` | preference modeling — aggregation, idempotent rebuild, decay, promotion + derivability gate |
+| `modelingContainer` | preference modeling — aggregation, idempotent rebuild, decay, and cleanup of any legacy CLAUDE.md marker block |
 | `storeContainer` | the 3-tier JSON store (`~/.claude/tom/`) plus index, history snapshots, and the telemetry log |
 | `skillsContainer` | the management skills — setup / status / inspect / reset / forget / export |
 | `planned` | the unwired sub-agent + research track, with built dependencies dimmed |
@@ -61,14 +61,14 @@ a design-review walkthrough:
 |---|---|
 | `consultFlow` | the live runtime path: ambiguity detected → local BM25 consultation → preference context injected → response adjusted |
 | `analyzeFlow` | the Stop-hook learning loop: parse usage → extract Tier 2 (LLM, heuristic fallback) → idempotent Tier 3 rebuild → reindex → prune |
-| `promotionFlow` | preference promotion into CLAUDE.md (category / derivability / cap / host-budget gates; wholesale regeneration = retirement) |
+| `promotionFlow` | one-time cleanup of any legacy CLAUDE.md promotion block (the write-path is retired; SessionStart surfaces prefs directly) |
 | `agentLoop` | the **planned** interactive ToM sub-agent consultation loop (built, not yet wired) |
 
 **Risk lens:**
 
 | View | Scope |
 |---|---|
-| `risks` | the `#risk`-flagged elements with each open question stated in-box (sub-agent unwired, local-only consultation, headless-CLI dependency + env-only recursion guard, promotion writing into the user’s host memory files) |
+| `risks` | the `#risk`-flagged elements with each open question stated in-box (sub-agent unwired, local-only consultation, headless-CLI dependency + env-only recursion guard) |
 
 ### Running the walkthrough
 
@@ -78,7 +78,8 @@ structure) → the four walkthrough flows in sequence (what actually happens) �
 In `npx likec4 start`, the dynamic views animate step-by-step and each view's
 notes panel carries the gotchas (consultation is local and never blocks the
 prompt; Stop fires per turn-end and is debounced; Tier 3 is rebuilt not
-incremented; promotion is bounded by four gates).
+incremented; the promotion write-path is retired — only a legacy marker-block
+cleanup remains).
 
 ## Viewing & regenerating
 

@@ -37,7 +37,7 @@ model {
       description 'The conversation the user actually has; receives ToM context as background observation, never as instructions'
     }
     settings = datastore 'CLAUDE.md memory files' {
-      description 'Project ./CLAUDE.md and global ~/.claude/CLAUDE.md — promotion targets for stable preferences (marker-bounded block)'
+      description 'Project ./CLAUDE.md and global ~/.claude/CLAUDE.md — legacy promotion targets; the write-path is retired, so tom-swe now only strips any marker-bounded block a prior version left (SessionStart surfaces prefs instead)'
     }
     transcript = datastore 'Session transcript (JSONL)' {
       description 'The harness transcript; read at Stop to attribute host-session token usage'
@@ -81,7 +81,7 @@ model {
       }
       stopAnalyze = component 'Stop hook' {
         #evolving
-        description 'Async, debounced 90s: orchestrates the full analysis → rebuild → promote → reindex → prune pipeline. Fires per turn-end, so rebuild semantics keep Tier 3 idempotent'
+        description 'Async, debounced 90s: orchestrates the full analysis → rebuild → reindex → prune pipeline (plus a one-time strip of any legacy promotion marker block). Fires per turn-end, so rebuild semantics keep Tier 3 idempotent'
         link ../tom/hooks/stop-analyze.ts 'stop-analyze.ts'
       }
       hookInput = component 'hook-input + exclusion guard' {
@@ -141,9 +141,9 @@ model {
       }
     }
 
-    // ── Preference modeling: aggregation, rebuild, decay, promotion ────────
+    // ── Preference modeling: aggregation, rebuild, decay, marker cleanup ───
     modeling = container 'Preference modeling' {
-      description 'tom/ — builds and maintains the Tier 3 user model: confidence math, decay, correction penalties, and graduation into CLAUDE.md'
+      description 'tom/ — builds and maintains the Tier 3 user model: confidence math, decay, correction penalties, and cleanup of any legacy CLAUDE.md marker block'
       technology 'TypeScript / Node'
       link ../tom 'tom/'
 
@@ -162,15 +162,10 @@ model {
         description 'Rebuilds the whole user model from ALL Tier 2 models with endedAt-grounded decay, so re-analyzing a session replaces (not inflates) its contribution'
         link ../tom/rebuild.ts 'rebuild.ts'
       }
-      promotion = component 'CLAUDE.md promotion' {
-        #evolving
-        #risk
-        description 'Graduates stable high-confidence prefs into a marker-bounded CLAUDE.md block (regenerated wholesale = merge + retirement). RISK: writes into the user’s host memory files; category/cap/budget gates bound the blast radius'
+      promotion = component 'CLAUDE.md marker cleanup' {
+        #built
+        description 'Strips any tom-swe marker-bounded block a prior version wrote into a CLAUDE.md file — an idempotent one-time upgrade sweep run each Stop, safe on missing files. The promotion write-path is retired (SessionStart now surfaces confident prefs directly); also used by /tom-reset'
         link ../tom/promotion.ts 'promotion.ts'
-      }
-      promotionGate = component 'derivability gate' {
-        #evolving
-        description 'RETIRED (tom-swe-x1m.2): the derivability-gate write-path was removed with CLAUDE.md promotion. Kept as a modeled concept pending the promotion-subsystem architecture refresh; no live source.'
       }
       pruning = component 'retention pruning' {
         #built
@@ -342,10 +337,8 @@ model {
   tom.hooks.stopAnalyze -> tom.store.tier2 'write session model'
   tom.hooks.stopAnalyze -> tom.modeling.rebuild 'rebuild Tier 3 from all Tier 2'
   tom.modeling.rebuild -> tom.modeling.preferences 'decay + reinforce + penalize'
-  tom.hooks.stopAnalyze -> tom.modeling.promotion 'promote stable prefs'
-  tom.modeling.promotion -> tom.modeling.promotionGate 'derivability judgment'
-  tom.modeling.promotionGate -> inference 'is this derivable from the repo?'
-  tom.modeling.promotion -> claudeCode.settings 'write marker block to CLAUDE.md'
+  tom.hooks.stopAnalyze -> tom.modeling.promotion 'strip any legacy marker block'
+  tom.modeling.promotion -> claudeCode.settings 'remove legacy marker block from CLAUDE.md'
   tom.hooks.stopAnalyze -> tom.store.history 'snapshot post-session model'
   tom.hooks.stopAnalyze -> tom.reasoning.bm25 'rebuild + cache index'
   tom.hooks.stopAnalyze -> tom.modeling.pruning 'prune past retention cap'
