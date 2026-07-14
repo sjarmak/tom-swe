@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Rebuild from a clean dist/ so removed entry points surface as deletions
+      # (esbuild's outdir never prunes stale bundles on its own).
+      - name: Rebuild committed dist/
+        run: rm -rf dist && npm run build
+      - name: dist-parity guard (committed dist/ must equal build(source))
+        # git status --porcelain covers all drift classes in one check:
+        # modified ( M), deleted ( D), and newly-added untracked (??) bundles.
+        run: |
+          DRIFT=$(git status --porcelain -- dist/)
+          if [ -n "$DRIFT" ]; then
+            echo "::error::dist/ is out of sync with source — run 'npm run build' and commit dist/" >&2
+            git diff -- dist/ >&2
+            echo "$DRIFT" >&2
+            exit 1
+          fi
