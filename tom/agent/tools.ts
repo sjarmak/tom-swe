@@ -26,7 +26,7 @@ import {
   projectTomDir,
 } from '../memory-io.js'
 import { readTomConfig } from '../config.js'
-import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
+import { rebuildUserModelFromTier2 } from '../rebuild.js'
 import { extractSessionModel } from '../session-extract.js'
 import { MEMORY_OPERATION_TOOLS, isMemoryOperationAllowed } from './config.js'
 
@@ -280,8 +280,7 @@ export function initializeUserProfile(
 
   // Bootstrap from available session models via the canonical rebuild:
   // chronological (endedAt) fold with config-driven decay and correction
-  // penalty. No previous model exists here (guarded above), so the
-  // promoted-flag carry is a structural no-op.
+  // penalty.
   const config = readTomConfig()
   const rebuilt = rebuildUserModelFromTier2(
     scope,
@@ -289,7 +288,7 @@ export function initializeUserProfile(
     config.correctionPenalty,
     null
   )
-  writeUserModel(carryPromotedFlags(rebuilt, null), scope)
+  writeUserModel(rebuilt, scope)
 
   const tomDir = scope === 'global' ? globalTomDir() : projectTomDir()
   const modelsDir = path.join(tomDir, 'session-models')

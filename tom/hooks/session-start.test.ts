@@ -119,13 +119,12 @@ describe('buildModelSummary', () => {
     expect(summary).toContain('typescript')
   })
 
-  it('includes promoted preferences in the injected summary', () => {
+  it('injects every confident preference into the summary', () => {
     // Option A (tom-swe-x1m): promote-to-CLAUDE.md is retired, so the hook is
-    // the single surfacing path — a promoted pref injects like any other.
-    const promotedPref = { ...pref('testing', 'vitest', 0.95), promoted: true }
+    // the single surfacing path — every confident preference injects.
     const model = createUserModel({
       preferencesClusters: [
-        promotedPref,
+        pref('testing', 'vitest', 0.95),
         pref('language', 'typescript', 0.9),
       ],
     })
@@ -135,11 +134,9 @@ describe('buildModelSummary', () => {
     expect(summary).toContain('typescript')
   })
 
-  it('injects a promoted preference even when it is the only confident one', () => {
+  it('injects a single confident preference', () => {
     const model = createUserModel({
-      preferencesClusters: [
-        { ...pref('testing', 'vitest', 0.95), promoted: true },
-      ],
+      preferencesClusters: [pref('testing', 'vitest', 0.95)],
     })
     expect(buildModelSummary(model) ?? '').toContain('vitest')
   })
@@ -183,16 +180,17 @@ describe('injectedKeysFromModel', () => {
     expect(injectedKeysFromModel(model)).toEqual(['codingPreferences:[REDACTED]'])
   })
 
-  it('excludes low-confidence and legacy generic keys but includes promoted', () => {
+  it('excludes low-confidence and legacy generic keys', () => {
     const model = createUserModel({
       preferencesClusters: [
         pref('language', 'typescript', 0.9),
         pref('framework', 'react', 0.3),
-        { ...pref('testing', 'vitest', 0.95), promoted: true },
+        pref('testing', 'vitest', 0.95),
         pref('preference', '/some/path', 1.0),
       ],
     })
-    // Promoted 'testing' (0.95) now surfaces, sorted above 'language' (0.9).
+    // 'testing' (0.95) sorts above 'language' (0.9); low-confidence 'framework'
+    // and legacy generic 'preference' are excluded.
     expect(injectedKeysFromModel(model)).toEqual([
       'codingPreferences:testing',
       'codingPreferences:language',

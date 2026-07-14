@@ -140,7 +140,7 @@ export function prefKeyForTelemetry(category: string, key: string): string {
  * Reads a usage.log entry's `detail[key]` as an array of strings, dropping any
  * non-string members and returning [] when the field is absent or not an array.
  * The safe accessor for the `category:key` list fields (injectedKeys,
- * suggestionKeys, promoted, corrections, asserted/confirmed/corrected) that
+ * suggestionKeys, corrections, asserted/confirmed/corrected) that
  * telemetry consumers join on.
  */
 export function usageDetailStringArray(

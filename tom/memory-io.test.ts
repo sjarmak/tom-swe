@@ -209,6 +209,63 @@ describe('readUserModel / writeUserModel', () => {
     expect(result!.projectOverrides['/repo']).toEqual([])
   })
 
+  it('strips retired promotion fields from stored clusters on read (migration)', () => {
+    // A user-model.json written by a pre-x1m.2 install carries promoted/
+    // gateRejectedValue/gateRejectedAt. The cluster schema is now a strictObject
+    // WITHOUT those keys, so without the pre-parse strip the whole model would
+    // fail safeParse and readUserModel would return null (silent data loss,
+    // resetting the summaries). Assert the model survives and the keys are gone.
+    const stored = {
+      preferencesClusters: [
+        {
+          category: 'codingPreferences',
+          key: 'language',
+          value: 'typescript',
+          confidence: 0.9,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          sessionCount: 6,
+          promoted: true,
+          gateRejectedValue: 'typescript',
+          gateRejectedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      interactionStyleSummary: 'concise',
+      codingStyleSummary: 'typescript',
+      projectOverrides: {
+        '/repo': [
+          {
+            category: 'codingPreferences',
+            key: 'framework',
+            value: 'react',
+            confidence: 0.7,
+            lastUpdated: '2026-01-01T00:00:00.000Z',
+            sessionCount: 3,
+            promoted: true,
+          },
+        ],
+      },
+    }
+    fs.mkdirSync(GLOBAL_TOM, { recursive: true })
+    fs.writeFileSync(
+      path.join(GLOBAL_TOM, 'user-model.json'),
+      JSON.stringify(stored),
+      'utf-8'
+    )
+
+    const result = readUserModel('global')
+
+    // Not dropped: the model parses and the summaries survive.
+    expect(result).not.toBeNull()
+    expect(result!.interactionStyleSummary).toBe('concise')
+    const cluster = result!.preferencesClusters[0]!
+    expect(cluster.key).toBe('language')
+    // Retired keys are gone from both the top-level and override clusters.
+    expect('promoted' in cluster).toBe(false)
+    expect('gateRejectedValue' in cluster).toBe(false)
+    expect('gateRejectedAt' in cluster).toBe(false)
+    expect('promoted' in result!.projectOverrides['/repo']![0]!).toBe(false)
+  })
+
   it('merges global and project models with project overriding', () => {
     const globalModel: UserModel = {
       preferencesClusters: [

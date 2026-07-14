@@ -111,18 +111,17 @@ describe('consultToM', () => {
     expect(result.ambiguityResult.isAmbiguous).toBe(true)
   })
 
-  it('generates suggestion from BM25 search when the user model has nothing to say', () => {
+  it('generates suggestion from BM25 search when the user model has nothing surfaceable', () => {
     writeBm25Index(tempDir)
-    // All prefs promoted: the (primary) user-model builder skips them to
-    // avoid double-injection, so consultation falls back to BM25 provenance.
+    // The only stored pref is a legacy generic key, which the user-model
+    // builder filters out, so consultation falls back to BM25 provenance.
     writeUserModel(tempDir, [{
       category: 'codingPreferences',
-      key: 'language',
+      key: 'preference',
       value: 'typescript',
       confidence: 0.8,
       lastUpdated: '2026-02-02T10:00:00.000Z',
       sessionCount: 5,
-      promoted: true,
     }])
 
     const result = consultToM('fix the typescript style', 'low', 's1')
@@ -154,26 +153,10 @@ describe('consultToM', () => {
     expect(result.suggestion?.content).toContain('language=typescript')
   })
 
-  it('skips the suggestion when it would be built solely from promoted preferences', () => {
-    writeUserModel(tempDir, [{
-      category: 'codingPreferences',
-      key: 'language',
-      value: 'typescript',
-      confidence: 0.9,
-      lastUpdated: '2026-02-02T10:00:00.000Z',
-      sessionCount: 12,
-      promoted: true,
-    }])
-
-    const result = consultToM('make it better', 'low', 's1')
-
-    // Promoted preferences already ride along via CLAUDE.md — no double-injection
-    expect(result.consulted).toBe(true)
-    expect(result.suggestion).toBeNull()
-    expect(result.source).toBeNull()
-  })
-
-  it('builds the user-model suggestion only from unpromoted preferences', () => {
+  it('builds the user-model suggestion from all confident (non-legacy) preferences', () => {
+    // Promotion is retired: every confident keyed preference is eligible to
+    // surface (SessionStart injection is the only surfacing path now, so there
+    // is no marker block to double-inject against).
     writeUserModel(tempDir, [
       {
         category: 'codingPreferences',
@@ -182,7 +165,6 @@ describe('consultToM', () => {
         confidence: 0.95,
         lastUpdated: '2026-02-02T10:00:00.000Z',
         sessionCount: 12,
-        promoted: true,
       },
       {
         category: 'codingPreferences',
@@ -197,8 +179,8 @@ describe('consultToM', () => {
     const result = consultToM('make it better', 'low', 's1')
 
     expect(result.source).toBe('user-model')
+    expect(result.suggestion?.content).toContain('language=typescript')
     expect(result.suggestion?.content).toContain('framework=react')
-    expect(result.suggestion?.content).not.toContain('language=typescript')
   })
 
   it('never surfaces legacy generic keys (preference/pattern) in the suggestion', () => {

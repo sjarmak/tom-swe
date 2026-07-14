@@ -91,7 +91,7 @@ describe('SessionModelSchema corrections', () => {
   })
 })
 
-describe('UserModelSchema promoted flag', () => {
+describe('PreferenceClusterSchema retired promotion fields', () => {
   function makeCluster(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       category: 'codingPreferences',
@@ -113,23 +113,22 @@ describe('UserModelSchema promoted flag', () => {
     }
   }
 
-  it('accepts a preference cluster without promoted (backward compatible)', () => {
+  it('accepts a clean cluster with no retired fields', () => {
     const result = UserModelSchema.safeParse(makeUserModelInput([makeCluster()]))
     expect(result.success).toBe(true)
-    expect(result.data?.preferencesClusters[0]?.promoted).toBeUndefined()
   })
 
-  it('accepts a preference cluster with promoted true', () => {
+  // The retired promoted/gateRejectedValue/gateRejectedAt keys (removed with the
+  // CLAUDE.md promotion pipeline, tom-swe-x1m.2/.3) are now rejected by the
+  // strictObject. Stored models still carrying them are cleaned at the read
+  // boundary by stripDeprecatedClusterFields — covered in memory-io.test.ts.
+  it.each([
+    ['promoted', true],
+    ['gateRejectedValue', 'vitest'],
+    ['gateRejectedAt', '2026-06-01T10:00:00.000Z'],
+  ])('rejects the retired %s field under strictObject', (field, value) => {
     const result = UserModelSchema.safeParse(
-      makeUserModelInput([makeCluster({ promoted: true })])
-    )
-    expect(result.success).toBe(true)
-    expect(result.data?.preferencesClusters[0]?.promoted).toBe(true)
-  })
-
-  it('rejects a non-boolean promoted value', () => {
-    const result = UserModelSchema.safeParse(
-      makeUserModelInput([makeCluster({ promoted: 'yes' })])
+      makeUserModelInput([makeCluster({ [field as string]: value })])
     )
     expect(result.success).toBe(false)
   })

@@ -52,13 +52,6 @@ export interface AnalysisTelemetry {
   readonly vocabularyEcho: VocabularyEchoTelemetry
 }
 
-export interface GateTelemetry {
-  readonly count: number
-  readonly okCount: number
-  readonly unavailableCount: number
-  readonly totalTokens: number
-}
-
 export interface PromptHookTelemetry {
   readonly count: number
   readonly p50DurationMs: number | null
@@ -84,8 +77,8 @@ export interface SessionUsageTelemetry {
   readonly cacheCreationTokens: number
   readonly cacheReadTokens: number
   /**
-   * ToM tokens (analysis + derivability-gate spawns) over host-session
-   * input+output tokens, as a percentage. The denominator dedupes the
+   * ToM tokens (headless analysis spawns) over host-session input+output
+   * tokens, as a percentage. The denominator dedupes the
    * per-fire cumulative session-usage entries by session (last wins).
    * Unweighted by per-model pricing — cache buckets are excluded; consumers
    * needing cost-true overhead should weight the raw buckets themselves.
@@ -97,16 +90,12 @@ export interface TelemetrySummary {
   readonly totalEntries: number
   readonly invalidLines: number
   readonly analysis: AnalysisTelemetry
-  readonly gate: GateTelemetry
   readonly promptHook: PromptHookTelemetry
   readonly consultations: ConsultationTelemetry
   readonly sessionStartInjections: InjectionTelemetry
   readonly sessionUsage: SessionUsageTelemetry
   readonly correctionBatches: number
   readonly correctionKeys: number
-  readonly promotionEvents: number
-  readonly promotionKeys: number
-  readonly promotionErrors: number
   readonly analysisErrors: number
 }
 
@@ -179,10 +168,6 @@ export function computeTelemetrySummary(
     }
   }
 
-  const gates = byOp('derivability-gate')
-  const gateOutcome = countByDetailString(gates, 'outcome')
-  const gateTokens = gates.reduce((sum, e) => sum + e.tokenCount, 0)
-
   const echoEntries = byOp('analysis-vocabulary-echo')
   const echoSum = (key: string): number =>
     echoEntries.reduce((sum, e) => sum + (detailNumber(e, key) ?? 0), 0)
@@ -207,7 +192,6 @@ export function computeTelemetrySummary(
     .filter((c): c is number => c !== null)
 
   const corrections = byOp('preference-correction')
-  const promotions = byOp('preference-promotion')
 
   // session-usage entries hold CUMULATIVE transcript totals and are logged
   // once per Stop FIRE, not per session (max 99 for one session on this
@@ -222,8 +206,8 @@ export function computeTelemetrySummary(
   const sumDetail = (key: string): number =>
     usageEntries.reduce((sum, e) => sum + (detailNumber(e, key) ?? 0), 0)
   const hostInOut = sumDetail('inputTokens') + sumDetail('outputTokens')
-  // Numerator covers every headless spawn: analyses AND gate judgments.
-  const tomTokens = llm.reduce((sum, e) => sum + e.tokenCount, 0) + gateTokens
+  // Numerator covers every headless spawn (session-analysis).
+  const tomTokens = llm.reduce((sum, e) => sum + e.tokenCount, 0)
 
   return {
     totalEntries: entries.length,
@@ -247,12 +231,6 @@ export function computeTelemetrySummary(
         keyValueEchoRate: echoRate(echoedKeyValueTotal),
         keyEchoRate: echoRate(echoedKeyTotal),
       },
-    },
-    gate: {
-      count: gates.length,
-      okCount: gateOutcome['ok'] ?? 0,
-      unavailableCount: gateOutcome['unavailable'] ?? 0,
-      totalTokens: gateTokens,
     },
     promptHook: {
       count: promptHook.length,
@@ -291,12 +269,6 @@ export function computeTelemetrySummary(
       (sum, e) => sum + detailArrayLength(e, 'corrections'),
       0
     ),
-    promotionEvents: promotions.length,
-    promotionKeys: promotions.reduce(
-      (sum, e) => sum + detailArrayLength(e, 'promoted'),
-      0
-    ),
-    promotionErrors: byOp('promotion-error').length,
     analysisErrors: byOp('session-analysis-error').length,
   }
 }
@@ -355,13 +327,6 @@ export function formatTelemetry(summary: TelemetrySummary): string[] {
     }
   }
 
-  const g = summary.gate
-  if (g.count > 0) {
-    lines.push(
-      `- Derivability gate: ${g.count} spawns (ok×${g.okCount}, unavailable×${g.unavailableCount}); tokens: ${g.totalTokens}`
-    )
-  }
-
   if (summary.promptHook.count > 0) {
     lines.push(
       `- Prompt hook: ${summary.promptHook.count} prompts, p50 ${summary.promptHook.p50DurationMs}ms, max ${summary.promptHook.maxDurationMs}ms`
@@ -402,15 +367,8 @@ export function formatTelemetry(summary: TelemetrySummary): string[] {
       `- Corrections: ${summary.correctionKeys} across ${summary.correctionBatches} sessions`
     )
   }
-  if (summary.promotionEvents > 0) {
-    lines.push(
-      `- Promotions: ${summary.promotionKeys} across ${summary.promotionEvents} events`
-    )
-  }
-  if (summary.promotionErrors > 0 || summary.analysisErrors > 0) {
-    lines.push(
-      `- Errors: ${summary.analysisErrors} analysis, ${summary.promotionErrors} promotion`
-    )
+  if (summary.analysisErrors > 0) {
+    lines.push(`- Errors: ${summary.analysisErrors} analysis`)
   }
 
   lines.push('')

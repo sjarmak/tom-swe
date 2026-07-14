@@ -7,9 +7,8 @@
  * The question this answers: when ToM ASSERTS a preference key in a session
  * (injected at SessionStart, or surfaced by an ambiguity-consultation), does
  * that key survive the session UN-corrected (followed through / confirmed), or
- * does the user override it (corrected)? This is a task-usefulness signal, in
- * contrast to the promotion-effectiveness rollup (effectiveness.ts), which only
- * measures memory stability (did the memory stop flip-flopping).
+ * does the user override it (corrected)? This is the task-usefulness signal
+ * /tom-effectiveness reports.
  *
  * The join is per host session id: SessionStart injection, ambiguity
  * consultation, and the Stop-hook correction all stamp the same sanitized
@@ -26,8 +25,8 @@
  *   assertions; bm25-sourced consultation keys are provenance ids
  *   (session:/model:/user-model) that can never appear in a correction and
  *   would otherwise inflate the confirmed count.
- * - Exposure unit is the ANALYSIS RUN, not the host session — matching
- *   preference-correction/promotion (see effectiveness.ts). The Stop analyzer
+ * - Exposure unit is the ANALYSIS RUN, not the host session — matching the
+ *   preference-correction telemetry. The Stop analyzer
  *   re-runs per turn, so one host session can emit several
  *   preference-follow-through records; each is one analysis run's assertions,
  *   and the rate is reported per analysis run, not deduped per session.
@@ -118,7 +117,7 @@ export function splitFollowThrough(
  * confirmed/corrected split for its run (computed at Stop by splitFollowThrough),
  * so this is a pure sum — the join logic lives in one place. The exposure unit
  * is the analysis run (one host session can contribute several records across
- * re-analysis turns), matching preference-correction/promotion in effectiveness.ts.
+ * re-analysis turns), matching the preference-correction telemetry.
  */
 export function computeFollowThroughSummary(
   entries: readonly UsageLogEntry[]

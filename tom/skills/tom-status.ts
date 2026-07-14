@@ -11,7 +11,6 @@ import { readTomConfig } from '../config.js'
 import { readUsageLog } from '../routing.js'
 import { computeTelemetrySummary, formatTelemetry } from '../telemetry.js'
 import type { TelemetrySummary } from '../telemetry.js'
-import { globalMemoryFilePath, findProjectMemoryFile } from '../promotion.js'
 import type { UserModel, PreferenceCluster } from '../schemas.js'
 
 // --- Types ---
@@ -20,11 +19,6 @@ export interface StorageStats {
   readonly tier1SessionCount: number
   readonly tier2ModelCount: number
   readonly tier3SizeBytes: number
-}
-
-export interface PromotedPreferenceEntry {
-  readonly preference: PreferenceCluster
-  readonly targetFile: string
 }
 
 export interface StatusOutput {
@@ -41,7 +35,6 @@ export interface StatusOutput {
   }
   readonly storage: StorageStats
   readonly topPreferences: readonly PreferenceCluster[]
-  readonly promotedPreferences: readonly PromotedPreferenceEntry[]
   readonly interactionStyleSummary: string
   readonly codingStyleSummary: string
   readonly telemetry?: TelemetrySummary
@@ -110,26 +103,10 @@ function getTopPreferences(
   model: UserModel,
   limit: number = 10
 ): readonly PreferenceCluster[] {
-  // Promoted preferences are listed in their own section.
-  const sorted = model.preferencesClusters
-    .filter((p) => p.promoted !== true)
-    .sort((a, b) => b.confidence - a.confidence)
+  const sorted = [...model.preferencesClusters].sort(
+    (a, b) => b.confidence - a.confidence
+  )
   return sorted.slice(0, limit)
-}
-
-function getPromotedPreferences(
-  model: UserModel
-): readonly PromotedPreferenceEntry[] {
-  const projectFile = findProjectMemoryFile(process.cwd())
-  return model.preferencesClusters
-    .filter((p) => p.promoted === true)
-    .map((preference) => ({
-      preference,
-      targetFile:
-        preference.category === 'codingPreferences'
-          ? projectFile ?? '(project CLAUDE.md not found)'
-          : globalMemoryFilePath(),
-    }))
 }
 
 // --- Main ---
@@ -156,7 +133,6 @@ export function getStatus(): StatusOutput {
       },
       storage,
       topPreferences: [],
-      promotedPreferences: [],
       interactionStyleSummary: '',
       codingStyleSummary: '',
       telemetry,
@@ -177,7 +153,6 @@ export function getStatus(): StatusOutput {
     },
     storage,
     topPreferences: getTopPreferences(userModel),
-    promotedPreferences: getPromotedPreferences(userModel),
     interactionStyleSummary: userModel.interactionStyleSummary,
     codingStyleSummary: userModel.codingStyleSummary,
     telemetry,
@@ -239,19 +214,6 @@ export function formatStatus(status: StatusOutput): string {
       const confidence = (pref.confidence * 100).toFixed(0)
       lines.push(
         `- [${pref.category}] ${pref.key}: ${pref.value} (${confidence}% confidence, ${pref.sessionCount} sessions)`
-      )
-    }
-    lines.push('')
-  }
-
-  // Promoted Preferences (live in CLAUDE.md marker blocks, not injected)
-  if (status.promotedPreferences.length > 0) {
-    lines.push('## Promoted Preferences (in CLAUDE.md)')
-    for (const entry of status.promotedPreferences) {
-      const pref = entry.preference
-      const confidence = (pref.confidence * 100).toFixed(0)
-      lines.push(
-        `- [${pref.category}] ${pref.key}: ${pref.value} (${confidence}% confidence, ${pref.sessionCount} sessions) → ${entry.targetFile}`
       )
     }
     lines.push('')

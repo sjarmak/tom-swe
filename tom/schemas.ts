@@ -142,25 +142,19 @@ const PreferenceClusterSchema = z.strictObject({
   confidence: z.number().min(0).max(1),
   lastUpdated: z.string().datetime(),
   sessionCount: z.number().int().min(0),
-  // True when the preference has been promoted into a durable CLAUDE.md
-  // marker block and retired from per-session injection. Optional for
-  // backward compatibility with user models written before promotion existed.
-  promoted: z.boolean().optional(),
   // Provenance: a preference born from a user correction is non-obvious by
-  // construction (the agent got it wrong first) and gets promotion priority
-  // plus negative "avoid X" rendering. Optional; absent means observation.
+  // construction (the agent got it wrong first) and gets priority plus
+  // negative "avoid X" rendering. Optional; absent means observation.
   learnedVia: z.enum(['correction', 'observation']).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
   correctedFrom: z.string().optional(),
-  // Persisted derivability-gate rejection: the exact value the gate judged
-  // statically derivable, and when. While the value is unchanged and the
-  // verdict fresh, the candidate skips re-judgment (each judgment is an
-  // agentic LLM spawn; one candidate was re-judged 64 times before this).
-  // Carried across rebuilds like `promoted`. Optional for older models.
-  gateRejectedValue: z.string().optional(),
-  gateRejectedAt: z.string().datetime().optional(),
 })
+
+// NOTE: the retired `promoted`/`gateRejectedValue`/`gateRejectedAt` fields
+// (set only by the removed CLAUDE.md promotion pipeline, tom-swe-x1m.2) are
+// stripped from stored models at the read boundary before this strictObject
+// parses them — see stripDeprecatedClusterFields in memory-io.ts.
 
 export const UserModelSchema = z.strictObject({
   preferencesClusters: z.array(PreferenceClusterSchema),

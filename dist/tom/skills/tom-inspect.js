@@ -13907,24 +13907,13 @@ var PreferenceClusterSchema = external_exports.strictObject({
   confidence: external_exports.number().min(0).max(1),
   lastUpdated: external_exports.string().datetime(),
   sessionCount: external_exports.number().int().min(0),
-  // True when the preference has been promoted into a durable CLAUDE.md
-  // marker block and retired from per-session injection. Optional for
-  // backward compatibility with user models written before promotion existed.
-  promoted: external_exports.boolean().optional(),
   // Provenance: a preference born from a user correction is non-obvious by
-  // construction (the agent got it wrong first) and gets promotion priority
-  // plus negative "avoid X" rendering. Optional; absent means observation.
+  // construction (the agent got it wrong first) and gets priority plus
+  // negative "avoid X" rendering. Optional; absent means observation.
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional(),
-  // Persisted derivability-gate rejection: the exact value the gate judged
-  // statically derivable, and when. While the value is unchanged and the
-  // verdict fresh, the candidate skips re-judgment (each judgment is an
-  // agentic LLM spawn; one candidate was re-judged 64 times before this).
-  // Carried across rebuilds like `promoted`. Optional for older models.
-  gateRejectedValue: external_exports.string().optional(),
-  gateRejectedAt: external_exports.string().datetime().optional()
+  correctedFrom: external_exports.string().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13987,6 +13976,45 @@ function withoutDeprecatedClusters(model) {
     )
   };
 }
+function stripClusterFields(cluster) {
+  if (cluster === null || typeof cluster !== "object" || Array.isArray(cluster)) {
+    return cluster;
+  }
+  const {
+    promoted: _promoted,
+    gateRejectedValue: _gateRejectedValue,
+    gateRejectedAt: _gateRejectedAt,
+    ...rest
+  } = cluster;
+  return rest;
+}
+function stripDeprecatedClusterFields(raw) {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const model = raw;
+  const next = { ...model };
+  if (Array.isArray(model["preferencesClusters"])) {
+    next["preferencesClusters"] = model["preferencesClusters"].map(stripClusterFields);
+  }
+  const overrides = model["projectOverrides"];
+  if (overrides !== null && typeof overrides === "object" && !Array.isArray(overrides)) {
+    next["projectOverrides"] = Object.fromEntries(
+      Object.entries(overrides).map(([key, value]) => [
+        key,
+        Array.isArray(value) ? value.map(stripClusterFields) : value
+      ])
+    );
+  }
+  return next;
+}
+function parseStoredUserModel(raw) {
+  if (raw === null) {
+    return null;
+  }
+  const result = UserModelSchema.safeParse(stripDeprecatedClusterFields(raw));
+  return result.success ? withoutDeprecatedClusters(result.data) : null;
+}
 function mergePreferences(globalPrefs, projectPrefs) {
   const merged = /* @__PURE__ */ new Map();
   for (const pref of globalPrefs) {
@@ -13999,13 +14027,9 @@ function mergePreferences(globalPrefs, projectPrefs) {
 }
 function readUserModel(scope = "merged") {
   if (scope === "global" || scope === "merged") {
-    const globalRaw = readJsonFile(globalUserModelPath());
-    const globalResult = globalRaw !== null ? UserModelSchema.safeParse(globalRaw) : null;
-    const globalModel = globalResult?.success ? withoutDeprecatedClusters(globalResult.data) : null;
+    const globalModel = parseStoredUserModel(readJsonFile(globalUserModelPath()));
     if (scope === "global") return globalModel;
-    const projectRaw2 = readJsonFile(projectUserModelPath());
-    const projectResult = projectRaw2 !== null ? UserModelSchema.safeParse(projectRaw2) : null;
-    const projectModel = projectResult?.success ? withoutDeprecatedClusters(projectResult.data) : null;
+    const projectModel = parseStoredUserModel(readJsonFile(projectUserModelPath()));
     if (globalModel === null) return projectModel;
     if (projectModel === null) return globalModel;
     return {
@@ -14021,10 +14045,7 @@ function readUserModel(scope = "merged") {
       }
     };
   }
-  const projectRaw = readJsonFile(projectUserModelPath());
-  if (projectRaw === null) return null;
-  const result = UserModelSchema.safeParse(projectRaw);
-  return result.success ? withoutDeprecatedClusters(result.data) : null;
+  return parseStoredUserModel(readJsonFile(projectUserModelPath()));
 }
 
 // tom/config.ts

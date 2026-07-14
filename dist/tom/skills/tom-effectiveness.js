@@ -13908,24 +13908,13 @@ var PreferenceClusterSchema = external_exports.strictObject({
   confidence: external_exports.number().min(0).max(1),
   lastUpdated: external_exports.string().datetime(),
   sessionCount: external_exports.number().int().min(0),
-  // True when the preference has been promoted into a durable CLAUDE.md
-  // marker block and retired from per-session injection. Optional for
-  // backward compatibility with user models written before promotion existed.
-  promoted: external_exports.boolean().optional(),
   // Provenance: a preference born from a user correction is non-obvious by
-  // construction (the agent got it wrong first) and gets promotion priority
-  // plus negative "avoid X" rendering. Optional; absent means observation.
+  // construction (the agent got it wrong first) and gets priority plus
+  // negative "avoid X" rendering. Optional; absent means observation.
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional(),
-  // Persisted derivability-gate rejection: the exact value the gate judged
-  // statically derivable, and when. While the value is unchanged and the
-  // verdict fresh, the candidate skips re-judgment (each judgment is an
-  // agentic LLM spawn; one candidate was re-judged 64 times before this).
-  // Carried across rebuilds like `promoted`. Optional for older models.
-  gateRejectedValue: external_exports.string().optional(),
-  gateRejectedAt: external_exports.string().datetime().optional()
+  correctedFrom: external_exports.string().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -14076,189 +14065,8 @@ function readUsageLog(opts) {
   return { entries, invalidLines };
 }
 
-// tom/effectiveness.ts
-var THIN_AFTER_WINDOW = 15;
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
-function ratePer100(count, denominator) {
-  return denominator > 0 ? round2(count / denominator * 100) : 0;
-}
-function isoWeekLabel(timestamp) {
-  const date5 = new Date(timestamp);
-  const target = new Date(
-    Date.UTC(date5.getUTCFullYear(), date5.getUTCMonth(), date5.getUTCDate())
-  );
-  const dayNumber = (target.getUTCDay() + 6) % 7;
-  target.setUTCDate(target.getUTCDate() - dayNumber + 3);
-  const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
-  const firstDayNumber = (firstThursday.getUTCDay() + 6) % 7;
-  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNumber + 3);
-  const week = 1 + Math.round(
-    (target.getTime() - firstThursday.getTime()) / (7 * 24 * 60 * 60 * 1e3)
-  );
-  return `${target.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
-}
-function computeEffectivenessSummary(entries) {
-  const analysisTimestamps = [];
-  const firstPromotedAt = /* @__PURE__ */ new Map();
-  const promotionEventCount = /* @__PURE__ */ new Map();
-  const correctionsByKey = /* @__PURE__ */ new Map();
-  for (const entry of entries) {
-    const ts = entry.timestamp;
-    if (typeof ts !== "string" || ts.length === 0) continue;
-    switch (entry.operation) {
-      case "session-analysis":
-      case "session-analysis-fallback":
-        analysisTimestamps.push(ts);
-        break;
-      case "preference-promotion":
-        for (const key of usageDetailStringArray(entry, "promoted")) {
-          promotionEventCount.set(key, (promotionEventCount.get(key) ?? 0) + 1);
-          const prior = firstPromotedAt.get(key);
-          if (prior === void 0 || ts < prior) firstPromotedAt.set(key, ts);
-        }
-        break;
-      case "preference-correction":
-        for (const key of usageDetailStringArray(entry, "corrections")) {
-          const list = correctionsByKey.get(key) ?? [];
-          list.push(ts);
-          correctionsByKey.set(key, list);
-        }
-        break;
-      default:
-        break;
-    }
-  }
-  analysisTimestamps.sort();
-  const totalAnalyses = analysisTimestamps.length;
-  const analysesBefore = (cutoff) => {
-    let lo = 0;
-    let hi = analysisTimestamps.length;
-    while (lo < hi) {
-      const mid = lo + hi >> 1;
-      if ((analysisTimestamps[mid] ?? "") < cutoff) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo;
-  };
-  const perKey = [];
-  let pooledCorrectionsBefore = 0;
-  let pooledCorrectionsAfter = 0;
-  for (const [key, firstAt] of firstPromotedAt) {
-    const corrections = correctionsByKey.get(key);
-    if (corrections === void 0 || corrections.length === 0) continue;
-    const before = corrections.filter((t) => t < firstAt).length;
-    const after = corrections.length - before;
-    const nBefore = analysesBefore(firstAt);
-    const nAfter = totalAnalyses - nBefore;
-    pooledCorrectionsBefore += before;
-    pooledCorrectionsAfter += after;
-    perKey.push({
-      key,
-      firstPromotedAt: firstAt,
-      promotionEvents: promotionEventCount.get(key) ?? 0,
-      correctionsBefore: before,
-      correctionsAfter: after,
-      analysesBefore: nBefore,
-      analysesAfter: nAfter,
-      rateBefore: ratePer100(before, nBefore),
-      rateAfter: ratePer100(after, nAfter),
-      thinAfterWindow: nAfter < THIN_AFTER_WINDOW
-    });
-  }
-  perKey.sort((a, b) => {
-    const totalA = a.correctionsBefore + a.correctionsAfter;
-    const totalB = b.correctionsBefore + b.correctionsAfter;
-    if (totalA !== totalB) return totalB - totalA;
-    return b.firstPromotedAt.localeCompare(a.firstPromotedAt);
-  });
-  let totalCorrections = 0;
-  let correctionsOnNeverPromoted = 0;
-  for (const [key, list] of correctionsByKey) {
-    totalCorrections += list.length;
-    if (!firstPromotedAt.has(key)) correctionsOnNeverPromoted += list.length;
-  }
-  const weekCorrections = /* @__PURE__ */ new Map();
-  const weekAnalyses = /* @__PURE__ */ new Map();
-  for (const entry of entries) {
-    const ts = entry.timestamp;
-    if (typeof ts !== "string" || ts.length === 0) continue;
-    const week = isoWeekLabel(ts);
-    if (entry.operation === "preference-correction") {
-      weekCorrections.set(
-        week,
-        (weekCorrections.get(week) ?? 0) + usageDetailStringArray(entry, "corrections").length
-      );
-    } else if (entry.operation === "session-analysis" || entry.operation === "session-analysis-fallback") {
-      weekAnalyses.set(week, (weekAnalyses.get(week) ?? 0) + 1);
-    }
-  }
-  const weekly = [
-    .../* @__PURE__ */ new Set([...weekCorrections.keys(), ...weekAnalyses.keys()])
-  ].sort().map((week) => {
-    const corrections = weekCorrections.get(week) ?? 0;
-    const analyses = weekAnalyses.get(week) ?? 0;
-    return { week, corrections, analyses, rate: ratePer100(corrections, analyses) };
-  });
-  return {
-    hasData: totalAnalyses > 0 || totalCorrections > 0,
-    totalAnalyses,
-    totalCorrections,
-    correctedKeys: correctionsByKey.size,
-    promotedKeys: firstPromotedAt.size,
-    perKey,
-    pooledCorrectionsBefore,
-    pooledCorrectionsAfter,
-    correctionsOnNeverPromoted,
-    weekly
-  };
-}
-function formatEffectiveness(summary) {
-  if (!summary.hasData) return [];
-  const lines = [];
-  lines.push("# ToM Promotion Effectiveness");
-  lines.push("");
-  lines.push(
-    `Exposure unit: analysis run (${summary.totalAnalyses} total). Rate = corrections per 100 analyses. Correction rate measures memory stability, not task usefulness.`
-  );
-  lines.push("");
-  const promotedShare = summary.totalCorrections > 0 ? Math.round(
-    summary.correctionsOnNeverPromoted / summary.totalCorrections * 100
-  ) : 0;
-  lines.push("## Headline");
-  lines.push(
-    `- ${summary.correctionsOnNeverPromoted}/${summary.totalCorrections} corrections (${promotedShare}%) land on keys that were NEVER promoted \u2014 the promotion gate filters unstable inferences out before they reach CLAUDE.md.`
-  );
-  lines.push(
-    `- Pooled across ${summary.perKey.length} promoted+corrected keys: ${summary.pooledCorrectionsBefore} corrections before promotion, ${summary.pooledCorrectionsAfter} after.`
-  );
-  lines.push("");
-  if (summary.perKey.length > 0) {
-    lines.push("## Per-key (corrections per 100 analyses, before \u2192 after promotion)");
-    for (const k of summary.perKey) {
-      const direction = k.rateAfter < k.rateBefore ? "improved" : k.rateAfter > k.rateBefore ? "worse" : "flat";
-      const thin = k.thinAfterWindow ? " [thin after-window]" : "";
-      lines.push(
-        `- ${k.key} (promoted ${k.firstPromotedAt.slice(0, 10)}): ${k.correctionsBefore}\u2192${k.correctionsAfter} corrections, ${k.rateBefore}\u2192${k.rateAfter}/100 \u2014 ${direction}${thin}`
-      );
-    }
-    lines.push("");
-  }
-  if (summary.weekly.length > 0) {
-    lines.push("## Weekly correction rate (per 100 analyses)");
-    for (const w of summary.weekly) {
-      lines.push(
-        `- ${w.week}: ${w.corrections} corrections / ${w.analyses} analyses = ${w.rate}`
-      );
-    }
-    lines.push("");
-  }
-  return lines;
-}
-
 // tom/follow-through.ts
-function round22(n) {
+function round2(n) {
   return Math.round(n * 100) / 100;
 }
 function computeFollowThroughSummary(entries) {
@@ -14279,7 +14087,7 @@ function computeFollowThroughSummary(entries) {
     assertedKeys,
     confirmedKeys,
     correctedKeys,
-    followThroughRate: assertedKeys > 0 ? round22(confirmedKeys / assertedKeys * 100) : 0
+    followThroughRate: assertedKeys > 0 ? round2(confirmedKeys / assertedKeys * 100) : 0
   };
 }
 function formatFollowThrough(summary) {
@@ -14296,11 +14104,8 @@ function formatFollowThrough(summary) {
 // tom/skills/tom-effectiveness.ts
 function main() {
   const usage = readUsageLog();
-  const lines = [
-    ...formatEffectiveness(computeEffectivenessSummary(usage.entries)),
-    ...formatFollowThrough(computeFollowThroughSummary(usage.entries))
-  ];
-  const output = lines.length > 0 ? lines.join("\n") : "No promotion, correction, or follow-through telemetry recorded yet. ToM populates this after it has analyzed, injected, and promoted preferences across several sessions.";
+  const lines = formatFollowThrough(computeFollowThroughSummary(usage.entries));
+  const output = lines.length > 0 ? lines.join("\n") : "No follow-through telemetry recorded yet. ToM populates this after it has injected preferences and analyzed corrections across several sessions.";
   process.stdout.write(output);
 }
 if (require.main === module) {

@@ -35,8 +35,8 @@ __export(tom_status_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(tom_status_exports);
-var fs6 = __toESM(require("node:fs"));
-var path6 = __toESM(require("node:path"));
+var fs5 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 
 // tom/memory-io.ts
 var fs2 = __toESM(require("node:fs"));
@@ -815,10 +815,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path7) {
-  if (!path7)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path7.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1201,11 +1201,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path7, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path7);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1388,7 +1388,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path7 = []) => {
+  const processError = (error49, path6 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1398,7 +1398,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path7, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1430,8 +1430,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path7) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13408,13 +13408,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path7 = ref.slice(1).split("/").filter(Boolean);
-  if (path7.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path7[0] === defsKey) {
-    const key = path7[1];
+  if (path6[0] === defsKey) {
+    const key = path6[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13907,24 +13907,13 @@ var PreferenceClusterSchema = external_exports.strictObject({
   confidence: external_exports.number().min(0).max(1),
   lastUpdated: external_exports.string().datetime(),
   sessionCount: external_exports.number().int().min(0),
-  // True when the preference has been promoted into a durable CLAUDE.md
-  // marker block and retired from per-session injection. Optional for
-  // backward compatibility with user models written before promotion existed.
-  promoted: external_exports.boolean().optional(),
   // Provenance: a preference born from a user correction is non-obvious by
-  // construction (the agent got it wrong first) and gets promotion priority
-  // plus negative "avoid X" rendering. Optional; absent means observation.
+  // construction (the agent got it wrong first) and gets priority plus
+  // negative "avoid X" rendering. Optional; absent means observation.
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional(),
-  // Persisted derivability-gate rejection: the exact value the gate judged
-  // statically derivable, and when. While the value is unchanged and the
-  // verdict fresh, the candidate skips re-judgment (each judgment is an
-  // agentic LLM spawn; one candidate was re-judged 64 times before this).
-  // Carried across rebuilds like `promoted`. Optional for older models.
-  gateRejectedValue: external_exports.string().optional(),
-  gateRejectedAt: external_exports.string().datetime().optional()
+  correctedFrom: external_exports.string().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),
@@ -13974,6 +13963,45 @@ function withoutDeprecatedClusters(model) {
     )
   };
 }
+function stripClusterFields(cluster) {
+  if (cluster === null || typeof cluster !== "object" || Array.isArray(cluster)) {
+    return cluster;
+  }
+  const {
+    promoted: _promoted,
+    gateRejectedValue: _gateRejectedValue,
+    gateRejectedAt: _gateRejectedAt,
+    ...rest
+  } = cluster;
+  return rest;
+}
+function stripDeprecatedClusterFields(raw) {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const model = raw;
+  const next = { ...model };
+  if (Array.isArray(model["preferencesClusters"])) {
+    next["preferencesClusters"] = model["preferencesClusters"].map(stripClusterFields);
+  }
+  const overrides = model["projectOverrides"];
+  if (overrides !== null && typeof overrides === "object" && !Array.isArray(overrides)) {
+    next["projectOverrides"] = Object.fromEntries(
+      Object.entries(overrides).map(([key, value]) => [
+        key,
+        Array.isArray(value) ? value.map(stripClusterFields) : value
+      ])
+    );
+  }
+  return next;
+}
+function parseStoredUserModel(raw) {
+  if (raw === null) {
+    return null;
+  }
+  const result = UserModelSchema.safeParse(stripDeprecatedClusterFields(raw));
+  return result.success ? withoutDeprecatedClusters(result.data) : null;
+}
 function mergePreferences(globalPrefs, projectPrefs) {
   const merged = /* @__PURE__ */ new Map();
   for (const pref of globalPrefs) {
@@ -13986,13 +14014,9 @@ function mergePreferences(globalPrefs, projectPrefs) {
 }
 function readUserModel(scope = "merged") {
   if (scope === "global" || scope === "merged") {
-    const globalRaw = readJsonFile(globalUserModelPath());
-    const globalResult = globalRaw !== null ? UserModelSchema.safeParse(globalRaw) : null;
-    const globalModel = globalResult?.success ? withoutDeprecatedClusters(globalResult.data) : null;
+    const globalModel = parseStoredUserModel(readJsonFile(globalUserModelPath()));
     if (scope === "global") return globalModel;
-    const projectRaw2 = readJsonFile(projectUserModelPath());
-    const projectResult = projectRaw2 !== null ? UserModelSchema.safeParse(projectRaw2) : null;
-    const projectModel = projectResult?.success ? withoutDeprecatedClusters(projectResult.data) : null;
+    const projectModel = parseStoredUserModel(readJsonFile(projectUserModelPath()));
     if (globalModel === null) return projectModel;
     if (projectModel === null) return globalModel;
     return {
@@ -14008,10 +14032,7 @@ function readUserModel(scope = "merged") {
       }
     };
   }
-  const projectRaw = readJsonFile(projectUserModelPath());
-  if (projectRaw === null) return null;
-  const result = UserModelSchema.safeParse(projectRaw);
-  return result.success ? withoutDeprecatedClusters(result.data) : null;
+  return parseStoredUserModel(readJsonFile(projectUserModelPath()));
 }
 
 // tom/config.ts
@@ -14269,9 +14290,6 @@ function computeTelemetrySummary(entries, invalidLines = 0, now = /* @__PURE__ *
       fallbackRuns: fallback.filter((e) => e.timestamp >= cutoff).length
     };
   };
-  const gates = byOp("derivability-gate");
-  const gateOutcome = countByDetailString(gates, "outcome");
-  const gateTokens = gates.reduce((sum, e) => sum + e.tokenCount, 0);
   const echoEntries = byOp("analysis-vocabulary-echo");
   const echoSum = (key) => echoEntries.reduce((sum, e) => sum + (detailNumber(e, key) ?? 0), 0);
   const echoReturnedTotal = echoSum("returned");
@@ -14285,7 +14303,6 @@ function computeTelemetrySummary(entries, invalidLines = 0, now = /* @__PURE__ *
   const injections = byOp("session-start-injection");
   const injectionChars = injections.map((e) => detailNumber(e, "chars")).filter((c) => c !== null);
   const corrections = byOp("preference-correction");
-  const promotions = byOp("preference-promotion");
   const usageBySession = /* @__PURE__ */ new Map();
   for (const e of byOp("session-usage")) {
     usageBySession.set(e.sessionId ?? "", e);
@@ -14293,7 +14310,7 @@ function computeTelemetrySummary(entries, invalidLines = 0, now = /* @__PURE__ *
   const usageEntries = [...usageBySession.values()];
   const sumDetail = (key) => usageEntries.reduce((sum, e) => sum + (detailNumber(e, key) ?? 0), 0);
   const hostInOut = sumDetail("inputTokens") + sumDetail("outputTokens");
-  const tomTokens = llm.reduce((sum, e) => sum + e.tokenCount, 0) + gateTokens;
+  const tomTokens = llm.reduce((sum, e) => sum + e.tokenCount, 0);
   return {
     totalEntries: entries.length,
     invalidLines,
@@ -14316,12 +14333,6 @@ function computeTelemetrySummary(entries, invalidLines = 0, now = /* @__PURE__ *
         keyValueEchoRate: echoRate(echoedKeyValueTotal),
         keyEchoRate: echoRate(echoedKeyTotal)
       }
-    },
-    gate: {
-      count: gates.length,
-      okCount: gateOutcome["ok"] ?? 0,
-      unavailableCount: gateOutcome["unavailable"] ?? 0,
-      totalTokens: gateTokens
     },
     promptHook: {
       count: promptHook.length,
@@ -14353,12 +14364,6 @@ function computeTelemetrySummary(entries, invalidLines = 0, now = /* @__PURE__ *
       (sum, e) => sum + detailArrayLength(e, "corrections"),
       0
     ),
-    promotionEvents: promotions.length,
-    promotionKeys: promotions.reduce(
-      (sum, e) => sum + detailArrayLength(e, "promoted"),
-      0
-    ),
-    promotionErrors: byOp("promotion-error").length,
     analysisErrors: byOp("session-analysis-error").length
   };
 }
@@ -14397,12 +14402,6 @@ function formatTelemetry(summary) {
       );
     }
   }
-  const g = summary.gate;
-  if (g.count > 0) {
-    lines.push(
-      `- Derivability gate: ${g.count} spawns (ok\xD7${g.okCount}, unavailable\xD7${g.unavailableCount}); tokens: ${g.totalTokens}`
-    );
-  }
   if (summary.promptHook.count > 0) {
     lines.push(
       `- Prompt hook: ${summary.promptHook.count} prompts, p50 ${summary.promptHook.p50DurationMs}ms, max ${summary.promptHook.maxDurationMs}ms`
@@ -14436,43 +14435,17 @@ function formatTelemetry(summary) {
       `- Corrections: ${summary.correctionKeys} across ${summary.correctionBatches} sessions`
     );
   }
-  if (summary.promotionEvents > 0) {
-    lines.push(
-      `- Promotions: ${summary.promotionKeys} across ${summary.promotionEvents} events`
-    );
-  }
-  if (summary.promotionErrors > 0 || summary.analysisErrors > 0) {
-    lines.push(
-      `- Errors: ${summary.analysisErrors} analysis, ${summary.promotionErrors} promotion`
-    );
+  if (summary.analysisErrors > 0) {
+    lines.push(`- Errors: ${summary.analysisErrors} analysis`);
   }
   lines.push("");
   return lines;
 }
 
-// tom/promotion.ts
-var fs5 = __toESM(require("node:fs"));
-var path5 = __toESM(require("node:path"));
-var os4 = __toESM(require("node:os"));
-function globalMemoryFilePath() {
-  return path5.join(os4.homedir(), ".claude", "CLAUDE.md");
-}
-function findProjectMemoryFile(cwd) {
-  const rootCandidate = path5.join(cwd, "CLAUDE.md");
-  if (fs5.existsSync(rootCandidate)) {
-    return rootCandidate;
-  }
-  const dotClaudeCandidate = path5.join(cwd, ".claude", "CLAUDE.md");
-  if (fs5.existsSync(dotClaudeCandidate)) {
-    return dotClaudeCandidate;
-  }
-  return null;
-}
-
 // tom/skills/tom-status.ts
 function countJsonFiles(dirPath) {
   try {
-    const entries = fs6.readdirSync(dirPath);
+    const entries = fs5.readdirSync(dirPath);
     return entries.filter((e) => e.endsWith(".json")).length;
   } catch {
     return 0;
@@ -14481,7 +14454,7 @@ function countJsonFiles(dirPath) {
 function countSessions(dirPath) {
   try {
     const ids = new Set(
-      fs6.readdirSync(dirPath).filter((e) => e.endsWith(".json") || e.endsWith(".jsonl")).map((e) => e.replace(/\.jsonl?$/, ""))
+      fs5.readdirSync(dirPath).filter((e) => e.endsWith(".json") || e.endsWith(".jsonl")).map((e) => e.replace(/\.jsonl?$/, ""))
     );
     return ids.size;
   } catch {
@@ -14490,19 +14463,19 @@ function countSessions(dirPath) {
 }
 function getFileSize(filePath) {
   try {
-    const stat = fs6.statSync(filePath);
+    const stat = fs5.statSync(filePath);
     return stat.size;
   } catch {
     return 0;
   }
 }
 function getStorageStats() {
-  const globalSessions = path6.join(globalTomDir(), "sessions");
-  const projectSessions = path6.join(projectTomDir(), "sessions");
-  const globalModels = path6.join(globalTomDir(), "session-models");
-  const projectModels = path6.join(projectTomDir(), "session-models");
-  const globalUserModelFile = path6.join(globalTomDir(), "user-model.json");
-  const projectUserModelFile = path6.join(projectTomDir(), "user-model.json");
+  const globalSessions = path5.join(globalTomDir(), "sessions");
+  const projectSessions = path5.join(projectTomDir(), "sessions");
+  const globalModels = path5.join(globalTomDir(), "session-models");
+  const projectModels = path5.join(projectTomDir(), "session-models");
+  const globalUserModelFile = path5.join(globalTomDir(), "user-model.json");
+  const projectUserModelFile = path5.join(projectTomDir(), "user-model.json");
   return {
     tier1SessionCount: countSessions(globalSessions) + countSessions(projectSessions),
     tier2ModelCount: countJsonFiles(globalModels) + countJsonFiles(projectModels),
@@ -14510,15 +14483,10 @@ function getStorageStats() {
   };
 }
 function getTopPreferences(model, limit = 10) {
-  const sorted = model.preferencesClusters.filter((p) => p.promoted !== true).sort((a, b) => b.confidence - a.confidence);
+  const sorted = [...model.preferencesClusters].sort(
+    (a, b) => b.confidence - a.confidence
+  );
   return sorted.slice(0, limit);
-}
-function getPromotedPreferences(model) {
-  const projectFile = findProjectMemoryFile(process.cwd());
-  return model.preferencesClusters.filter((p) => p.promoted === true).map((preference) => ({
-    preference,
-    targetFile: preference.category === "codingPreferences" ? projectFile ?? "(project CLAUDE.md not found)" : globalMemoryFilePath()
-  }));
 }
 function getStatus() {
   const config2 = readTomConfig();
@@ -14541,7 +14509,6 @@ function getStatus() {
       },
       storage,
       topPreferences: [],
-      promotedPreferences: [],
       interactionStyleSummary: "",
       codingStyleSummary: "",
       telemetry
@@ -14561,7 +14528,6 @@ function getStatus() {
     },
     storage,
     topPreferences: getTopPreferences(userModel),
-    promotedPreferences: getPromotedPreferences(userModel),
     interactionStyleSummary: userModel.interactionStyleSummary,
     codingStyleSummary: userModel.codingStyleSummary,
     telemetry
@@ -14609,17 +14575,6 @@ function formatStatus(status) {
       const confidence = (pref.confidence * 100).toFixed(0);
       lines.push(
         `- [${pref.category}] ${pref.key}: ${pref.value} (${confidence}% confidence, ${pref.sessionCount} sessions)`
-      );
-    }
-    lines.push("");
-  }
-  if (status.promotedPreferences.length > 0) {
-    lines.push("## Promoted Preferences (in CLAUDE.md)");
-    for (const entry of status.promotedPreferences) {
-      const pref = entry.preference;
-      const confidence = (pref.confidence * 100).toFixed(0);
-      lines.push(
-        `- [${pref.category}] ${pref.key}: ${pref.value} (${confidence}% confidence, ${pref.sessionCount} sessions) \u2192 ${entry.targetFile}`
       );
     }
     lines.push("");

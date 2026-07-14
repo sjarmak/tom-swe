@@ -251,6 +251,66 @@ function withoutDeprecatedClusters(model: UserModel): UserModel {
   }
 }
 
+/** Strips one stored cluster's retired promotion fields, returning a new object. */
+function stripClusterFields(cluster: unknown): unknown {
+  if (cluster === null || typeof cluster !== 'object' || Array.isArray(cluster)) {
+    return cluster
+  }
+  const {
+    promoted: _promoted,
+    gateRejectedValue: _gateRejectedValue,
+    gateRejectedAt: _gateRejectedAt,
+    ...rest
+  } = cluster as Record<string, unknown>
+  return rest
+}
+
+/**
+ * Removes the retired promotion fields (promoted/gateRejectedValue/
+ * gateRejectedAt, set only by the deleted CLAUDE.md promotion pipeline —
+ * tom-swe-x1m.2/.3) from every stored cluster BEFORE UserModelSchema parses.
+ *
+ * The cluster schema is a strictObject, so a stored user-model.json still
+ * carrying these keys would fail safeParse and readUserModel would return
+ * null — dropping the whole model, which permanently resets the interaction/
+ * coding summaries (rebuild carries them only from the previous model). This
+ * runs on untrusted JSON, so every level is shape-guarded and a malformed file
+ * falls through unchanged to safeParse, which rejects it safely.
+ */
+function stripDeprecatedClusterFields(raw: unknown): unknown {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return raw
+  }
+  const model = raw as Record<string, unknown>
+  const next: Record<string, unknown> = { ...model }
+  if (Array.isArray(model['preferencesClusters'])) {
+    next['preferencesClusters'] = model['preferencesClusters'].map(stripClusterFields)
+  }
+  const overrides = model['projectOverrides']
+  if (overrides !== null && typeof overrides === 'object' && !Array.isArray(overrides)) {
+    next['projectOverrides'] = Object.fromEntries(
+      Object.entries(overrides as Record<string, unknown>).map(([key, value]) => [
+        key,
+        Array.isArray(value) ? value.map(stripClusterFields) : value,
+      ])
+    )
+  }
+  return next
+}
+
+/**
+ * Parses a raw stored user model: strips retired fields, validates, then drops
+ * deprecated categories at the read boundary. Returns null on missing or
+ * invalid input. The single parse path for all read scopes.
+ */
+function parseStoredUserModel(raw: unknown): UserModel | null {
+  if (raw === null) {
+    return null
+  }
+  const result = UserModelSchema.safeParse(stripDeprecatedClusterFields(raw))
+  return result.success ? withoutDeprecatedClusters(result.data) : null
+}
+
 function mergePreferences(
   globalPrefs: readonly PreferenceCluster[],
   projectPrefs: readonly PreferenceCluster[]
@@ -272,21 +332,11 @@ export function readUserModel(
   scope: 'global' | 'project' | 'merged' = 'merged'
 ): UserModel | null {
   if (scope === 'global' || scope === 'merged') {
-    const globalRaw = readJsonFile(globalUserModelPath())
-    const globalResult =
-      globalRaw !== null ? UserModelSchema.safeParse(globalRaw) : null
-    const globalModel = globalResult?.success
-      ? withoutDeprecatedClusters(globalResult.data)
-      : null
+    const globalModel = parseStoredUserModel(readJsonFile(globalUserModelPath()))
 
     if (scope === 'global') return globalModel
 
-    const projectRaw = readJsonFile(projectUserModelPath())
-    const projectResult =
-      projectRaw !== null ? UserModelSchema.safeParse(projectRaw) : null
-    const projectModel = projectResult?.success
-      ? withoutDeprecatedClusters(projectResult.data)
-      : null
+    const projectModel = parseStoredUserModel(readJsonFile(projectUserModelPath()))
 
     if (globalModel === null) return projectModel
     if (projectModel === null) return globalModel
@@ -307,11 +357,7 @@ export function readUserModel(
     }
   }
 
-  const projectRaw = readJsonFile(projectUserModelPath())
-  if (projectRaw === null) return null
-
-  const result = UserModelSchema.safeParse(projectRaw)
-  return result.success ? withoutDeprecatedClusters(result.data) : null
+  return parseStoredUserModel(readJsonFile(projectUserModelPath()))
 }
 
 export function writeUserModel(

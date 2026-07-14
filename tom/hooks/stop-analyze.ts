@@ -22,7 +22,7 @@ import {
   writeUserModel,
   globalTomDir,
 } from '../memory-io.js'
-import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
+import { rebuildUserModelFromTier2 } from '../rebuild.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
 import { buildMemoryIndex } from '../agent/tools.js'
 import { getModelForOperation, logUsage, prefKeyForTelemetry, readUsageLog, rotateUsageLogIfNeeded } from '../routing.js'
@@ -91,9 +91,8 @@ export interface AnalysisResult {
  * never goes silent on a real preference change even when the winning category
  * is unchanged.
  *
- * Runs AFTER carryPromotedFlags (so a carried flag rides the re-filed cluster
- * onto the winner) and BEFORE the model is persisted (so the stored Tier 3 is
- * already single-category).
+ * Runs BEFORE the model is persisted (so the stored Tier 3 is already
+ * single-category).
  */
 export function reconcilePreferenceCategories(
   rebuiltModel: UserModel,
@@ -459,13 +458,10 @@ export async function analyzeCompletedSession(
   // latest analysis of a session REPLACES its contribution.
   const previousUserModel = readUserModel('global')
   const config = readTomConfig()
-  const rebuiltModel = carryPromotedFlags(
-    rebuildUserModelFromTier2(
-      'global',
-      config.preferenceDecayDays,
-      config.correctionPenalty,
-      previousUserModel
-    ),
+  const rebuiltModel = rebuildUserModelFromTier2(
+    'global',
+    config.preferenceDecayDays,
+    config.correctionPenalty,
     previousUserModel
   )
 

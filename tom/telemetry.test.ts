@@ -121,35 +121,6 @@ describe('computeTelemetrySummary', () => {
     expect(ve.keyEchoRate).toBeNull()
   })
 
-  it('counts derivability-gate spawns and includes their tokens in the ToM share', () => {
-    const summary = computeTelemetrySummary([
-      entry({
-        operation: 'derivability-gate',
-        model: 'haiku',
-        tokenCount: 700,
-        detail: { outcome: 'ok', candidates: 2, passed: 1 },
-      }),
-      entry({
-        operation: 'derivability-gate',
-        model: 'haiku',
-        tokenCount: 0,
-        detail: { outcome: 'unavailable', candidates: 1 },
-      }),
-      entry({
-        operation: 'session-usage',
-        sessionId: 's1',
-        detail: { inputTokens: 6000, outputTokens: 1000 },
-      }),
-    ])
-
-    expect(summary.gate.count).toBe(2)
-    expect(summary.gate.okCount).toBe(1)
-    expect(summary.gate.unavailableCount).toBe(1)
-    expect(summary.gate.totalTokens).toBe(700)
-    // 700 gate tokens / 7000 host in+out = 10%
-    expect(summary.sessionUsage.tomShareOfInOutPercent).toBe(10)
-  })
-
   it('computes prompt-hook latency percentiles', () => {
     const summary = computeTelemetrySummary([
       entry({ operation: 'prompt-hook', durationMs: 10 }),
@@ -178,23 +149,15 @@ describe('computeTelemetrySummary', () => {
     expect(summary.consultations.avgScore).toBe(0.5)
   })
 
-  it('counts corrections and promotions by key totals', () => {
+  it('counts correction batches and key totals', () => {
     const summary = computeTelemetrySummary([
       entry({
         operation: 'preference-correction',
         detail: { corrections: ['a:b', 'c:d'], penalty: 0.5 },
       }),
-      entry({
-        operation: 'preference-promotion',
-        detail: { promoted: ['a:b'], targets: ['/tmp/CLAUDE.md'] },
-      }),
-      entry({ operation: 'promotion-error', reason: 'boom' }),
     ])
     expect(summary.correctionBatches).toBe(1)
     expect(summary.correctionKeys).toBe(2)
-    expect(summary.promotionEvents).toBe(1)
-    expect(summary.promotionKeys).toBe(1)
-    expect(summary.promotionErrors).toBe(1)
   })
 
   it('aggregates host-session usage and computes the ToM token share', () => {

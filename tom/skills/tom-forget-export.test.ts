@@ -286,54 +286,6 @@ describe('forgetSession', () => {
     expect(fs.existsSync(indexPath)).toBe(true)
   })
 
-  it('preserves promoted flags on untouched preferences across the rebuild', () => {
-    createSettings({ enabled: true })
-    createSessionLog('sess-1', '2026-01-01T00:00:00.000Z', 'global')
-    createSessionModel('sess-1', 'global')
-    createKeyedSessionModel(
-      'sess-2',
-      [{ key: 'issue_tracking', value: 'beads' }],
-      'global'
-    )
-
-    // Previous user model: the sess-2-derived preference was promoted.
-    const tomDir = path.join(tempDir, '.claude', 'tom')
-    const previous: UserModel = {
-      preferencesClusters: [
-        {
-          category: 'codingPreferences',
-          key: 'issue_tracking',
-          value: 'beads',
-          confidence: 0.9,
-          lastUpdated: '2026-01-15T00:00:00.000Z',
-          sessionCount: 6,
-          promoted: true,
-        },
-      ],
-      interactionStyleSummary: '',
-      codingStyleSummary: '',
-      projectOverrides: {},
-    }
-    fs.writeFileSync(
-      path.join(tomDir, 'user-model.json'),
-      JSON.stringify(previous),
-      'utf-8'
-    )
-
-    const result = forgetSession('sess-1')
-    expect(result.tier3Rebuilt).toBe(true)
-
-    const rebuilt = JSON.parse(
-      fs.readFileSync(path.join(tomDir, 'user-model.json'), 'utf-8')
-    ) as UserModel
-    const cluster = rebuilt.preferencesClusters.find(
-      c => c.category === 'codingPreferences' && c.key === 'issue_tracking'
-    )
-    expect(cluster).toBeDefined()
-    expect(cluster?.value).toBe('beads')
-    expect(cluster?.promoted).toBe(true)
-  })
-
   it('removes the user-model-history snapshot for the forgotten session', () => {
     createSettings({ enabled: true })
     createSessionLog('sess-1', '2026-01-01T00:00:00.000Z', 'global')

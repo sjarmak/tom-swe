@@ -100,20 +100,16 @@ function buildSuggestionFromUserModel(
     return null
   }
 
-  // Promoted preferences already live in a CLAUDE.md marker block; a
-  // suggestion built solely from them would double-inject, so skip them.
   // Legacy generic keys ('preference'/'pattern') are collapsed noise and must
-  // never be surfaced to the agent — excluding them from promotion (where they
-  // were previously suppressed here via the promoted flag) would otherwise let
-  // them leak into this consultation suggestion instead.
-  const unpromoted = userModel.preferencesClusters.filter(
-    (p) => p.promoted !== true && !isLegacyGenericKey(p.key)
+  // never be surfaced to the agent.
+  const candidates = userModel.preferencesClusters.filter(
+    (p) => !isLegacyGenericKey(p.key)
   )
-  if (unpromoted.length === 0) {
+  if (candidates.length === 0) {
     return null
   }
 
-  const topPrefs = [...unpromoted]
+  const topPrefs = [...candidates]
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 5)
 

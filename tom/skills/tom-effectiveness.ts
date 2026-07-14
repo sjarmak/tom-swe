@@ -1,16 +1,15 @@
 /**
- * /tom-effectiveness skill — reports whether promoting a preference into
- * CLAUDE.md reduces how often it gets corrected, versus its pre-promotion life.
+ * /tom-effectiveness skill — reports whether preferences ToM ASSERTS (injected
+ * at SessionStart or surfaced by an ambiguity-consultation) survive the session
+ * un-corrected (followed through / confirmed) or get overridden (corrected).
  *
- * Reads usage.log via readUsageLog() and renders the promotion-effectiveness
- * rollup. See effectiveness.ts for the metric definition and its confounds.
+ * Reads usage.log via readUsageLog() and renders the follow-through rollup.
+ * See follow-through.ts for the metric definition and its confounds. (The old
+ * CLAUDE.md-promotion effectiveness metric was retired with the promotion
+ * feature — tom-swe-x1m.2/.3.)
  */
 
 import { readUsageLog } from '../routing.js'
-import {
-  computeEffectivenessSummary,
-  formatEffectiveness,
-} from '../effectiveness.js'
 import {
   computeFollowThroughSummary,
   formatFollowThrough,
@@ -18,16 +17,12 @@ import {
 
 export function main(): void {
   const usage = readUsageLog()
-  const lines = [
-    ...formatEffectiveness(computeEffectivenessSummary(usage.entries)),
-    ...formatFollowThrough(computeFollowThroughSummary(usage.entries)),
-  ]
+  const lines = formatFollowThrough(computeFollowThroughSummary(usage.entries))
   const output =
     lines.length > 0
       ? lines.join('\n')
-      : 'No promotion, correction, or follow-through telemetry recorded yet. ToM ' +
-        'populates this after it has analyzed, injected, and promoted ' +
-        'preferences across several sessions.'
+      : 'No follow-through telemetry recorded yet. ToM populates this after it ' +
+        'has injected preferences and analyzed corrections across several sessions.'
   process.stdout.write(output)
 }
 

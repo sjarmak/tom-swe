@@ -16,7 +16,7 @@ import {
 } from '../memory-io.js'
 import { readTomConfig } from '../config.js'
 import { sanitizeSessionId } from '../hooks/hook-input.js'
-import { rebuildUserModelFromTier2, carryPromotedFlags } from '../rebuild.js'
+import { rebuildUserModelFromTier2 } from '../rebuild.js'
 import { buildMemoryIndex } from '../agent/tools.js'
 import { atomicWriteFileSync } from '../fs-atomic.js'
 import type {
@@ -80,8 +80,7 @@ function sessionModelFileExists(sessionId: string, scope: 'global' | 'project'):
  * Forgets a specific session: deletes Tier 1 and Tier 2 files (plus the
  * session's user-model-history snapshot and any .jsonl sidecar), then
  * rebuilds Tier 3 via the canonical rebuild (chronological endedAt fold,
- * config-driven decay and correction penalty) with promoted flags carried
- * from the previous model.
+ * config-driven decay and correction penalty).
  */
 export function forgetSession(rawSessionId: string): ForgetResult {
   // The session id is CLI-supplied (via the /tom-forget slash command) and is
@@ -129,7 +128,7 @@ export function forgetSession(rawSessionId: string): ForgetResult {
         config.correctionPenalty,
         previous
       )
-      writeUserModel(carryPromotedFlags(rebuilt, previous), scope)
+      writeUserModel(rebuilt, scope)
       tier3Rebuilt = true
 
       // Rebuild BM25 index

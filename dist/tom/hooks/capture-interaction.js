@@ -14137,24 +14137,13 @@ var PreferenceClusterSchema = external_exports.strictObject({
   confidence: external_exports.number().min(0).max(1),
   lastUpdated: external_exports.string().datetime(),
   sessionCount: external_exports.number().int().min(0),
-  // True when the preference has been promoted into a durable CLAUDE.md
-  // marker block and retired from per-session injection. Optional for
-  // backward compatibility with user models written before promotion existed.
-  promoted: external_exports.boolean().optional(),
   // Provenance: a preference born from a user correction is non-obvious by
-  // construction (the agent got it wrong first) and gets promotion priority
-  // plus negative "avoid X" rendering. Optional; absent means observation.
+  // construction (the agent got it wrong first) and gets priority plus
+  // negative "avoid X" rendering. Optional; absent means observation.
   learnedVia: external_exports.enum(["correction", "observation"]).optional(),
   // The value the user corrected AWAY from, when known — the "what not to
   // do" half of a correction-derived preference.
-  correctedFrom: external_exports.string().optional(),
-  // Persisted derivability-gate rejection: the exact value the gate judged
-  // statically derivable, and when. While the value is unchanged and the
-  // verdict fresh, the candidate skips re-judgment (each judgment is an
-  // agentic LLM spawn; one candidate was re-judged 64 times before this).
-  // Carried across rebuilds like `promoted`. Optional for older models.
-  gateRejectedValue: external_exports.string().optional(),
-  gateRejectedAt: external_exports.string().datetime().optional()
+  correctedFrom: external_exports.string().optional()
 });
 var UserModelSchema = external_exports.strictObject({
   preferencesClusters: external_exports.array(PreferenceClusterSchema),

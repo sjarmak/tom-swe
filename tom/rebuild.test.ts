@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
-import { rebuildUserModelFromTier2, carryPromotedFlags } from './rebuild'
+import { rebuildUserModelFromTier2 } from './rebuild'
 import type { SessionModel, UserModel } from './schemas'
 
 let tempDir: string
@@ -138,83 +138,5 @@ describe('rebuildUserModelFromTier2', () => {
 
     const model = rebuildUserModelFromTier2('global', 30, 0.5, null)
     expect(model.preferencesClusters.find((p) => p.key === 'k')).toBeDefined()
-  })
-})
-
-describe('carryPromotedFlags', () => {
-  it('carries persisted gate rejections onto matching rebuilt clusters', () => {
-    const previous: UserModel = {
-      preferencesClusters: [
-        {
-          category: 'codingPreferences',
-          key: 'test_runner',
-          value: 'vitest',
-          confidence: 0.9,
-          lastUpdated: '2026-06-01T00:00:00.000Z',
-          sessionCount: 9,
-          gateRejectedValue: 'vitest',
-          gateRejectedAt: '2026-06-20T00:00:00.000Z',
-        },
-      ],
-      interactionStyleSummary: '',
-      codingStyleSummary: '',
-      projectOverrides: {},
-    }
-    const rebuilt: UserModel = {
-      ...previous,
-      preferencesClusters: [
-        {
-          category: 'codingPreferences',
-          key: 'test_runner',
-          value: 'vitest',
-          confidence: 0.85,
-          lastUpdated: '2026-06-25T00:00:00.000Z',
-          sessionCount: 10,
-        },
-      ],
-    }
-
-    const carried = carryPromotedFlags(rebuilt, previous)
-
-    const pref = carried.preferencesClusters[0]
-    expect(pref?.gateRejectedValue).toBe('vitest')
-    expect(pref?.gateRejectedAt).toBe('2026-06-20T00:00:00.000Z')
-  })
-
-  it('restores promoted flags onto matching rebuilt clusters', () => {
-    const previous: UserModel = {
-      preferencesClusters: [
-        {
-          category: 'codingPreferences',
-          key: 'test_runner',
-          value: 'vitest',
-          confidence: 0.9,
-          lastUpdated: '2026-06-01T00:00:00.000Z',
-          sessionCount: 9,
-          promoted: true,
-        },
-      ],
-      interactionStyleSummary: '',
-      codingStyleSummary: '',
-      projectOverrides: {},
-    }
-    const rebuilt: UserModel = {
-      ...previous,
-      preferencesClusters: [
-        { ...previous.preferencesClusters[0]!, promoted: undefined },
-        {
-          category: 'codingPreferences',
-          key: 'other',
-          value: 'x',
-          confidence: 0.5,
-          lastUpdated: '2026-06-01T00:00:00.000Z',
-          sessionCount: 3,
-        },
-      ],
-    }
-
-    const result = carryPromotedFlags(rebuilt, previous)
-    expect(result.preferencesClusters.find((p) => p.key === 'test_runner')?.promoted).toBe(true)
-    expect(result.preferencesClusters.find((p) => p.key === 'other')?.promoted).toBeUndefined()
   })
 })
