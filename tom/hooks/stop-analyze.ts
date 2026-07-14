@@ -24,7 +24,7 @@ import {
 } from '../memory-io.js'
 import { rebuildUserModelFromTier2 } from '../rebuild.js'
 import { readTomConfig, isTomEnabled } from '../config.js'
-import { buildMemoryIndex } from '../agent/tools.js'
+import { buildMemoryIndex } from '../memory-index.js'
 import { getModelForOperation, logUsage, prefKeyForTelemetry, readUsageLog, rotateUsageLogIfNeeded } from '../routing.js'
 import { sanitizeValue } from '../secrets.js'
 import { assertedKeysForSession, splitFollowThrough } from '../follow-through.js'

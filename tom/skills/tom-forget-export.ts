@@ -17,7 +17,7 @@ import {
 import { readTomConfig } from '../config.js'
 import { sanitizeSessionId } from '../hooks/hook-input.js'
 import { rebuildUserModelFromTier2 } from '../rebuild.js'
-import { buildMemoryIndex } from '../agent/tools.js'
+import { buildMemoryIndex } from '../memory-index.js'
 import { atomicWriteFileSync } from '../fs-atomic.js'
 import type {
   SessionLog,
