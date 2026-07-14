@@ -7,14 +7,14 @@
   },
   "metadata": {
     "description": "ToM-SWE: User Mental Modeling for Software Engineering Agents",
-    "version": "0.6.1"
+    "version": "0.6.2"
   },
   "plugins": [
     {
       "name": "tom-swe",
       "source": "./",
       "description": "Theory of Mind agent that learns your coding preferences, interaction style, and project patterns across sessions. Based on the ToM-SWE paper.",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "author": {
         "name": "sjarmak"
       },
