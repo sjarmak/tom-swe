@@ -56,9 +56,9 @@ views {
     }
   }
 
-  // Preference modeling — aggregation, rebuild, decay, promotion.
+  // Preference modeling — aggregation, rebuild, decay, marker cleanup.
   view modelingContainer of tom.modeling {
-    title 'Preference modeling — aggregation, rebuild, promotion'
+    title 'Preference modeling — aggregation, rebuild, marker cleanup'
     include *
 
     style element.tag == #evolving {
@@ -141,17 +141,14 @@ views {
     tom.hooks.stopAnalyze -> tom.modeling.pruning 'prune past retention cap'
   }
 
-  // Flow 3 — preference promotion into CLAUDE.md.
+  // Flow 3 — one-time cleanup of any legacy CLAUDE.md promotion block.
   dynamic view promotionFlow {
-    title 'Walkthrough — preference promotion into CLAUDE.md'
-    description 'Crossing confidence × sessions is necessary but not sufficient: a category gate, a derivability gate (corrections bypass), a 10-line cap, and a ~200-line host-file budget all bound what reaches the user’s memory files. The block is regenerated wholesale, so decay below threshold = automatic retirement.'
+    title 'Walkthrough — legacy CLAUDE.md marker-block cleanup'
+    description 'The promotion write-path is retired (tom-swe-x1m.2): SessionStart now surfaces confident prefs directly, so nothing is ever written into CLAUDE.md. All that remains is a one-time upgrade sweep on Stop that strips any marker-bounded block a prior version left. Idempotent and safe on missing files — it self-heals an upgraded install on the first fire that still finds a block, then no-ops (logged only when a block is actually removed).'
 
-    tom.hooks.stopAnalyze -> tom.modeling.promotion 'promote stable prefs'
-    tom.modeling.promotion -> tom.store.tier3 'read confident preference clusters'
-    tom.modeling.promotion -> tom.modeling.promotionGate 'derivability judgment'
-    tom.modeling.promotionGate -> inference 'already visible from the repo?'
-    tom.modeling.promotion -> claudeCode.settings 'regenerate marker block'
-    tom.modeling.promotion -> tom.reasoning.routing 'log preference-promotion'
+    tom.hooks.stopAnalyze -> tom.modeling.promotion 'strip any legacy marker block'
+    tom.modeling.promotion -> claudeCode.settings 'remove marker block from CLAUDE.md'
+    tom.modeling.promotion -> tom.reasoning.routing 'log promotion-cleanup (only if removed)'
   }
 
   // Flow 4 — the planned interactive ToM sub-agent loop (not wired today).
