@@ -139,30 +139,6 @@ function createUserModel(scope: 'global' | 'project'): void {
   )
 }
 
-function createKeyedSessionModel(
-  sessionId: string,
-  codingPreferences: SessionModel['codingPreferences'],
-  scope: 'global' | 'project'
-): void {
-  const baseDir =
-    scope === 'global'
-      ? path.join(tempDir, '.claude', 'tom')
-      : path.join(projectDir, '.claude', 'tom')
-  const modelsDir = path.join(baseDir, 'session-models')
-  fs.mkdirSync(modelsDir, { recursive: true })
-  const model: SessionModel = {
-    sessionId,
-    intent: `Intent for ${sessionId}`,
-    interactionPatterns: [],
-    codingPreferences,
-  }
-  fs.writeFileSync(
-    path.join(modelsDir, `${sessionId}.json`),
-    JSON.stringify(model),
-    'utf-8'
-  )
-}
-
 function createUsageLog(entries: string[]): void {
   const tomDir = path.join(tempDir, '.claude', 'tom')
   fs.mkdirSync(tomDir, { recursive: true })

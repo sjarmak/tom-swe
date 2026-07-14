@@ -51,7 +51,7 @@ function projectUserModelPath(): string {
 
 // --- Internal Utilities ---
 
-function readJsonFile(filePath: string): unknown | null {
+function readJsonFile(filePath: string): unknown {
   try {
     const content = fs.readFileSync(filePath, 'utf-8')
     return JSON.parse(content) as unknown

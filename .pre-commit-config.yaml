@@ -4,10 +4,15 @@
 #
 # Hooks run only on staged files, so adoption is incremental.
 #
-# NOTE: the fleet baseline's language hooks (eslint, prettier) are intentionally
-# omitted here — this repo has no eslint config (the hook errors) and its style
-# is no-semicolon / single-quote, which prettier's defaults would mass-reformat.
-# Enabling them needs matching eslint + prettier configs first (tom-swe-56x).
+# NOTE: eslint is enabled below (flat config added in tom-swe-56x). The mirror
+# runs its own isolated eslint, so the flat config's imports are pinned via
+# additional_dependencies (kept in step with package.json's devDependencies).
+#
+# The prettier hook stays omitted: this codebase predates prettier and is only
+# no-semicolon / single-quote at the token level — its hand-wrapping is not
+# prettier-conformant, so any prettier config reflows ~900 lines. Adopting it
+# needs a dedicated one-shot reformat commit (tracked separately), not a hook
+# that reformats files piecemeal as they are touched.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -25,3 +30,17 @@ repos:
         # secrets.test.ts carries PEM key *fixtures* that exercise redaction —
         # not real keys. Exclude it so the hook stays useful elsewhere.
         exclude: ^tom/secrets\.test\.ts$
+
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.39.1
+    hooks:
+      - id: eslint
+        files: \.[jt]sx?$
+        types: [file]
+        # The flat config imports these; the mirror's isolated env needs them
+        # explicitly. Keep pinned in step with package.json devDependencies.
+        additional_dependencies:
+          - eslint@9.39.5
+          - "@eslint/js@9.39.5"
+          - typescript-eslint@8.64.0
+          - typescript@5.9.3
