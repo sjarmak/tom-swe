@@ -14835,7 +14835,7 @@ function isTomEnabled() {
   return readTomConfig().enabled;
 }
 
-// tom/agent/tools.ts
+// tom/memory-index.ts
 var fs6 = __toESM(require("node:fs"));
 var path6 = __toESM(require("node:path"));
 
@@ -14885,42 +14885,7 @@ function buildIndex(documents) {
   };
 }
 
-// tom/session-extract.ts
-function extractSessionModel(sessionLog) {
-  const toolCounts = {};
-  for (const interaction of sessionLog.interactions) {
-    toolCounts[interaction.toolName] = (toolCounts[interaction.toolName] ?? 0) + 1;
-  }
-  const sortedTools = Object.entries(toolCounts).sort(([, a], [, b]) => b - a).map(([name]) => name);
-  const topTool = sortedTools[0] ?? "unknown";
-  const intent = deriveIntent(topTool, sessionLog.interactions.length);
-  return {
-    sessionId: sessionLog.sessionId,
-    intent,
-    // Interaction patterns, coding preferences, and corrections all require
-    // semantic understanding the heuristic path lacks. Only the LLM analysis
-    // path populates them; the fallback never guesses.
-    interactionPatterns: [],
-    codingPreferences: [],
-    corrections: []
-  };
-}
-function deriveIntent(topTool, interactionCount) {
-  const toolIntentMap = {
-    Edit: "code modification",
-    Write: "file creation",
-    Read: "code exploration",
-    Bash: "command execution",
-    Grep: "code search",
-    Glob: "file search",
-    Task: "complex task delegation"
-  };
-  const baseIntent = toolIntentMap[topTool] ?? `${topTool} usage`;
-  const scope = interactionCount > 20 ? "extensive" : interactionCount > 10 ? "moderate" : "brief";
-  return `${scope} ${baseIntent}`;
-}
-
-// tom/agent/tools.ts
+// tom/memory-index.ts
 function listJsonFiles(dirPath) {
   try {
     const files = fs6.readdirSync(dirPath);
@@ -15356,6 +15321,41 @@ function computeVocabularyEcho(vocabulary, model) {
   scan(model.interactionPatterns, "interactionStyle");
   scan(model.codingPreferences, "codingPreferences");
   return { injected: vocabulary.length, returned, echoedKeyValue, echoedKey };
+}
+
+// tom/session-extract.ts
+function extractSessionModel(sessionLog) {
+  const toolCounts = {};
+  for (const interaction of sessionLog.interactions) {
+    toolCounts[interaction.toolName] = (toolCounts[interaction.toolName] ?? 0) + 1;
+  }
+  const sortedTools = Object.entries(toolCounts).sort(([, a], [, b]) => b - a).map(([name]) => name);
+  const topTool = sortedTools[0] ?? "unknown";
+  const intent = deriveIntent(topTool, sessionLog.interactions.length);
+  return {
+    sessionId: sessionLog.sessionId,
+    intent,
+    // Interaction patterns, coding preferences, and corrections all require
+    // semantic understanding the heuristic path lacks. Only the LLM analysis
+    // path populates them; the fallback never guesses.
+    interactionPatterns: [],
+    codingPreferences: [],
+    corrections: []
+  };
+}
+function deriveIntent(topTool, interactionCount) {
+  const toolIntentMap = {
+    Edit: "code modification",
+    Write: "file creation",
+    Read: "code exploration",
+    Bash: "command execution",
+    Grep: "code search",
+    Glob: "file search",
+    Task: "complex task delegation"
+  };
+  const baseIntent = toolIntentMap[topTool] ?? `${topTool} usage`;
+  const scope = interactionCount > 20 ? "extensive" : interactionCount > 10 ? "moderate" : "brief";
+  return `${scope} ${baseIntent}`;
 }
 
 // tom/promotion.ts

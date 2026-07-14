@@ -14647,7 +14647,7 @@ function rebuildUserModelFromTier2(scope, decayDays, correctionPenalty, previous
   return userModel;
 }
 
-// tom/agent/tools.ts
+// tom/memory-index.ts
 var fs6 = __toESM(require("node:fs"));
 var path6 = __toESM(require("node:path"));
 
@@ -14697,7 +14697,7 @@ function buildIndex(documents) {
   };
 }
 
-// tom/agent/tools.ts
+// tom/memory-index.ts
 function listJsonFiles(dirPath) {
   try {
     const files = fs6.readdirSync(dirPath);

@@ -1,9 +1,8 @@
 /**
  * Heuristic extraction of a Tier 2 SessionModel from a Tier 1 SessionLog.
  *
- * Shared by the Stop hook (fallback path when LLM analysis fails) and the
- * ToM agent's analyze_session tool. Only intent is derived here, from the most
- * common tool patterns.
+ * Used by the Stop hook as the fallback path when LLM analysis fails. Only
+ * intent is derived here, from the most common tool patterns.
  *
  * Coding preferences, interaction patterns, and corrections require semantic
  * understanding the heuristic path does not have, so they are left empty here.
