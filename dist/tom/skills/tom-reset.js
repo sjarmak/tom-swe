@@ -49,6 +49,11 @@ var os = __toESM(require("node:os"));
 var fs = __toESM(require("node:fs"));
 var path = __toESM(require("node:path"));
 var crypto = __toESM(require("node:crypto"));
+var tempCounter = 0;
+function tempPathFor(filePath) {
+  const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString("hex")}`;
+  return `${filePath}.${suffix}.tmp`;
+}
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -13950,12 +13955,17 @@ function atomicWriteMemoryFile(filePath, data) {
     mode = fs3.statSync(filePath).mode & 511;
   } catch {
   }
-  const tempPath = path3.join(
-    path3.dirname(filePath),
-    `.tom-swe.${path3.basename(filePath)}.tmp`
-  );
-  fs3.writeFileSync(tempPath, data, { encoding: "utf-8", mode });
-  fs3.renameSync(tempPath, filePath);
+  const tempPath = tempPathFor(filePath);
+  try {
+    fs3.writeFileSync(tempPath, data, { encoding: "utf-8", mode });
+    fs3.renameSync(tempPath, filePath);
+  } catch (error48) {
+    try {
+      fs3.unlinkSync(tempPath);
+    } catch {
+    }
+    throw error48;
+  }
 }
 function removePromotionBlock(filePath) {
   let content;

@@ -205,20 +205,28 @@ describe('cleanupPromotionArtifacts', () => {
   })
 
   it('isolates a per-target failure so later targets are still cleaned', () => {
-    // Global file has a block but its atomic temp path is occupied by a
-    // directory, so its rewrite throws — yet the project file must still clean.
-    const globalFile = path.join(tempHome, '.claude', 'CLAUDE.md')
+    const globalDir = path.join(tempHome, '.claude')
+    const globalFile = path.join(globalDir, 'CLAUDE.md')
     const projectFile = path.join(tempCwd, 'CLAUDE.md')
     writeBlock(globalFile, '# Global\n')
     writeBlock(projectFile, '# Project\n')
-    fs.mkdirSync(path.join(tempHome, '.claude', '.tom-swe.CLAUDE.md.tmp'))
+    // The temp name is now unique (fs-atomic's tempPathFor), so we can't
+    // pre-occupy it. Make the global file's directory read-only instead: its
+    // atomic rewrite can't create the temp sibling (EACCES), while the project
+    // file (a separate, writable dir) must still clean.
+    fs.chmodSync(globalDir, 0o500)
+    try {
+      const result = cleanupPromotionArtifacts(tempCwd)
 
-    const result = cleanupPromotionArtifacts(tempCwd)
-
-    // Global recorded as an error, project still removed (not starved).
-    expect(result.errors.map((e) => e.file)).toContain(globalFile)
-    expect(result.removed).toContain(projectFile)
-    expect(fs.readFileSync(projectFile, 'utf-8')).toBe('# Project\n')
+      // Global recorded as an error, project still removed (not starved).
+      expect(result.errors.map((e) => e.file)).toContain(globalFile)
+      expect(result.removed).toContain(projectFile)
+      expect(fs.readFileSync(projectFile, 'utf-8')).toBe('# Project\n')
+      // No temp sibling leaked into the read-only dir.
+      expect(fs.readdirSync(globalDir).filter((n) => n.endsWith('.tmp'))).toEqual([])
+    } finally {
+      fs.chmodSync(globalDir, 0o700)
+    }
   })
 })
 

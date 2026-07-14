@@ -19,6 +19,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
+import { tempPathFor } from './fs-atomic.js'
+
 // --- Markers ---
 
 export const PROMOTION_BEGIN_MARKER =
@@ -30,8 +32,12 @@ export const PROMOTION_END_MARKER = '<!-- tom-swe:end -->'
 /**
  * Atomically replaces a memory file's content, preserving its existing
  * mode (CLAUDE.md is a user-facing file — never chmod it to the tom
- * store's 0600). The temp name is stable and hidden, so a crashed write
- * leaves at most one dotfile that the next successful write reclaims.
+ * store's 0600). Writes to a per-process-unique temp sibling (pid + counter
+ * + random, via fs-atomic's tempPathFor) so concurrent Stop-hook writes from
+ * separate processes never collide on one temp path — on this rig several
+ * accounts share $HOME, so the global memory file is a shared target. Unique
+ * names forfeit the stable-name self-reclaim, so a failed write unlinks its
+ * own temp rather than leaking it.
  */
 function atomicWriteMemoryFile(filePath: string, data: string): void {
   let mode = 0o644
@@ -40,12 +46,18 @@ function atomicWriteMemoryFile(filePath: string, data: string): void {
   } catch {
     // New file: default user-facing mode.
   }
-  const tempPath = path.join(
-    path.dirname(filePath),
-    `.tom-swe.${path.basename(filePath)}.tmp`
-  )
-  fs.writeFileSync(tempPath, data, { encoding: 'utf-8', mode })
-  fs.renameSync(tempPath, filePath)
+  const tempPath = tempPathFor(filePath)
+  try {
+    fs.writeFileSync(tempPath, data, { encoding: 'utf-8', mode })
+    fs.renameSync(tempPath, filePath)
+  } catch (error) {
+    try {
+      fs.unlinkSync(tempPath)
+    } catch {
+      // Temp may not exist if writeFileSync itself failed — ignore.
+    }
+    throw error
+  }
 }
 
 /**

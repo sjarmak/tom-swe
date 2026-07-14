@@ -33,10 +33,15 @@ export const TOM_FILE_MODE = 0o600
 
 let tempCounter = 0
 
-function tempPathFor(filePath: string): string {
-  // pid + counter + random: pid disambiguates live concurrent processes,
-  // the counter disambiguates writes within one process, and the random
-  // suffix removes any doubt about pid reuse across process lifetimes.
+/**
+ * A collision-free temp sibling path for `filePath`, in the same directory so
+ * `rename(2)` stays atomic. pid disambiguates live concurrent processes, the
+ * counter disambiguates writes within one process, and the random suffix
+ * removes any doubt about pid reuse across process lifetimes. Exported so the
+ * memory-file writer (promotion.ts) shares the same unique-temp scheme instead
+ * of a stable name that concurrent writers would race on.
+ */
+export function tempPathFor(filePath: string): string {
   const suffix = `${process.pid}.${tempCounter++}.${crypto.randomBytes(4).toString('hex')}`
   return `${filePath}.${suffix}.tmp`
 }

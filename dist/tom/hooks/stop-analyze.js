@@ -15370,12 +15370,17 @@ function atomicWriteMemoryFile(filePath, data) {
     mode = fs8.statSync(filePath).mode & 511;
   } catch {
   }
-  const tempPath = path7.join(
-    path7.dirname(filePath),
-    `.tom-swe.${path7.basename(filePath)}.tmp`
-  );
-  fs8.writeFileSync(tempPath, data, { encoding: "utf-8", mode });
-  fs8.renameSync(tempPath, filePath);
+  const tempPath = tempPathFor(filePath);
+  try {
+    fs8.writeFileSync(tempPath, data, { encoding: "utf-8", mode });
+    fs8.renameSync(tempPath, filePath);
+  } catch (error48) {
+    try {
+      fs8.unlinkSync(tempPath);
+    } catch {
+    }
+    throw error48;
+  }
 }
 function removePromotionBlock(filePath) {
   let content;

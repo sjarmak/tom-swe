@@ -1672,21 +1672,29 @@ describe('analyzeCompletedSession', () => {
 
   it('logs promotion-cleanup-error and completes the pipeline when cleanup fails', async () => {
     // A block exists (so cleanup attempts an atomic rewrite of the global
-    // file), but its atomic temp path is pre-occupied by a directory, so the
-    // write throws EISDIR — exercising the catch. The temp name mirrors
-    // atomicWriteMemoryFile's `.tom-swe.<basename>.tmp` scheme.
+    // file). The temp name is now unique (atomicWriteMemoryFile uses
+    // fs-atomic's tempPathFor), so we can't pre-occupy it — make the global
+    // file's directory read-only so the temp write fails (EACCES). The tom
+    // store lives in .claude/tom (a writable subdir), so the rest of the
+    // pipeline (user model, snapshot, index) still writes.
     const claudeDir = path.join(tempDir, '.claude')
-    fs.mkdirSync(claudeDir, { recursive: true })
+    const tomDir = path.join(claudeDir, 'tom')
+    fs.mkdirSync(tomDir, { recursive: true })
     fs.writeFileSync(
       path.join(claudeDir, 'CLAUDE.md'),
       `${PROMOTION_BEGIN_MARKER}\nx\n${PROMOTION_END_MARKER}\n`,
       'utf-8'
     )
-    fs.mkdirSync(path.join(claudeDir, '.tom-swe.CLAUDE.md.tmp'))
     seedTier2(9, { category: 'interactionStyle', key: 'verbosity', value: 'concise' })
     writeSessionFile('cleanup-error-test')
+    fs.chmodSync(claudeDir, 0o500)
 
-    const result = await analyzeCompletedSession('cleanup-error-test')
+    let result: Awaited<ReturnType<typeof analyzeCompletedSession>>
+    try {
+      result = await analyzeCompletedSession('cleanup-error-test')
+    } finally {
+      fs.chmodSync(claudeDir, 0o700)
+    }
 
     expect(result.success).toBe(true)
     expect(result.indexRebuilt).toBe(true)
