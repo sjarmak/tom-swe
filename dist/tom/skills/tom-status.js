@@ -14179,22 +14179,15 @@ var TomConfigSchema = external_exports.strictObject({
   // Confidence multiplier applied to a stored preference when a session
   // correction contradicts it (post-action feedback). Corrections cut
   // confidence faster than repetition builds it.
-  correctionPenalty: external_exports.number().min(0).max(1).default(0.5),
-  // Promotion lifecycle: stable high-confidence preferences graduate from
-  // per-session injection into durable CLAUDE.md marker blocks and are
-  // retired from injection (candidate → promoted → retired, simplified).
-  promotion: external_exports.strictObject({
-    enabled: external_exports.boolean().default(true),
-    threshold: external_exports.number().min(0).max(1).default(0.8),
-    minSessions: external_exports.number().int().min(1).default(5),
-    // Hysteresis: an already-promoted preference retires only when its
-    // confidence falls below this floor (a correction halves confidence,
-    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
-    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
-    // promotions in and out of CLAUDE.md within hours.
-    retireThreshold: external_exports.number().min(0).max(1).default(0.45)
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 })
+  correctionPenalty: external_exports.number().min(0).max(1).default(0.5)
 });
+function stripRetiredConfigKeys(raw) {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const { promotion: _promotion, ...rest } = raw;
+  return rest;
+}
 function logInvalidConfig(reason) {
   try {
     logUsage({
@@ -14217,7 +14210,7 @@ function readTomConfig() {
   }
   try {
     const raw = JSON.parse(content);
-    const result = TomConfigSchema.safeParse(raw);
+    const result = TomConfigSchema.safeParse(stripRetiredConfigKeys(raw));
     if (result.success) {
       return result.data;
     }
@@ -14461,7 +14454,6 @@ function formatTelemetry(summary) {
 var fs5 = __toESM(require("node:fs"));
 var path5 = __toESM(require("node:path"));
 var os4 = __toESM(require("node:os"));
-var MS_PER_DAY = 24 * 60 * 60 * 1e3;
 function globalMemoryFilePath() {
   return path5.join(os4.homedir(), ".claude", "CLAUDE.md");
 }

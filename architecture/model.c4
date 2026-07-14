@@ -170,8 +170,7 @@ model {
       }
       promotionGate = component 'derivability gate' {
         #evolving
-        description 'Headless-model judgment: drops candidates already derivable from the repo; corrections bypass it (conservative fallback when judgment unavailable)'
-        link ../tom/promotion-gate.ts 'promotion-gate.ts'
+        description 'RETIRED (tom-swe-x1m.2): the derivability-gate write-path was removed with CLAUDE.md promotion. Kept as a modeled concept pending the promotion-subsystem architecture refresh; no live source.'
       }
       pruning = component 'retention pruning' {
         #built

@@ -46,12 +46,6 @@ describe('TomConfigSchema', () => {
       preferenceDecayDays: 30,
       maxSessionsRetained: 100,
       correctionPenalty: 0.5,
-      promotion: {
-        enabled: true,
-        threshold: 0.8,
-        minSessions: 5,
-        retireThreshold: 0.45,
-      },
     })
   })
 
@@ -66,38 +60,9 @@ describe('TomConfigSchema', () => {
       preferenceDecayDays: 60,
       maxSessionsRetained: 200,
       correctionPenalty: 0.25,
-      promotion: {
-        enabled: false,
-        threshold: 0.9,
-        minSessions: 10,
-        retireThreshold: 0.3,
-      },
     }
     const result = TomConfigSchema.parse(input)
     expect(result).toEqual(input)
-  })
-
-  it('should default the promotion object when absent', () => {
-    const result = TomConfigSchema.parse({ enabled: true })
-    expect(result.promotion).toEqual({
-      enabled: true,
-      threshold: 0.8,
-      minSessions: 5,
-      retireThreshold: 0.45,
-    })
-  })
-
-  it('should fill promotion defaults for partial promotion config', () => {
-    const result = TomConfigSchema.parse({ promotion: { threshold: 0.95 } })
-    expect(result.promotion.threshold).toBe(0.95)
-    expect(result.promotion.enabled).toBe(true)
-    expect(result.promotion.minSessions).toBe(5)
-  })
-
-  it('should reject invalid promotion values', () => {
-    expect(() => TomConfigSchema.parse({ promotion: { threshold: 1.5 } })).toThrow()
-    expect(() => TomConfigSchema.parse({ promotion: { minSessions: 0 } })).toThrow()
-    expect(() => TomConfigSchema.parse({ promotion: { minSessions: 2.5 } })).toThrow()
   })
 
   it('should reject preferenceDecayDays below the 1-day floor', () => {
@@ -252,6 +217,21 @@ describe('readTomConfig', () => {
     writeSettings(null)
     const config = readTomConfig()
     expect(config.enabled).toBe(false)
+  })
+
+  it('strips a legacy promotion key instead of failing strict validation', () => {
+    // A config written by a pre-x1m.2 install carries a `promotion` block.
+    // strictObject would reject it and silently disable the plugin; the
+    // retired-key strip must drop it and keep the rest of the config live.
+    writeSettings({
+      enabled: true,
+      correctionPenalty: 0.3,
+      promotion: { enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 },
+    })
+    const config = readTomConfig()
+    expect(config.enabled).toBe(true)
+    expect(config.correctionPenalty).toBe(0.3)
+    expect('promotion' in config).toBe(false)
   })
 })
 

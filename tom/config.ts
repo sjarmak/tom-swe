@@ -31,20 +31,6 @@ export const TomConfigSchema = z.strictObject({
   // correction contradicts it (post-action feedback). Corrections cut
   // confidence faster than repetition builds it.
   correctionPenalty: z.number().min(0).max(1).default(0.5),
-  // Promotion lifecycle: stable high-confidence preferences graduate from
-  // per-session injection into durable CLAUDE.md marker blocks and are
-  // retired from injection (candidate → promoted → retired, simplified).
-  promotion: z.strictObject({
-    enabled: z.boolean().default(true),
-    threshold: z.number().min(0).max(1).default(0.8),
-    minSessions: z.number().int().min(1).default(5),
-    // Hysteresis: an already-promoted preference retires only when its
-    // confidence falls below this floor (a correction halves confidence,
-    // 0.8 → 0.4 < 0.45, so explicit corrections still retire promptly).
-    // Without the gap, ordinary evidence churn at the 0.8 boundary flapped
-    // promotions in and out of CLAUDE.md within hours.
-    retireThreshold: z.number().min(0).max(1).default(0.45),
-  }).default({ enabled: true, threshold: 0.8, minSessions: 5, retireThreshold: 0.45 }),
 })
 
 export type TomConfig = z.infer<typeof TomConfigSchema>
@@ -58,6 +44,21 @@ export type TomConfig = z.infer<typeof TomConfigSchema>
  * broken is deliberate volume: silence was the bug (fail-closed strictObject
  * semantics themselves are documented intent and unchanged).
  */
+/**
+ * Drops config keys retired by past versions before validation, so an upgraded
+ * install that still carries a hand-customized value does not fail the
+ * strictObject schema and silently disable the plugin (defaults are
+ * enabled=false). Currently strips `promotion` — the retired CLAUDE.md
+ * promotion feature (tom-swe-x1m.2).
+ */
+function stripRetiredConfigKeys(raw: unknown): unknown {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return raw
+  }
+  const { promotion: _promotion, ...rest } = raw as Record<string, unknown>
+  return rest
+}
+
 function logInvalidConfig(reason: string): void {
   try {
     logUsage({
@@ -93,7 +94,7 @@ export function readTomConfig(): TomConfig {
 
   try {
     const raw = JSON.parse(content) as unknown
-    const result = TomConfigSchema.safeParse(raw)
+    const result = TomConfigSchema.safeParse(stripRetiredConfigKeys(raw))
     if (result.success) {
       return result.data
     }

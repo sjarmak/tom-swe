@@ -250,8 +250,8 @@ function extractFirstJsonObject(text: string): string | null {
 
 /**
  * Extracts total token usage from a claude CLI JSON wrapper's `usage`
- * field. Shared with the derivability gate (promotion-gate.ts) so every
- * headless spawn reports real token spend to telemetry.
+ * field, so the headless session-analysis spawn reports real token spend
+ * to telemetry.
  */
 export function extractTokensUsed(usage: unknown): number | null {
   if (typeof usage !== 'object' || usage === null) {

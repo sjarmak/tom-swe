@@ -37,8 +37,8 @@ __export(tom_reset_exports, {
   performReset: () => performReset
 });
 module.exports = __toCommonJS(tom_reset_exports);
-var fs5 = __toESM(require("node:fs"));
-var path5 = __toESM(require("node:path"));
+var fs4 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
 
 // tom/memory-io.ts
 var fs2 = __toESM(require("node:fs"));
@@ -817,10 +817,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path6) {
-  if (!path6)
+function getElementAtPath(obj, path5) {
+  if (!path5)
     return obj;
-  return path6.reduce((acc, key) => acc?.[key], obj);
+  return path5.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1203,11 +1203,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path5, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path5);
     return iss;
   });
 }
@@ -1390,7 +1390,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path6 = []) => {
+  const processError = (error49, path5 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -1400,7 +1400,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path5, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1432,8 +1432,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path6) {
+  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path5) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13410,13 +13410,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path6 = ref.slice(1).split("/").filter(Boolean);
-  if (path6.length === 0) {
+  const path5 = ref.slice(1).split("/").filter(Boolean);
+  if (path5.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path6[0] === defsKey) {
-    const key = path6[1];
+  if (path5[0] === defsKey) {
+    const key = path5[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -13950,131 +13950,28 @@ function projectTomDir() {
 }
 
 // tom/promotion.ts
-var fs4 = __toESM(require("node:fs"));
-var path4 = __toESM(require("node:path"));
-var os3 = __toESM(require("node:os"));
-
-// tom/routing.ts
 var fs3 = __toESM(require("node:fs"));
 var path3 = __toESM(require("node:path"));
 var os2 = __toESM(require("node:os"));
-
-// tom/secrets.ts
-var REDACTED = "[REDACTED]";
-var EMBEDDED_SECRET_PATTERNS = [
-  // Authorization header values anywhere in a command. Bearer is
-  // case-insensitive (mirrors the anchored pattern); Basic is case-sensitive
-  // with a length floor so prose like "basic authentication" is not swallowed.
-  { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: REDACTED },
-  { pattern: /\bBasic\s+[A-Za-z0-9+/=]{16,}/g, replacement: REDACTED },
-  // AWS access key IDs anywhere, e.g. inside `AWS_ACCESS_KEY_ID=AKIA...`.
-  { pattern: /\bAKIA[A-Z0-9]{16}\b/g, replacement: REDACTED },
-  // JWTs anywhere: header.payload[.signature].
-  {
-    pattern: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g,
-    replacement: REDACTED
-  },
-  // URL connection-string credentials (scheme://user:pass@host): redact the
-  // credential pair, keep scheme and host readable.
-  { pattern: /(\/\/)[^\s/:@]+:[^\s@]+@/g, replacement: `$1${REDACTED}@` },
-  // PEM private-key blocks (RSA/EC/OPENSSH/PKCS8), including the JSON-escaped
-  // form embedded in service-account keys (\n between armor and body). Matched
-  // as a whole block so the base64 body never survives; the armor is specific
-  // enough to carry zero false-positive risk.
-  {
-    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
-    replacement: REDACTED
-  },
-  // AWS secret access keys: context-anchored, NOT a bare 40-char base64 token.
-  // A lone 40-char base64 string is ambiguous (git hashes, resource IDs), so we
-  // only redact when the literal `secret_access_key` label precedes the value.
-  // The label + a 40+-char base64 run together carry near-zero false-positive
-  // risk. Separators accepted: `=`, `:`, or whitespace (covers `key=val`,
-  // `"key": "val"`, and the space-delimited CLI form `aws configure set … val`).
-  // The `AWS_SECRET_ACCESS_KEY=…` env-assignment form is already caught upstream
-  // by the `/[A-Z_]+_KEY=[^\s]+/i` whole-token pattern. Label and any opening
-  // quote are preserved; only the value is redacted.
-  {
-    pattern: /((?:aws[_-]?)?secret[_-]?access[_-]?key["']?\s*[:=]?\s*["']?)[A-Za-z0-9/+]{40,}={0,2}/gi,
-    replacement: `$1${REDACTED}`
-  },
-  // ODBC/ADO connection-string passwords using the `Pwd=` abbreviation, which
-  // the whole-token `/password[=:].+/i` pattern misses. Connection strings are
-  // `;`-delimited (never split by the whitespace tokenizer below). A value may
-  // be brace-quoted (`Pwd={p@ss;word}`) to embed a literal `;`, so the
-  // brace-quoted form is matched as a whole `{...}` unit first; otherwise the
-  // value runs to the next `;` or whitespace. The `\b` before `pwd` avoids
-  // firing inside `OLDPWD`. Full `Password=`/`password=` forms are already
-  // whole-value-redacted upstream and are intentionally left to that path. Key
-  // is preserved; only the value is redacted.
-  { pattern: /(\bpwd\s*=\s*)(?:\{[^}]*\}|[^;\s]+)/gi, replacement: `$1${REDACTED}` },
-  // Email addresses (PII). The local-part class excludes `[` and `]`, so this
-  // cannot re-match the `[REDACTED]@host` span the URL-credential pattern above
-  // leaves behind — keeping this entry after that pattern is load-bearing for
-  // connection-string host preservation. Requires a dotted TLD, so a bare
-  // `user@localhost` is left intact. Quantifiers are bounded to RFC 5321 limits
-  // (local ≤64, domain ≤255) so the pattern stays linear-time: `redactPrompt`
-  // and `truncateDetail` call this on unbounded input that bypasses the
-  // MAX_VALUE_LENGTH cap, and the synchronous prompt hook must not stall.
-  //
-  // Two dev-syntax false positives are excluded (tom-swe-nsn) without widening
-  // the local-part class or unbounding a quantifier:
-  //  - Retina/image assets (`logo@2x.png`): a leading negative lookahead drops
-  //    known image extensions (png/jpg/jpeg/svg/webp/gif/ico) as the TLD — none
-  //    is a real TLD, so this cannot suppress a genuine email.
-  //  - scp-style git remotes (`git@github.com:org/repo.git`): `(?!:[^\s]{0,255}/)`
-  //    refuses to match only when the TLD is followed by `:` and a path segment
-  //    (a `/` within a bounded run) — the `host:org/repo` shape. This is scoped
-  //    deliberately narrowly: a bare `email:password` or `email:5432` (colon but
-  //    no following path) STILL redacts, so credential/combolist pairs and
-  //    `user@host:port` connection fragments are not leaked. The residual spared
-  //    case is `user@host:port/path` (a schemeless URL with a path), far rarer
-  //    than the combolist shape. `(?![A-Za-z])` forces the TLD to be its full
-  //    label so the engine cannot shrink it (e.g. `com`→`co`) to alter the
-  //    following-char anchoring. The bound on `[^\s]{0,255}` keeps it linear.
-  //    The image-extension exclusion is lowercase-only (real asset filenames
-  //    are lowercase; an uppercase `.PNG` over-redacts, the safe direction).
-  {
-    pattern: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.(?!(?:png|jpe?g|svg|webp|gif|ico)\b)[A-Za-z]{2,24}(?![A-Za-z])(?!:[^\s]{0,255}\/)/g,
-    replacement: REDACTED
-  }
-];
-
-// tom/routing.ts
-var UsageLogEntrySchema = external_exports.looseObject({
-  v: external_exports.number().optional(),
-  timestamp: external_exports.string(),
-  operation: external_exports.string(),
-  model: external_exports.string(),
-  tokenCount: external_exports.number(),
-  sessionId: external_exports.string().optional(),
-  durationMs: external_exports.number().optional(),
-  reason: external_exports.string().optional(),
-  detail: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
-});
-var USAGE_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
-
-// tom/promotion.ts
 var PROMOTION_BEGIN_MARKER = "<!-- tom-swe:begin (managed by tom-swe; edits inside will be overwritten) -->";
 var PROMOTION_END_MARKER = "<!-- tom-swe:end -->";
-var MS_PER_DAY = 24 * 60 * 60 * 1e3;
 function atomicWriteMemoryFile(filePath, data) {
   let mode = 420;
   try {
-    mode = fs4.statSync(filePath).mode & 511;
+    mode = fs3.statSync(filePath).mode & 511;
   } catch {
   }
-  const tempPath = path4.join(
-    path4.dirname(filePath),
-    `.tom-swe.${path4.basename(filePath)}.tmp`
+  const tempPath = path3.join(
+    path3.dirname(filePath),
+    `.tom-swe.${path3.basename(filePath)}.tmp`
   );
-  fs4.writeFileSync(tempPath, data, { encoding: "utf-8", mode });
-  fs4.renameSync(tempPath, filePath);
+  fs3.writeFileSync(tempPath, data, { encoding: "utf-8", mode });
+  fs3.renameSync(tempPath, filePath);
 }
 function removePromotionBlock(filePath) {
   let content;
   try {
-    content = fs4.readFileSync(filePath, "utf-8");
+    content = fs3.readFileSync(filePath, "utf-8");
   } catch {
     return false;
   }
@@ -14095,15 +13992,15 @@ function removePromotionBlock(filePath) {
   return true;
 }
 function globalMemoryFilePath() {
-  return path4.join(os3.homedir(), ".claude", "CLAUDE.md");
+  return path3.join(os2.homedir(), ".claude", "CLAUDE.md");
 }
 function findProjectMemoryFile(cwd) {
-  const rootCandidate = path4.join(cwd, "CLAUDE.md");
-  if (fs4.existsSync(rootCandidate)) {
+  const rootCandidate = path3.join(cwd, "CLAUDE.md");
+  if (fs3.existsSync(rootCandidate)) {
     return rootCandidate;
   }
-  const dotClaudeCandidate = path4.join(cwd, ".claude", "CLAUDE.md");
-  if (fs4.existsSync(dotClaudeCandidate)) {
+  const dotClaudeCandidate = path3.join(cwd, ".claude", "CLAUDE.md");
+  if (fs3.existsSync(dotClaudeCandidate)) {
     return dotClaudeCandidate;
   }
   return null;
@@ -14113,9 +14010,9 @@ function findProjectMemoryFile(cwd) {
 function collectFiles(dirPath) {
   const results = [];
   try {
-    const entries = fs5.readdirSync(dirPath, { withFileTypes: true });
+    const entries = fs4.readdirSync(dirPath, { withFileTypes: true });
     for (const entry of entries) {
-      const fullPath = path5.join(dirPath, entry.name);
+      const fullPath = path4.join(dirPath, entry.name);
       if (entry.isDirectory()) {
         results.push(...collectFiles(fullPath));
       } else {
@@ -14131,14 +14028,14 @@ function deleteDirectory(dirPath) {
   let totalBytes = 0;
   for (const filePath of files) {
     try {
-      const stat = fs5.statSync(filePath);
+      const stat = fs4.statSync(filePath);
       totalBytes += stat.size;
     } catch {
     }
   }
   const fileCount = files.length;
   try {
-    fs5.rmSync(dirPath, { recursive: true, force: true });
+    fs4.rmSync(dirPath, { recursive: true, force: true });
   } catch {
   }
   return { fileCount, totalBytes };

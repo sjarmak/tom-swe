@@ -85,12 +85,7 @@ Edit `~/.claude/tom/config.json`:
   },
   "preferenceDecayDays": 30,
   "maxSessionsRetained": 100,
-  "correctionPenalty": 0.5,
-  "promotion": {
-    "enabled": true,
-    "threshold": 0.8,
-    "minSessions": 5
-  }
+  "correctionPenalty": 0.5
 }
 ```
 
@@ -103,18 +98,6 @@ Edit `~/.claude/tom/config.json`:
 | `preferenceDecayDays` | `30` | Days before low-confidence preferences expire |
 | `maxSessionsRetained` | `100` | Maximum session logs kept on disk |
 | `correctionPenalty` | `0.5` | Confidence multiplier (0-1) applied to a stored preference when a session correction contradicts it — corrections cut confidence faster than repetition builds it |
-| `promotion.enabled` | `true` | Promote stable high-confidence preferences into CLAUDE.md marker blocks and retire them from per-session injection |
-| `promotion.threshold` | `0.8` | Minimum confidence for a preference to be promoted |
-| `promotion.minSessions` | `5` | Minimum sessions a preference must be observed across before promotion |
-
-Promoted preferences are written into a marker-bounded block (`<!-- tom-swe:begin ... -->` / `<!-- tom-swe:end -->`) that is regenerated wholesale after each session — the ToM store stays the source of truth. Coding preferences go to the project's `CLAUDE.md` (only if it already exists; tom-swe never creates files in your repos), while interaction-style preferences go to `~/.claude/CLAUDE.md`. A preference whose confidence later decays below the threshold drops out of the block automatically and returns to per-session injection. `/tom-reset` removes the marker blocks along with the store.
-
-Crossing the thresholds is necessary but not sufficient. CLAUDE.md is a ~200-line budgeted file whose value is mostly what an agent could NOT infer from the repository, so promotion applies four further gates:
-
-- **Category**: only `codingPreferences` and `interactionStyle` promote. Emotional signals are runtime state for ToM's own behavior, never standing guidance.
-- **Derivability** (project targets): new observation-derived candidates pass a headless model judgment — "is this already visible from the repo's configs, deps, and docs?" — and statically derivable facts are dropped (logged as `promotion-skipped`). Correction-derived preferences bypass this gate: a correction is prima facie evidence the static information wasn't enough. If the judgment is unavailable, only corrections promote (conservative fallback).
-- **Priority and cap**: the block carries at most 10 lines, correction-derived first (the negative surface — what the agent got wrong — is the valuable half), then by confidence × sessions. Correction-derived entries render as negative guidance: `Avoid X for key; use Y instead (user corrected this)`.
-- **Host-file budget**: a CLAUDE.md already over ~200 lines accepts no new entries (existing ones keep regenerating so retirement still works); skips are logged, never silent.
 
 ## Skills
 
@@ -176,20 +159,17 @@ Entry shape (validated by `UsageLogEntrySchema`, exported from `tom/routing.ts`;
 | `analysis-in-flight` | A concurrent Stop for the same session holds the analysis lock | `lockPath` |
 | `analysis-log-truncated` | The bounded session log dropped interactions and/or user messages to fit the prompt budget (never silent) | `dropped`, `droppedUserMessages` |
 | `analysis-vocabulary-echo` | Per successful LLM analysis with vocabulary injected: how much of the returned model is a verbatim echo of the injected vocabulary (anchoring baseline instrument, not a control input) | `injected`, `returned`, `echoedKeyValue`, `echoedKey` |
-| `derivability-gate` | One agentic gate spawn judging project-promotion candidates | `outcome` (`ok`\|`unavailable`), `candidates`, `passed` |
 | `session-usage` | Host session's own token usage, parsed from the transcript at Stop (deduplicated by message id; sidechains included). Logged once per Stop fire with **cumulative** totals — consumers dedupe by `sessionId`, last entry wins | `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`, `assistantMessages` |
 | `session-usage-error` | Transcript missing or unreadable | — |
 | `preference-correction` | Corrections applied during aggregation | `corrections` (`category:key` list), `penalty` |
-| `preference-promotion` | A CLAUDE.md marker block actually changed (idempotent regenerations don't log) | `promoted` (`category:key` list), `targets` (changed files) |
 | `preference-follow-through` | Per session that asserted ≥1 preference key: whether each asserted key was corrected or confirmed (left un-corrected) in-session (an outcome-usefulness signal, not just memory stability) | `asserted`, `confirmed`, `corrected` (`category:key` lists) |
 | `preference-cross-category-collapse` | A key split across categories was collapsed to one canonical category on rebuild (logged when the resolved winner category or value differs from what the previous model already had — steady-state re-collapses are suppressed) | `collapses` (list of `{key, winner, resolvedValue, refiled: [{fromCategory, value, confidence, learnedViaCorrection}]}`) |
-| `promotion-file-created` | Global memory file created (no silent resource creation) | `path` |
 | `promotion-cleanup` | One-time upgrade heal: a retired promotion marker block was stripped from a memory file (Option A; SessionStart injection is now the single surfacing path). Logged only when a block actually changed, then silent | `removed` (changed files) |
 | `config-invalid` | `config.json` exists but is malformed or fails validation — the plugin is silently running on defaults (`enabled: false`) until fixed | — |
 | `usage-log-rotated` | usage.log exceeded the size threshold and was archived to `usage-YYYY-MM-DD[-n].log` (archives preserved) | `archive` |
-| `promotion-error` / `promotion-cleanup-error` / `session-analysis-error` / `prune-error` / `snapshot-error` | Pipeline failures (never silent) | — |
+| `promotion-cleanup-error` / `session-analysis-error` / `prune-error` / `snapshot-error` | Pipeline failures (never silent) | — |
 
-Every `category:key` identifier and every free-form preference value written to `usage.log` is first passed through the same secret-detection backstop the capture hook uses (`sanitizeValue`): a structured secret (API-key/token/JWT shape) or an oversized string is replaced with `[REDACTED]`. This runs at the telemetry-emission sites, not at the point the analyzer coins a key, so the in-memory model keeps its real key (identity, reinforcement, and promotion are unaffected) and keys persisted before the guard existed are still screened on every emission. It catches structured tokens, not a semantically-paraphrased key — that is not mechanically detectable.
+Every `category:key` identifier and every free-form preference value written to `usage.log` is first passed through the same secret-detection backstop the capture hook uses (`sanitizeValue`): a structured secret (API-key/token/JWT shape) or an oversized string is replaced with `[REDACTED]`. This runs at the telemetry-emission sites, not at the point the analyzer coins a key, so the in-memory model keeps its real key (identity and reinforcement are unaffected) and keys persisted before the guard existed are still screened on every emission. It catches structured tokens, not a semantically-paraphrased key — that is not mechanically detectable.
 
 The acceptance loop joins on preference keys: an `ambiguity-consultation` whose `suggestionKeys` contains `category:key`, followed by a `preference-correction` listing the same key, is a rejected suggestion; absence of a correction while the preference's confidence grows is acceptance. The Stop hook makes this join explicit: it records a per-session `preference-follow-through` tying every key asserted that session (SessionStart `injectedKeys` + user-model `suggestionKeys`) to whether the user corrected or confirmed it, and `/tom-effectiveness` reports the pooled follow-through rate — an outcome metric, versus the promotion rollup's memory-stability proxy. Only real `category:key` preferences count (bm25 provenance keys are excluded), and "confirmed" means only that the key was not overridden in-session, not that it improved an answer.
 
