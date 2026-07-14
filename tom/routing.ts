@@ -255,7 +255,7 @@ export function readUsageLog(opts?: { readonly sessionId?: string }): UsageLogRe
     try {
       const parsed = UsageLogEntrySchema.safeParse(JSON.parse(line))
       if (parsed.success) {
-        entries.push(parsed.data as UsageLogEntry)
+        entries.push(parsed.data)
       } else {
         invalidLines += 1
       }
