@@ -154,13 +154,13 @@ views {
   // Flow 4 — the planned interactive ToM sub-agent loop (not wired today).
   dynamic view agentLoop {
     title 'Walkthrough — planned ToM sub-agent consultation loop'
-    description 'PLANNED. The sub-agent (agents/tom-agent.md) and its 5 memory tools exist and are unit-tested, but no hook spawns it: today consultFlow runs locally instead. This is the path that activates the paper’s interactive Theory-of-Mind reasoning.'
+    description 'PLANNED. The sub-agent (agents/tom-agent.md) is a design-only system prompt — no hook spawns it and its former programmatic tool layer was removed as dead code; today consultFlow runs locally instead. This is the path that would activate the paper’s interactive Theory-of-Mind reasoning.'
 
     tom.hooks.promptSubmit -> tom.agent 'consult (ambiguity detected)'
-    tom.agent.agentTools -> tom.store.tier1 'search_memory / read_memory_file'
-    tom.agent.agentTools -> tom.store.tier2 'analyze_session'
-    tom.agent.agentTools -> tom.store.tier3 'read user model'
-    tom.agent -> claudeCode.mainAgent 'give_suggestions → context'
+    tom.agent -> tom.store.tier1 'read session log'
+    tom.agent -> tom.store.tier2 'read session models'
+    tom.agent -> tom.store.tier3 'read user model'
+    tom.agent -> claudeCode.mainAgent 'inject suggestion → context'
   }
 
   // Planned-only lens: the unwired sub-agent + research track in context.
@@ -169,7 +169,6 @@ views {
     include
       tom,
       tom.agent,
-      tom.agent.*,
       tom.consultModel,
       tom.hooks.promptSubmit,
       tom.reasoning.consult,

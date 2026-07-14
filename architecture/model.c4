@@ -9,7 +9,7 @@
 //
 // Delivery state is tagged from real evidence (see spec.c4 for the legend).
 // The single most important truth this model surfaces: the namesake ToM
-// *sub-agent* (agents/tom-agent.md + tom/agent/) is built but NOT spawned by
+// *sub-agent* (agents/tom-agent.md) is a design-only prompt, NOT spawned by
 // any runtime path — the live consultation is a local BM25 lookup, and the
 // only model call is the headless `claude -p` analysis on Stop. That gap is
 // tagged #planned + #risk rather than hidden.
@@ -274,24 +274,12 @@ model {
       }
     }
 
-    // ── Planned: the interactive ToM sub-agent (built, but unwired) ────────
+    // ── Planned: the interactive ToM sub-agent (design-only, unwired) ──────
     agent = container 'ToM reasoning sub-agent' {
       #planned
       #risk
-      description 'agents/tom-agent.md + tom/agent/: a Theory-of-Mind sub-agent with 5 memory tools and a 3-op budget. RISK: defined and unit-tested, but NOT spawned by any hook — the live path uses local BM25 + heuristic/LLM extraction instead. Only its buildMemoryIndex helper is wired in'
+      description 'agents/tom-agent.md: a Theory-of-Mind sub-agent system prompt that would read the memory tiers directly if spawned. RISK: only the markdown design exists and no hook spawns it — the live path uses local BM25 + heuristic/LLM extraction instead. Its former programmatic tool + op-budget layer (tom/agent/) was removed as dead code; the buildMemoryIndex helper it carried moved to tom/memory-index.ts'
       link ../agents/tom-agent.md 'tom-agent.md — system prompt'
-      link ../tom/agent/config.ts 'agent/config.ts'
-
-      agentTools = component 'agent tools (5)' {
-        #planned
-        description 'search_memory / read_memory_file / analyze_session / initialize_user_profile / give_suggestions — implemented; only buildMemoryIndex is called at runtime'
-        link ../tom/agent/tools.ts 'agent/tools.ts'
-      }
-      agentConfig = component 'agent config + op budget' {
-        #planned
-        description 'haiku, temp 0.1, max 3 memory operations; references agents/tom-agent.md as the system prompt'
-        link ../tom/agent/config.ts 'agent/config.ts'
-      }
     }
 
     // ── Research track ─────────────────────────────────────────────────────
@@ -363,10 +351,10 @@ model {
   tom.hooks.promptSubmit -> tom.agent 'would consult the ToM sub-agent' {
     #planned
   }
-  tom.agent.agentTools -> tom.store 'memory tools over all tiers' {
+  tom.agent -> tom.store 'would read the memory tiers directly' {
     #planned
   }
-  tom.agent -> claudeCode.mainAgent 'give_suggestions → context' {
+  tom.agent -> claudeCode.mainAgent 'would inject suggestion → context' {
     #planned
   }
   tom.consultModel -> tom.agent 'model-backed consultation path' {

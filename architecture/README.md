@@ -26,12 +26,14 @@ from what is already running** (legend in `spec.c4`):
 |---|---|---|
 | `#built` | code path exists and runs in the live hook/skill pipeline | solid |
 | `#evolving` | built and running, but the contract/behavior is still moving | solid |
-| `#planned` | designed, code exists, but **not wired into the runtime path** | **dashed, dimmed** |
+| `#planned` | designed, but **not wired into the runtime path** | **dashed, dimmed** |
 | `#research` | speculative track (paper-derived, not implemented) | **dashed, indigo** |
 
 The headline finding the tags surface: the namesake **ToM reasoning sub-agent**
-(`agents/tom-agent.md` + `tom/agent/`) is built and unit-tested but **never
-spawned by any hook** — only its `buildMemoryIndex` helper is wired in. The live
+(`agents/tom-agent.md`) is a design-only system prompt **never spawned by any
+hook** — its former programmatic tool layer (`tom/agent/`) was removed as dead
+code, and the `buildMemoryIndex` helper it carried moved to
+`tom/memory-index.ts`. The live
 consultation path is a fully local BM25 lookup (`tom/consult.ts`), and the only
 model call is the headless `claude -p` session analysis on Stop
 (`tom/llm-analyze.ts`). Planned/research items in the model: the interactive ToM
@@ -62,7 +64,7 @@ a design-review walkthrough:
 | `consultFlow` | the live runtime path: ambiguity detected → local BM25 consultation → preference context injected → response adjusted |
 | `analyzeFlow` | the Stop-hook learning loop: parse usage → extract Tier 2 (LLM, heuristic fallback) → idempotent Tier 3 rebuild → reindex → prune |
 | `promotionFlow` | one-time cleanup of any legacy CLAUDE.md promotion block (the write-path is retired; SessionStart surfaces prefs directly) |
-| `agentLoop` | the **planned** interactive ToM sub-agent consultation loop (built, not yet wired) |
+| `agentLoop` | the **planned** interactive ToM sub-agent consultation loop (design-only, not yet wired) |
 
 **Risk lens:**
 
