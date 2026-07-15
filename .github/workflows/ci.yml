@@ -37,3 +37,48 @@ jobs:
             echo "$DRIFT" >&2
             exit 1
           fi
+
+  # Version-drift gate: the plugin ships through a git-cloned marketplace that
+  # only re-materializes on a version change (installs pin a version->sha), so
+  # any change to the loaded payload that reaches main WITHOUT a version bump
+  # silently never reaches installed homes (this is the tom-swe-hf9 class:
+  # retire-writes shipped under a frozen 0.6.1, all 5 homes kept running the
+  # pre-retire dist). Homes load only dist/ (hooks execute it), skills/,
+  # agents/, and hooks/hooks.json — NOT tom/ source (compiled into dist/, so a
+  # type-only tom/ change with an identical dist/ correctly needs no bump; the
+  # dist-parity job guarantees dist == build(tom)). This job fails a payload
+  # change that isn't accompanied by a version bump past the last release tag.
+  #
+  # Release convention: bump package.json + .claude-plugin/{plugin,marketplace}.json,
+  # then tag the release commit `vX.Y.Z` and push the tag — that tag is this
+  # gate's "last release" reference.
+  version-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: version bump required when the loaded plugin payload changed since last release
+        run: |
+          set -euo pipefail
+          LATEST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "")
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No release tag (v*) found — skipping drift gate."
+            exit 0
+          fi
+          CUR_VER=$(node -p "require('./package.json').version")
+          TAG_VER=${LATEST_TAG#v}
+          echo "last release tag: $LATEST_TAG (version $TAG_VER); current package.json: $CUR_VER"
+          # Payload homes actually load — NOT tom/ (source, compiled into dist/).
+          PAYLOAD="dist/ skills/ agents/ hooks/"
+          if git diff --quiet "$LATEST_TAG" HEAD -- $PAYLOAD; then
+            echo "No loaded-payload change ($PAYLOAD) since $LATEST_TAG — OK."
+            exit 0
+          fi
+          if [ "$CUR_VER" = "$TAG_VER" ]; then
+            echo "::error::the loaded plugin payload ($PAYLOAD) changed since release $LATEST_TAG but package.json version is still $CUR_VER — bump the version (and tag the release) so installed homes re-materialize." >&2
+            git diff --stat "$LATEST_TAG" HEAD -- $PAYLOAD >&2
+            exit 1
+          fi
+          echo "OK: version bumped to $CUR_VER since last release $TAG_VER."
